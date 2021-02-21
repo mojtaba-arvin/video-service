@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install software-properties-common -y && add-apt-r
     apt-get update && apt-get install python3.10 python3-pip -y
 
 # create symlinks
-RUN ln -s /usr/bin/python3 /usr/bin/python & \
+RUN ln -s /usr/bin/python3.10 /usr/bin/python & \
     ln -s /usr/bin/pip3 /usr/bin/pip
 
 # set workdir
