@@ -1,0 +1,16 @@
+# gRPC
+
+grpcio==1.35.0
+grpcio-tools==1.35.0
+grpcio-health-checking==1.35.0
+protobuf==3.14.0
+
+# ffmpeg
+
+python-ffmpeg-video-streaming==0.1.14
+ffmpeg-python==0.2.0
+
+# celery
+
+celery==4.4.7
+redis==3.5.3
