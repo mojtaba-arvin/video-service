@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+service Streaming{
+  rpc video_processor(TaskRequest) returns (TaskResponse) {}
+}
+
+message TaskRequest {
+  // to call client when the task is finished
+  string webhook_url = 1;
+
+  // TODO add other parameters
+}
+
+message TaskResponse {
+  string tracking_id = 1;
+}
+
+
