@@ -131,3 +131,7 @@ dmypy.json
 # IDE
 *.idea
 *.vscode
+
+# grpc generated codes
+/video-streaming/grpc/protos/streaming_pb2_grpc.py
+/video-streaming/grpc/protos/streaming_pb2.py
