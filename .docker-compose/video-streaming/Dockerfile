@@ -1,19 +1,19 @@
-FROM jrottenberg/ffmpeg:4.1-ubuntu
+FROM jrottenberg/ffmpeg:4.1-alpine as ffmpeg
 LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
 
-# install python3.10
-RUN apt-get update && apt-get install software-properties-common -y && add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install python3.10 python3-pip -y
+# Not yet published grpcio Wheel for python3.10
+# FROM python:3.10.0a5-alpine
 
-# create symlinks
-RUN ln -s /usr/bin/python3.10 /usr/bin/python & \
-    ln -s /usr/bin/pip3 /usr/bin/pip
+FROM python:3.9.2-alpine
+RUN apk add --update --no-cache alpine-sdk linux-headers musl-dev libffi-dev py3-libxml2 libxslt-dev zlib-dev jpeg-dev imagemagick
+COPY --from=ffmpeg /usr/local /usr/local
 
 # set workdir
 RUN mkdir -p /opt/workdir
 WORKDIR /opt/workdir
 
 ENV PYTHONUNBUFFERED 1
+
 
 ADD requirements.txt /opt/workdir
 RUN pip3 install --no-cache-dir --default-timeout=100 -r /opt/workdir/requirements.txt
