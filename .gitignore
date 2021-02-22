@@ -133,5 +133,5 @@ dmypy.json
 *.vscode
 
 # grpc generated codes
-/video-streaming/grpc/protos/streaming_pb2_grpc.py
-/video-streaming/grpc/protos/streaming_pb2.py
+/video-streaming/grpc_src/protos/streaming_pb2_grpc.py
+/video-streaming/grpc_src/protos/streaming_pb2.py
