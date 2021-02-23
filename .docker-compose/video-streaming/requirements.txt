@@ -14,3 +14,9 @@ ffmpeg-python==0.2.0
 
 celery==4.4.7
 redis==3.5.3
+
+# circus
+# can not building wheel for pyzmq 20
+pyzmq==19.0.2
+circus==0.17.1
+
