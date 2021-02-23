@@ -5,6 +5,9 @@ The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and `ffmpeg4.1` 
 
 For video processing, `python-ffmpeg-video-streaming` package has been installed and you can get or put your files to a cloud such as `Amazon S3` compatible storages, `Google Cloud Storage` and `Microsoft Azure Storage` 
 
+### Generate Certificates to use by gRPC
+TODO
+
 ### Config circus
 
 This project uses `circusd`, to manage processes, 
@@ -32,6 +35,7 @@ generated grpc modules are added to `.gitignore`, to generate them again, you ca
 it runs `generate_grpc_codes.sh` inside `video-streaming` container that also will change import statement to fix `ModuleNotFoundError`. 
 
 * after any changes on the gRPC proto file, you need run the script again.
+
 
 ### docker-compose
 
