@@ -24,8 +24,9 @@ class GrpcServer(BaseCommand):
 
     _MAX_WORKERS = None
     _SLEEP = 60 * 60 * 24  # seconds
-
+    
     def add_arguments(self, parser):
+        # TODO use default values from self
         parser.add_argument(
             '--port',
             type=int,
@@ -97,8 +98,3 @@ class GrpcServer(BaseCommand):
                                 health_pb2.HealthCheckResponse.NOT_SERVING)
             time.sleep(10)
             server.stop(1)
-
-
-if __name__ == '__main__':
-    grpc_server = GrpcServer()
-    grpc_server.serve()
