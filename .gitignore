@@ -135,3 +135,6 @@ dmypy.json
 # grpc generated codes
 /video-streaming/grpc_src/protos/streaming_pb2_grpc.py
 /video-streaming/grpc_src/protos/streaming_pb2.py
+
+# production
+/.docker-compose/video-streaming/circus/circus.ini

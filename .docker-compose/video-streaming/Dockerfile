@@ -14,10 +14,8 @@ WORKDIR /opt/workdir
 
 ENV PYTHONUNBUFFERED 1
 
-
 ADD requirements.txt /opt/workdir
 RUN pip3 install --no-cache-dir --default-timeout=100 -r /opt/workdir/requirements.txt
 
-# TODO use circusd
-
-ENTRYPOINT ["tail", "-f", "/dev/null"]
+ADD circus/circus.ini /etc/circus.ini
+ENTRYPOINT ["circusd", "/etc/circus.ini"]
