@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+    streaming:
+        depends_on:
+            - redis
+            - rabbitmq
+    redis:
+        image: 'redis:5-alpine'
+        environment:
+            # the path of password in container
+            REDIS_PASS_FILE: /run/secrets/redis-password
+        command: [
+            "sh", "-c",
+            '
+            docker-entrypoint.sh
+            --requirepass "$$(cat $$REDIS_PASS_FILE)"
+            '
+            ]
+        expose:
+            - "6379"
+        volumes:
+            - redis-volume:/data
+            # pass host password to container
+            - ./.docker-compose/redis/.redis_pass_file:/run/secrets/redis-password
+    rabbitmq:
+        image: 'rabbitmq:3.8.12'
+        env_file:
+            - ./.docker-compose/rabbitmq/.env
+        volumes:
+            - rabbitmq-volume:/var/lib/rabbitmq/
+        expose:
+            - "5672"
+volumes:
+    redis-volume:
+    rabbitmq-volume:

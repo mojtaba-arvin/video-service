@@ -138,3 +138,7 @@ dmypy.json
 
 # production
 /.docker-compose/video-streaming/circus/circus.ini
+
+# docker-compose envs
+/.docker-compose/rabbitmq/.env
+/.docker-compose/redis/.redis_pass_file
