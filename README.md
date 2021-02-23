@@ -5,7 +5,7 @@ The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and `ffmpeg4.1` 
 
 For video processing, `python-ffmpeg-video-streaming` package has been installed and you can get or put your files to a cloud such as `Amazon S3` compatible storages, `Google Cloud Storage` and `Microsoft Azure Storage` 
 
-### config circus
+### Config circus
 
 This project uses `circusd`, to manage processes, 
 
@@ -25,10 +25,28 @@ after any change in `.circus.ini` you need to build image again.
 
 ### Generate gRPC modules
 
-generated grpc modules are added to `.gitignore`, to generate them again, you can use `generate_grpc_codes.sh` inside the container, by following command:
+generated grpc modules are added to `.gitignore`, to generate them again, you can use the following command:
 
-`docker-compose -f docker-compose.video-streaming.yml exec video-streaming /bin/sh -c "sh video-streaming/grpc/generate_grpc_codes.sh"`
+`bash ./exec.codegen.sh`
 
-this script also will change import statement to fix `ModuleNotFoundError`. 
+it runs `generate_grpc_codes.sh` inside `video-streaming` container that also will change import statement to fix `ModuleNotFoundError`. 
 
-* after any changes on gRPC proto file, you need run the script again.
+* after any changes on the gRPC proto file, you need run the script again.
+
+### docker-compose
+
+there are some `sh` scripts in the root directory, that you can use them:
+
+
+* `bash ./build.sh` : Services are built once
+
+* `bash ./up.sh` : Builds, (re)creates, starts, and attaches to containers for a service.
+
+* `bash ./ps.sh` : Shows services states
+
+* `bash ./logs.sh` : Displays log output from services.
+
+* `bash ./exec.video-streaming.sh` : To get an interactive prompt in `video-streaming` service
+
+* `bash ./down.sh` : Stops containers and removes containers, networks, volumes, and images created by `up`
+
