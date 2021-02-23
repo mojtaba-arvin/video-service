@@ -1,6 +1,9 @@
 # video-service
 Dockerized video processing service, using Circus to run gRPC server and Celery task queue. 
 
+The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and `ffmpeg4.1` that support `fmp4` hls segment type that similar to `MPEG-DASH` and have some advantages over `MPEG-TS`.
+
+For video processing, `python-ffmpeg-video-streaming` package has been installed and you can get or put your files to a cloud such as `Amazon S3` compatible storages, `Google Cloud Storage` and `Microsoft Azure Storage` 
 
 ### config circus
 
@@ -22,10 +25,10 @@ after any change in `.circus.ini` you need to build image again.
 
 ### Generate gRPC modules
 
-generated grpc modules are added to `.gitignore`, to generate them again, you can use `generate_grpc_codes.sh` inside the container. by following command:
+generated grpc modules are added to `.gitignore`, to generate them again, you can use `generate_grpc_codes.sh` inside the container, by following command:
 
 `docker-compose -f docker-compose.video-streaming.yml exec video-streaming /bin/sh -c "sh video-streaming/grpc/generate_grpc_codes.sh"`
 
 this script also will change import statement to fix `ModuleNotFoundError`. 
 
-* after any changes on gRPC proto file, you need run the script.
+* after any changes on gRPC proto file, you need run the script again.
