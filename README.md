@@ -28,3 +28,4 @@ generated grpc modules are added to `.gitignore`, to generate them again, you ca
 
 this script also will change import statement to fix `ModuleNotFoundError`. 
 
+* after any changes on gRPC proto file, you need run the script.
