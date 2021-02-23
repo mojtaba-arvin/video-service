@@ -1,4 +1,4 @@
-# video-service
+# Python Video Streaming Service
 Dockerized video processing service, using Circus to run gRPC server and Celery task queue. 
 
 The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and `ffmpeg4.1` that support `fmp4` hls segment type that similar to `MPEG-DASH` and have some advantages over `MPEG-TS`.
