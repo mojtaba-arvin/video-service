@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-    streaming:
+    video-streaming:
         depends_on:
             - redis
             - rabbitmq
