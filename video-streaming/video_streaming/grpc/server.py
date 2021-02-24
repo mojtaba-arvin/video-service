@@ -2,17 +2,8 @@ import grpc
 import time
 from concurrent import futures
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
-from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
 from video_streaming.core.commands.base import BaseCommand
-
-
-class Streaming(streaming_pb2_grpc.StreamingServicer):
-
-    def video_processor(self, request, context):
-        # TODO apply_async celery task
-        response = streaming_pb2.TaskResponse()
-        # TODO add tracking id to response
-        return response
+from video_streaming.grpc.servicers import Streaming
 
 
 class GrpcServer(BaseCommand):
@@ -58,9 +49,9 @@ class GrpcServer(BaseCommand):
 
         server = grpc.server(futures.ThreadPoolExecutor(
             max_workers=self._MAX_WORKERS))
-        streaming_pb2_grpc.add_StreamingServicer_to_server(
-            Streaming(),
-            server)
+
+        # add StreamingServicer to server
+        Streaming().add_to_server()
 
         health_servicer = health.HealthServicer()
         health_pb2_grpc.add_HealthServicer_to_server(
