@@ -3,10 +3,6 @@ Base classes for writing commands
 """
 from argparse import ArgumentParser
 
-__all__ = [
-    'BaseCommand'
-]
-
 
 class BaseCommand:
     """
@@ -22,6 +18,11 @@ class BaseCommand:
         parser = ArgumentParser(description=self.help)
         self.add_arguments(parser)
         return parser
+
+    def parse_args(self):
+        parser = self.create_parser()
+        args = parser.parse_args()
+        return args
 
     def add_arguments(self, parser):
         """
