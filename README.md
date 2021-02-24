@@ -6,7 +6,9 @@ The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and `ffmpeg4.1` 
 For video processing, `python-ffmpeg-video-streaming` package has been installed and you can get or put your files to a cloud such as `Amazon S3` compatible storages, `Google Cloud Storage` and `Microsoft Azure Storage`
 
 
-### Setup Redis and RabbitMQ
+### 1. Setup Redis and RabbitMQ
+for local developments you can use Redis and Rabbit services in this repository,
+but you should configure them before building.
 
 #### Redis Service
 
@@ -21,7 +23,7 @@ to set `Redis` password ,just put password value at
 
 `cp .docker-compose/rabbitmq/.env.local .docker-compose/rabbitmq/.env`
 
-### Project environment
+### 2. Project environment
 
 This project needs a message broker and result backend for Celery.
 You should create an `.env` file at `video-streaming/video_streaming`
@@ -31,10 +33,22 @@ You should create an `.env` file at `video-streaming/video_streaming`
 
 The project uses `python-decouple` package, you can add other variables and cast them in `settings.py`. or anywhere in project using `RepositoryEnv` class
 
-### Generate Certificates to use by gRPC
+|    | VARIABLE              | DESCRIPTION                                                                 |
+|----|-----------------------|-----------------------------------------------------------------------------|
+| 1  | CELERY_BROKER_URL     | Celery needs a message broker url, e.g. RabbitMQ url                        |
+| 2  | CELERY_RESULT_BACKEND | To keep track of Celery tasks results, e.g. Redis url                       |
+| 3  | S3_ENDPOINT_URL       |                                                                             |
+| 4  | S3_ACCESS_KEY_ID      |                                                                             |
+| 5  | S3_SECRET_ACCESS_KEY  |                                                                             |
+| 6  | S3_REGION_NAME        |                                                                             |
+| 7  | S3_IS_SECURE          | Default is False but note that not all services support non-ssl connections.|                                                    |
+| 8  | S3_DEFAULT_BUCKET_NAME| Default bucket name of S3 storage to download or save videos                |
+
+
+### 3. Generate Certificates to use by gRPC
 TODO
 
-### Config circus
+### 4. Config circus
 
 This project uses `circusd`, to manage processes, 
 
@@ -54,21 +68,11 @@ there are some variables in the `[env]` section:
   
 after any change in `.circus.ini` you need to build image again.
 
-### Generate gRPC modules
+### 5. Building Docker composes
 
-generated grpc modules are added to `.gitignore`, to generate them again, you can use the following command:
-
-`bash ./exec.codegen.sh`
-
-it runs `generate_grpc_codes.sh` inside `video-streaming` container that also will change import statement to fix `ModuleNotFoundError`. 
-
-* after any changes on the gRPC proto file, you need run the script again.
-
-
-### Docker-compose
+##### Building for local development
 
 there are some `sh` scripts in the root directory, that you can use them:
-
 
 * `bash ./build.sh` : Services are built once
 
@@ -81,6 +85,19 @@ there are some `sh` scripts in the root directory, that you can use them:
 * `bash ./exec.video-streaming.sh` : To get an interactive prompt in `video-streaming` service
 
 * `bash ./down.sh` : Stops containers and removes containers, networks, volumes, and images created by `up`
+
+##### Building for production
+TODO
+
+### 6. Generate gRPC modules
+
+generated grpc modules are added to `.gitignore`, to generate them again, you can use the following command:
+
+`bash ./exec.codegen.sh`
+
+it runs `generate_grpc_codes.sh` inside `video-streaming` container that also will change import statement to fix `ModuleNotFoundError`. 
+
+* after any changes on the gRPC proto file, you need run the script again.
 
 ### APPs
 
