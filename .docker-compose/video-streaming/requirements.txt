@@ -23,3 +23,7 @@ circus==0.17.1
 
 # using .env
 python-decouple==3.4
+
+# clouds 
+boto3==1.17.14
+
