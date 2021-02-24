@@ -9,7 +9,7 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
         # TODO add tracking id to response
         return response
 
-    def add_to_server(self, server):
+    def _add_to_server(self, server):
         streaming_pb2_grpc.add_StreamingServicer_to_server(
             self.__class__(),
             server)
