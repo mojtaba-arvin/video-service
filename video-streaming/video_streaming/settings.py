@@ -30,3 +30,31 @@ AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.ffmpeg'
 ]
 
+##################################################
+#    S3 Object Storage                           #
+##################################################
+
+S3_ENDPOINT_URL = env_config.get(
+    "S3_ENDPOINT_URL",
+    default="",
+    cast=str)
+S3_ACCESS_KEY_ID = env_config.get(
+    "S3_ACCESS_KEY_ID",
+    default="",
+    cast=str)
+S3_SECRET_ACCESS_KEY = env_config.get(
+    "S3_SECRET_ACCESS_KEY",
+    default="",
+    cast=str)
+S3_REGION_NAME = env_config.get(
+    "S3_REGION_NAME",
+    default=None,
+    cast=str)
+S3_IS_SECURE = env_config.get(
+    "S3_IS_SECURE",
+    default=False,
+    cast=bool)
+S3_DEFAULT_BUCKET_NAME = env_config.get(
+    "S3_DEFAULT_BUCKET_NAME",
+    default="",
+    cast=str)
