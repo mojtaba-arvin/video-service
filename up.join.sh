@@ -1,4 +1,5 @@
 #!/bin/sh
 docker-compose \
      -f docker-compose.video-streaming.local.yml \
-     build
+     -f docker-compose.video-streaming.join.minio.yml \
+     up -d

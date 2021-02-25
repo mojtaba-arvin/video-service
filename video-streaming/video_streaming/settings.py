@@ -1,10 +1,8 @@
 """
 settings
 """
-
 from decouple import Config, RepositoryEnv
-from .constants import ENV_FILE_PATH
-
+from .env_config import ENV_FILE_PATH
 
 env_config = Config(RepositoryEnv(ENV_FILE_PATH))
 PROJECT_NAME = "video_streaming"
@@ -21,7 +19,7 @@ CELERY_RESULT_BACKEND = env_config.get('CELERY_RESULT_BACKEND', cast=str)
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-
+CELERY_BROKER_HEARTBEAT = 60
 
 # load task modules from modules
 AUTO_DISCOVER_TASKS = [
@@ -54,7 +52,12 @@ S3_IS_SECURE = env_config.get(
     "S3_IS_SECURE",
     default=False,
     cast=bool)
-S3_DEFAULT_BUCKET_NAME = env_config.get(
-    "S3_DEFAULT_BUCKET_NAME",
+S3_DEFAULT_INPUT_BUCKET_NAME = env_config.get(
+    "S3_DEFAULT_INPUT_BUCKET_NAME",
     default="",
     cast=str)
+S3_DEFAULT_OUTPUT_BUCKET_NAME = env_config.get(
+    "S3_DEFAULT_INPUT_BUCKET_NAME",
+    default="",
+    cast=str)
+

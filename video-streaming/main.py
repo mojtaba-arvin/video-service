@@ -1,17 +1,14 @@
-from video_streaming.extensions import celery_app, grpc_server
+from video_streaming.grpc import GrpcServer
+from video_streaming.celery import celery_app
 
-
+# To found main.celery_app module and load celery application.
 __all__ = ['celery_app']
-
-
-def start_grpc_server():
-    """Start gRPC server"""
-    grpc_server.serve()
 
 
 def main():
     """Main entry point"""
-    start_grpc_server()
+
+    GrpcServer().serve()  # start gRPC server
 
 
 if __name__ == '__main__':

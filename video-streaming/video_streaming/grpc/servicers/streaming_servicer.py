@@ -1,12 +1,17 @@
+# from video_streaming.ffmpeg.tasks import create_hls
 from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
 
 
 class Streaming(streaming_pb2_grpc.StreamingServicer):
 
     def video_processor(self, request, context):
-        # TODO apply_async celery task
+        # TODO
+        # task = create_hls.apply_async(
+        #     args=[],
+        #     kwargs={})
+        # print(f"task_id={task.id}")
         response = streaming_pb2.TaskResponse()
-        # TODO add tracking id to response
+        # response.tracking_id = task.id
         return response
 
     def _add_to_server(self, server):
