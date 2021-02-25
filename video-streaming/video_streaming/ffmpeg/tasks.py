@@ -1,6 +1,4 @@
-from video_streaming.extensions import celery_app
-from video_streaming.ffmpeg.utils import monitor
-from video_streaming.core.services import S3Service
+from video_streaming.celery import celery_app
 
 
 @celery_app.task(bind=True, name="create_hls")

@@ -33,16 +33,17 @@ You should create an `.env` file at `video-streaming/video_streaming`
 
 The project uses `python-decouple` package, you can add other variables and cast them in `settings.py`. or anywhere in project using `RepositoryEnv` class
 
-|    | VARIABLE              | DESCRIPTION                                                                 |
-|----|-----------------------|-----------------------------------------------------------------------------|
-| 1  | CELERY_BROKER_URL     | Celery needs a message broker url, e.g. RabbitMQ url                        |
-| 2  | CELERY_RESULT_BACKEND | To keep track of Celery tasks results, e.g. Redis url                       |
-| 3  | S3_ENDPOINT_URL       |                                                                             |
-| 4  | S3_ACCESS_KEY_ID      |                                                                             |
-| 5  | S3_SECRET_ACCESS_KEY  |                                                                             |
-| 6  | S3_REGION_NAME        |                                                                             |
-| 7  | S3_IS_SECURE          | Default is False but note that not all services support non-ssl connections.|                                                    |
-| 8  | S3_DEFAULT_BUCKET_NAME| Default bucket name of S3 storage to download or save videos                |
+|    | VARIABLE                     | DESCRIPTION                                                                 |
+|----|------------------------------|-----------------------------------------------------------------------------|
+| 1  | CELERY_BROKER_URL            | Celery needs a message broker url, e.g. RabbitMQ url                        |
+| 2  | CELERY_RESULT_BACKEND        | To keep track of Celery tasks results, e.g. Redis url                       |
+| 3  | S3_ENDPOINT_URL              |                                                                            |
+| 4  | S3_ACCESS_KEY_ID             |                                                                             |
+| 5  | S3_SECRET_ACCESS_KEY         |                                                                             |
+| 6  | S3_REGION_NAME               |                                                                             |
+| 7  | S3_IS_SECURE                 | Default is False but note that not all services support non-ssl connections.|                                                    |
+| 8  | S3_DEFAULT_INPUT_BUCKET_NAME | Default bucket name of S3 storage to download videos                        |
+| 9  | S3_DEFAULT_OUTPUT_BUCKET_NAME| Default bucket name of S3 storage to upload videos                        |
 
 
 ### 3. Generate Certificates to use by gRPC
