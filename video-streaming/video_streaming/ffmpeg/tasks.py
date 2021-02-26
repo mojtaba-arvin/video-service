@@ -18,7 +18,7 @@ from video_streaming.settings import (
 @celery_app.task(bind=True, name="create_hls")
 def create_hls(
         self,
-        request_id: str,  # unique request id - several tasks can point one request_id
+        request_id: str,  # unique request id - several tasks can point to one request_id
         s3_input_key: str,
         s3_output_key: str,
         s3_input_bucket: str = S3_DEFAULT_INPUT_BUCKET_NAME,
@@ -83,7 +83,7 @@ def create_hls(
             reps.extend(
                 Resolutions().get_reps(quality_names)
             )
-        # is like [dict(size=[256, 144], bitrate=[97280, 65536])]
+        # custom_qualities is like [dict(size=[256, 144], bitrate=[97280, 65536])]
         for quality in custom_qualities:
             size = quality.get('size', None)
             bitrate = quality.get('bitrate', None)
