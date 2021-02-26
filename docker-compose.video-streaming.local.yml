@@ -8,6 +8,8 @@ services:
         image: video-streaming
         volumes:
             - ./video-streaming:/opt/workdir/video-streaming
+            - ./tmp/downloaded_videos/:/tmp/downloaded_videos/
+            - ./tmp/transcoded_videos/:/tmp/transcoded_videos/
         depends_on:
             - redis
             - rabbitmq

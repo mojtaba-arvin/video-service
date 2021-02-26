@@ -142,3 +142,6 @@ dmypy.json
 # docker-compose envs
 /.docker-compose/rabbitmq/.env
 /.docker-compose/redis/.redis_pass_file
+
+# transcoded or downloaded files from the cloud
+/tmp
