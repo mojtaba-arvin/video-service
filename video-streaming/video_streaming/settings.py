@@ -2,7 +2,7 @@
 settings
 """
 from decouple import Config, RepositoryEnv
-from .env_config import ENV_FILE_PATH
+from video_streaming.env_config import ENV_FILE_PATH
 
 env_config = Config(RepositoryEnv(ENV_FILE_PATH))
 PROJECT_NAME = "video_streaming"
@@ -52,12 +52,31 @@ S3_IS_SECURE = env_config.get(
     "S3_IS_SECURE",
     default=False,
     cast=bool)
+S3_DEFAULT_BUCKET = env_config.get(
+    "S3_DEFAULT_BUCKET",
+    default="",
+    cast=str)
 S3_DEFAULT_INPUT_BUCKET_NAME = env_config.get(
     "S3_DEFAULT_INPUT_BUCKET_NAME",
-    default="",
+    default=S3_DEFAULT_BUCKET,
     cast=str)
 S3_DEFAULT_OUTPUT_BUCKET_NAME = env_config.get(
     "S3_DEFAULT_INPUT_BUCKET_NAME",
+    default=S3_DEFAULT_BUCKET,
+    cast=str)
+
+##################################################
+#    File System                                 #
+##################################################
+
+# temporary directory of downloaded videos
+TMP_DOWNLOADED_DIR = env_config.get(
+    "TMP_DOWNLOADED_DIR",
+    default="",
+    cast=str)
+# temporary directory of transcoded videos
+TMP_TRANSCODED_DIR = env_config.get(
+    "TMP_TRANSCODED_DIR",
     default="",
     cast=str)
 
