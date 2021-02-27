@@ -7,7 +7,7 @@ from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.constants import Resolutions, \
     VideoEncodingFormats
 from video_streaming.ffmpeg.utils import S3DownloadCallback, \
-    FfmpegCallback
+    FfmpegCallback, S3UploadDirectoryCallback
 from video_streaming.settings import (
     TMP_DOWNLOADED_DIR,
     TMP_TRANSCODED_DIR,
@@ -27,8 +27,8 @@ def create_hls(
         encode_format: str = VideoEncodingFormats.H264,
         video_codec: str = None,
         audio_codec: str = None,
-        quality_names: list = None,  # ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
-        custom_qualities: list = None,  # [dict(size=[256, 144], bitrate=[97280, 65536])]
+        quality_names: list[str] = None,  # ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
+        custom_qualities: list[dict] = None,  # [dict(size=[256, 144], bitrate=[97280, 65536])]
         webhook_url: str = None
         ):
     """
@@ -41,9 +41,14 @@ def create_hls(
     local_input_path = os.path.join(
         TMP_DOWNLOADED_DIR, request_id, s3_input_key)
 
+    output_directory = os.path.join(
+        TMP_TRANSCODED_DIR, request_id, task_id)
+
+    # sometimes s3_output_key includes s3 folders, just filename is enough
+    output_filename = s3_output_key.rpartition('/')[2]
+
     # output path on local machine
-    local_output_path = os.path.join(
-        TMP_TRANSCODED_DIR, request_id, task_id, s3_output_key)
+    local_output_path = os.path.join(output_directory, output_filename)
 
     # create s3 client
     s3_service = S3Service()
@@ -100,11 +105,18 @@ def create_hls(
     if fragmented:
         hls.fragmented_mp4()
 
+    # local_output_path includes the file name
     hls.output(local_output_path, monitor=FfmpegCallback().progress)
+
+    s3_service.upload_directory(
+        s3_output_key,
+        output_directory,
+        bucket_name=s3_output_bucket,
+        directory_callback=S3UploadDirectoryCallback().progress
+    )
 
     # TODO
     # 1. decrease used count to remove input file when reach 0
-    # 2. upload output to s3 + progress
     # 3. decrease tasks counts to call webhook when reach 0
 
 

@@ -1,10 +1,26 @@
 import os
+from functools import partial
+
 import boto3
+from typing import Union
+from boto3.s3 import transfer
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from video_streaming import settings
-# TODO : from botocore.exceptions import ClientError
+from video_streaming.ffmpeg.utils import S3UploadDirectoryCallback
+
+
+class S3Exception(Exception):
+
+    def __init__(self, exception=None):
+        super().__init__()
+        # TODO capture errors
+        if isinstance(exception, ClientError):
+            pass
 
 
 class S3Service:
+
     DEFAULT_SERVICE_NAME = "s3"
     BASE_URL = settings.S3_ENDPOINT_URL
     ACCESS_KEY = settings.S3_ACCESS_KEY_ID
@@ -13,19 +29,29 @@ class S3Service:
     IS_SECURE = settings.S3_IS_SECURE
     DEFAULT_BUCKET = settings.S3_DEFAULT_BUCKET
 
+    # TODO read from settings
+    TRANSFER_MULTIPART_THRESHOLD = settings.S3_TRANSFER_MULTIPART_THRESHOLD
+    TRANSFER_MAX_CONCURRENCY = settings.S3_TRANSFER_MAX_CONCURRENCY
+    TRANSFER_MULTIPART_CHUNKSIZE = settings.S3_TRANSFER_MULTIPART_CHUNKSIZE
+    TRANSFER_NUM_DOWNLOAD_ATTEMPTS = settings.S3_TRANSFER_NUM_DOWNLOAD_ATTEMPTS
+    TRANSFER_MAX_IO_QUEUE = settings.S3_TRANSFER_MAX_IO_QUEUE
+    TRANSFER_IO_CHUNKSIZE = settings.S3_TRANSFER_IO_CHUNKSIZE
+    TRANSFER_USE_THREADS = settings.S3_TRANSFER_USE_THREADS
+
     def __init__(
             self,
-            service_name=None,
-            region_name=None,
-            api_version=None,
-            use_ssl=True,
-            verify=None,
-            endpoint_url=None,
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            config=None,
-            _default_bucket=None):
+            service_name: str = None,
+            region_name: str = None,
+            api_version: str = None,
+            use_ssl: bool = True,
+            verify: Union[bool, str] = None,
+            endpoint_url: str = None,
+            aws_access_key_id: str = None,
+            aws_secret_access_key: str = None,
+            aws_session_token: str = None,
+            config: Config = None,
+            transfer_config: transfer.TransferConfig = None,
+            _default_bucket: str = None):
 
         if _default_bucket is not None:
             self.DEFAULT_BUCKET = str(_default_bucket)
@@ -55,19 +81,24 @@ class S3Service:
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
             config=config)
+        self.transfer_config = transfer_config or self.transfer_config_generator()
+        self.exception = S3Exception
 
     def head(self,
-             key,
-             bucket_name=None,
+             key: str,
+             bucket_name: str = None,
              **kwargs):
         kwargs['Key'] = key
         kwargs['Bucket'] = bucket_name or self.DEFAULT_BUCKET
-        return self.client.head_object(**kwargs)
+        try:
+            return self.client.head_object(**kwargs)
+        except ClientError as e:
+            raise self.exception(e)
 
     def get_object_size(
             self,
-            key,
-            bucket_name=None):
+            key: str,
+            bucket_name: str = None):
         """
         Size of the object body in bytes
         """
@@ -78,22 +109,113 @@ class S3Service:
 
     def download(
             self,
-            key,
-            destination_path=None,
-            bucket_name=None,
-            extra_args=None,
-            callback=None,
-            config=None):
+            key: str,
+            destination_path: str = None,
+            bucket_name: str = None,
+            extra_args: dict = None,
+            callback: callable = None,
+            config: transfer.TransferConfig = None):
         bucket_name = bucket_name or self.DEFAULT_BUCKET
 
-        directory, _, filename = destination_path.rpartition('/')
+        # to ensure output directory is exist and create it if not exist
+        directory = destination_path.rpartition('/')[0]
         os.makedirs(directory, exist_ok=True)
 
         with open(destination_path, 'wb') as file_like_object:
-            self.client.download_fileobj(
-                Bucket=bucket_name,
+            try:
+                self.client.download_fileobj(
+                    Bucket=bucket_name,
+                    Key=key,
+                    Fileobj=file_like_object,
+                    ExtraArgs=extra_args,
+                    Callback=callback,
+                    Config=config or self.transfer_config)
+            except ClientError as e:
+                raise self.exception(e)
+
+    def transfer_config_generator(
+            self,
+            multipart_threshold: int = None,
+            max_concurrency: int = None,
+            multipart_chunksize: int = None,
+            num_download_attempts: int = None,
+            max_io_queue: int = None,
+            io_chunksize: int = None,
+            use_threads: bool = None):
+        try:
+            return transfer.TransferConfig(
+                multipart_threshold=multipart_threshold or self.TRANSFER_MULTIPART_THRESHOLD,
+                max_concurrency=max_concurrency or self.TRANSFER_MAX_CONCURRENCY,
+                multipart_chunksize=multipart_chunksize or self.TRANSFER_MULTIPART_CHUNKSIZE,
+                num_download_attempts=num_download_attempts or self.TRANSFER_NUM_DOWNLOAD_ATTEMPTS,
+                max_io_queue=max_io_queue or self.TRANSFER_MAX_IO_QUEUE,
+                io_chunksize=io_chunksize or self.TRANSFER_IO_CHUNKSIZE,
+                use_threads=use_threads or self.TRANSFER_USE_THREADS)
+        except Exception as e:
+            raise self.exception(e)
+
+    def upload_file_by_path(
+            self,
+            key: str,
+            file_path: str,  # Path on the local filesystem from which object data will be read.
+            bucket_name: str = None,
+            callback: callable = None,
+            extra_args: dict = None,
+            config: transfer.TransferConfig = None
+            ):
+        try:
+            self.client.upload_file(
+                Filename=file_path,
+                Bucket=bucket_name or self.DEFAULT_BUCKET,
                 Key=key,
-                Fileobj=file_like_object,
                 ExtraArgs=extra_args,
                 Callback=callback,
-                Config=config)
+                Config=config or self.transfer_config)
+        except ClientError as e:
+            raise self.exception(e)
+
+    def upload_directory(
+            self,
+            key: str,
+            directory: str,
+            bucket_name: str = None,
+            extra_args: dict = None,
+            config: transfer.TransferConfig = None,
+            directory_callback: callable = None
+            ):
+
+        # TODO : move this section to utils
+        total_size = 0
+        files = []
+        for entry in os.scandir(directory):
+            if entry.is_file():
+                entry_size = entry.stat().st_size
+                files.append(
+                    (entry.path, entry.name, entry_size)
+                )
+                total_size += entry_size
+
+        total_files = len(files)
+
+        for number, (file_path, file_name, file_size) in enumerate(files):
+            partial_callback = partial(
+                directory_callback,
+                total_size,
+                total_files,
+                number)
+
+            # s3_output_key as key can be something like : "folder1/folder2/example.m3u8"
+            # file names are something like "example_480p_0003.m4s" ,...
+            # this code will generate key for every file like : "folder1/folder2/example_480p_0003.m4s"
+            # to prevent upload all files with the same key
+            s3_folder = key.rpartition('/')[0] + "/"
+            s3_key = s3_folder + file_name
+
+            self.upload_file_by_path(
+                key=s3_key,
+                file_path=file_path,
+                bucket_name=bucket_name,
+                callback=partial_callback,
+                extra_args=extra_args,
+                config=config
+            )
