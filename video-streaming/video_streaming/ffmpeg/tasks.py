@@ -43,12 +43,14 @@ def create_hls(
     object_details = s3_service.head(
             key=s3_input_key, bucket_name=s3_input_bucket)
     if not object_details:
+        print("# check s3_input_key on s3_input_bucket")
         raise self.raise_ignore(
             message=ErrorMessages.INPUT_VIDEO_404_OR_403)
 
     # to determine if s3_output_bucket not exists and permission to access it
     if not s3_service.head_bucket(bucket_name=s3_output_bucket):
         if not s3_create_bucket:
+            print("# to determine if s3_output_bucket not exists and permission to access it")
             raise self.raise_ignore(
                 message=ErrorMessages.OUTPUT_BUCKET_404_OR_403)
         # create s3_output_bucket

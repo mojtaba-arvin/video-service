@@ -2,14 +2,13 @@
 
 All extensions here are used as singletons
 """
-
-from celery import Celery, states
+from abc import ABC
+from celery import Task, Celery, states
 from celery.exceptions import Ignore
+from video_streaming import settings
 
-from . import settings
 
-
-class CeleryApplication(Celery):
+class CeleryTask(Task, ABC):
 
     def raise_ignore(self, message=None):
         try:
@@ -18,14 +17,16 @@ class CeleryApplication(Celery):
         except Exception:
             update_kwargs = dict(state=states.FAILURE)
             if message is not None:
-                update_kwargs['meta'] = dict(exc_message=message)
+                update_kwargs['meta'] = dict(
+                    exc_type='Exception',
+                    exc_message=message)
             self.update_state(
                 **update_kwargs)
             raise Ignore()
 
 
 # celery instance
-celery_app = Celery()
+celery_app = Celery('tasks', task_cls='video_streaming.celery:CeleryTask')
 celery_app.config_from_object(settings, namespace='CELERY')
 celery_app.autodiscover_tasks(settings.AUTO_DISCOVER_TASKS)
 

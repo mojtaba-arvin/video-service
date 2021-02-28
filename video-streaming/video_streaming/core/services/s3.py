@@ -1,7 +1,4 @@
 import os
-import sys
-import traceback
-
 import boto3
 from functools import partial
 from typing import Union
