@@ -150,3 +150,15 @@ TMP_TRANSCODED_DIR = env_config.get(
     default="",
     cast=str)
 
+##################################################
+#    FFmpeg                                      #
+##################################################
+
+FFPROBE_BIN_PATH = env_config.get(
+    "FFPROBE_BIN_PATH",
+    default="/usr/local/bin/ffprobe",
+    cast=str)
+FFMPEG_BIN_PATH = env_config.get(
+    "FFMPEG_BIN_PATH",
+    default="/usr/local/bin/ffmpeg",
+    cast=str)

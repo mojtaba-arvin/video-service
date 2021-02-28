@@ -1,4 +1,5 @@
 import os
+import traceback
 import boto3
 from functools import partial
 from typing import Union
@@ -75,9 +76,10 @@ class S3Service:
         self.base_exception = S3BaseException
 
     def _exception_handler(self, exc: Exception):
-        # TODO capture traceback.format_exc()
+        # TODO capture error
         # exc_type, exc_value, exc_traceback = sys.exc_info()
         # traceback.print_tb(exc_traceback)
+        print(traceback.format_exc())
 
         # handle ClientError
         if isinstance(exc, ClientError):
@@ -144,9 +146,11 @@ class S3Service:
 
         bucket_name = bucket_name or self.DEFAULT_BUCKET
 
-        # to ensure output directory is exist and create it if not exist
-        directory = destination_path.rpartition('/')[0]
-        os.makedirs(directory, exist_ok=True)
+        if not os.path.exists(destination_path):
+            # to ensure output directory is exist and create it if not exist
+            directory = destination_path.rpartition('/')[0]
+            os.makedirs(directory, exist_ok=True)
+            print("directory created:", directory)
 
         try:
             with open(destination_path, 'wb') as file_like_object:

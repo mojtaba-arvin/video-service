@@ -1,5 +1,4 @@
 import os
-from os import path
 import ffmpeg_streaming
 from video_streaming import settings
 from ffmpeg_streaming import Representation, Size, Bitrate
@@ -26,7 +25,7 @@ def create_hls(
         encode_format: str = VideoEncodingFormats.H264,
         video_codec: str = None,
         audio_codec: str = None,
-        quality_names: list[str] = None,     # ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
+        quality_names: list[str] = None,      # ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
         custom_qualities: list[dict] = None,  # [dict(size=[256, 144], bitrate=[97280, 65536])]
         webhook_url: str = None,
         ):
@@ -45,7 +44,7 @@ def create_hls(
     if not object_details:
         raise self.raise_ignore(
             message=ErrorMessages.INPUT_VIDEO_404_OR_403)
-    
+
     # to determine if s3_output_bucket not exists and permission to access it
     if not s3_service.head_bucket(bucket_name=s3_output_bucket):
         if not s3_create_bucket:
@@ -76,7 +75,8 @@ def create_hls(
 
     # Check if the file is being downloaded
     # or downloaded by another task in the request.
-    downloaded = path.exists(local_input_path)
+    # note: local_input_path includes request_id, so object with same name and bucket, can will download again
+    downloaded = os.path.exists(local_input_path)
     if not downloaded:
         # Size of the body in bytes.
         object_size = S3Service.get_object_size(object_details)
@@ -100,7 +100,7 @@ def create_hls(
 
     if not (custom_qualities or quality_names):
         # generate default representations
-        hls.auto_generate_representations()
+        hls.auto_generate_representations(ffprobe_bin=settings.FFPROBE_BIN_PATH)
     else:
         reps = []
         # quality_names is like ["360p","480p","720p"]
@@ -115,18 +115,21 @@ def create_hls(
             if not (size or bitrate):
                 continue
             if not size or not bitrate:
-                raise ValueError("Representation needs both size and bitrate")
+                raise self.raise_ignore(
+                    message=ErrorMessages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
             reps.append(
                 Representation(Size(*size), Bitrate(*bitrate))
             )
         # generate representations
-        hls.representations(*reps)
+        hls.representations(*reps, ffprobe_bin=settings.FFPROBE_BIN_PATH)
 
     if fragmented:
         hls.fragmented_mp4()
 
     # local_output_path includes the file name
-    hls.output(local_output_path, monitor=FfmpegCallback().progress)
+    hls.output(local_output_path,
+               monitor=FfmpegCallback().progress,
+               ffmpeg_bin=settings.FFMPEG_BIN_PATH)
 
     s3_service.upload_directory(
         s3_output_key,
@@ -134,10 +137,6 @@ def create_hls(
         bucket_name=s3_output_bucket,
         directory_callback=S3UploadDirectoryCallback().progress
     )
-
-    # TODO
-    # 1. decrease used count to remove input file when reach 0
-    # 3. decrease tasks counts to call webhook when reach 0
 
 
 @celery_app.task(bind=True, name="create_dash")
