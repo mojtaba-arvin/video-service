@@ -1,22 +1,15 @@
 import os
-from functools import partial
+import sys
+import traceback
 
 import boto3
+from functools import partial
 from typing import Union
 from boto3.s3 import transfer
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 from video_streaming import settings
-from video_streaming.ffmpeg.utils import S3UploadDirectoryCallback
-
-
-class S3Exception(Exception):
-
-    def __init__(self, exception=None):
-        super().__init__()
-        # TODO capture errors
-        if isinstance(exception, ClientError):
-            pass
+from video_streaming.core.exceptions import S3BaseException
 
 
 class S3Service:
@@ -82,7 +75,27 @@ class S3Service:
             aws_session_token=aws_session_token,
             config=config)
         self.transfer_config = transfer_config or self.transfer_config_generator()
-        self.exception = S3Exception
+        self.base_exception = S3BaseException
+
+    def _exception_handler(self, exc: Exception):
+        # TODO capture traceback.format_exc()
+        # exc_type, exc_value, exc_traceback = sys.exc_info()
+        # traceback.print_tb(exc_traceback)
+
+        # handle ClientError
+        if isinstance(exc, ClientError):
+            exception = self.base_exception(exc)
+            if exception.is_404_error:
+                return None
+            if exception.is_403_error:
+                return None
+            raise exception
+
+        if isinstance(exc, ParamValidationError):
+            # TODO : notify the developer
+            raise exc
+
+        raise exc
 
     def head(self,
              key: str,
@@ -92,20 +105,36 @@ class S3Service:
         kwargs['Bucket'] = bucket_name or self.DEFAULT_BUCKET
         try:
             return self.client.head_object(**kwargs)
-        except ClientError as e:
-            raise self.exception(e)
+        except Exception as e:
+            # _exception_handler returns None when object is not found
+            return self._exception_handler(e)
 
-    def get_object_size(
+    def head_bucket(
             self,
-            key: str,
-            bucket_name: str = None):
-        """
-        Size of the object body in bytes
-        """
-        bucket_name = bucket_name or self.DEFAULT_BUCKET
-        return int(self.head(
-            key,
-            bucket_name).get('ContentLength', 0))
+            bucket_name: str = None,
+            **kwargs):
+        kwargs['Bucket'] = bucket_name or self.DEFAULT_BUCKET
+        try:
+            # see : https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.head_bucket
+            return self.client.head_bucket(**kwargs)
+        except Exception as e:
+            # _exception_handler returns None when bucket is not found
+            return self._exception_handler(e)
+
+    def create_bucket(
+            self,
+            bucket_name: str = None,
+            **kwargs):
+        kwargs['Bucket'] = bucket_name or self.DEFAULT_BUCKET
+        try:
+            return self.client.create_bucket(**kwargs)
+        except Exception as e:
+            # TODO handle possible errors
+            return self._exception_handler(e)
+
+    @staticmethod
+    def get_object_size(object_details):
+        return int(object_details.get('ContentLength', 0))
 
     def download(
             self,
@@ -115,14 +144,15 @@ class S3Service:
             extra_args: dict = None,
             callback: callable = None,
             config: transfer.TransferConfig = None):
+
         bucket_name = bucket_name or self.DEFAULT_BUCKET
 
         # to ensure output directory is exist and create it if not exist
         directory = destination_path.rpartition('/')[0]
         os.makedirs(directory, exist_ok=True)
 
-        with open(destination_path, 'wb') as file_like_object:
-            try:
+        try:
+            with open(destination_path, 'wb') as file_like_object:
                 self.client.download_fileobj(
                     Bucket=bucket_name,
                     Key=key,
@@ -130,8 +160,9 @@ class S3Service:
                     ExtraArgs=extra_args,
                     Callback=callback,
                     Config=config or self.transfer_config)
-            except ClientError as e:
-                raise self.exception(e)
+            return destination_path
+        except Exception as e:
+            return self._exception_handler(e)
 
     def transfer_config_generator(
             self,
@@ -152,7 +183,7 @@ class S3Service:
                 io_chunksize=io_chunksize or self.TRANSFER_IO_CHUNKSIZE,
                 use_threads=use_threads or self.TRANSFER_USE_THREADS)
         except Exception as e:
-            raise self.exception(e)
+            return self._exception_handler(e)
 
     def upload_file_by_path(
             self,
@@ -171,8 +202,8 @@ class S3Service:
                 ExtraArgs=extra_args,
                 Callback=callback,
                 Config=config or self.transfer_config)
-        except ClientError as e:
-            raise self.exception(e)
+        except Exception as e:
+            return self._exception_handler(e)
 
     def upload_directory(
             self,
