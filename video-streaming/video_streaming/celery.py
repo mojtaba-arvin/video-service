@@ -10,6 +10,10 @@ from video_streaming import settings
 
 class CeleryTask(Task, ABC):
 
+    # TODO cwhen task executed :
+    # 1. decrease used count to remove input file when reach 0
+    # 2. decrease tasks counts to call webhook when reach 0
+
     def raise_ignore(self, message=None):
         try:
             # to trigger the task_failure signal
