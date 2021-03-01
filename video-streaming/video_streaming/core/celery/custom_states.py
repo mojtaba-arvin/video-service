@@ -44,7 +44,7 @@ class CustomTaskState:
 
 class CheckingInputVideoState(CustomTaskState):
     state = 'CHECKING_INPUT_VIDEO'
-    description = 'Getting details of input video from the cloud'
+    description = 'Getting details of the input video from the cloud'
 
 
 class CreatingOutputBucketState(CustomTaskState):
@@ -54,17 +54,17 @@ class CreatingOutputBucketState(CustomTaskState):
 
 class PreparationVideoDownloadingState(CustomTaskState):
     state = 'PREPARATION_VIDEO_DOWNLOADING'
-    description = "Getting ready to download input video from the cloud"
+    description = "Getting ready to download the input video from the cloud"
 
 
 class DownloadingVideoState(CustomTaskState):
     state = 'VIDEO_DOWNLOADING'
-    description = "Downloading input video from the cloud"
+    description = "Downloading the input video from the cloud"
 
 
 class PreparationVideoProcessingState(CustomTaskState):
     state = 'PREPARATION_VIDEO_PROCESSING'
-    description = "Preparation to process video"
+    description = "Preparation to process the video"
 
 
 class VideoProcessingState(CustomTaskState):
@@ -74,9 +74,9 @@ class VideoProcessingState(CustomTaskState):
 
 class PreparationUploadOutputsState(CustomTaskState):
     state = 'PREPARATION_UPLOAD_OUTPUTS'
-    description = "Preparation to upload output files to the cloud"
+    description = "Preparation to upload the output files to the cloud"
 
 
 class UploadingOutputsState(CustomTaskState):
     state = 'UPLOADING_OUTPUTS'
-    description = "Uploading output files to the cloud"
+    description = "Uploading the output files to the cloud"
