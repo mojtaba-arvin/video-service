@@ -4,8 +4,8 @@ import boto3
 from functools import partial
 from typing import Union
 from boto3.s3 import transfer
+from botocore import exceptions
 from botocore.config import Config
-from botocore.exceptions import ClientError, ParamValidationError
 from video_streaming import settings
 from video_streaming.core.exceptions import S3BaseException
 
@@ -28,6 +28,22 @@ class S3Service:
     TRANSFER_MAX_IO_QUEUE = settings.S3_TRANSFER_MAX_IO_QUEUE
     TRANSFER_IO_CHUNKSIZE = settings.S3_TRANSFER_IO_CHUNKSIZE
     TRANSFER_USE_THREADS = settings.S3_TRANSFER_USE_THREADS
+
+    # exception
+    base_exception = S3BaseException
+    RETRY_FOR = (
+        exceptions.ConnectionError,  # such as EndpointConnectionError, ConnectionClosedError, ...
+        exceptions.HTTPClientError,  # such as ConnectionClosedError, ReadTimeoutError
+        exceptions.IncompleteReadError,
+    )
+    DEVELOPER_ERRORS = (
+        exceptions.ParamValidationError,
+        exceptions.ValidationError,
+        exceptions.MissingParametersError,
+        exceptions.UnknownServiceError,
+        exceptions.ApiVersionNotFoundError,
+        # TODO add more
+    )
 
     def __init__(
             self,
@@ -73,7 +89,6 @@ class S3Service:
             aws_session_token=aws_session_token,
             config=config)
         self.transfer_config = transfer_config or self.transfer_config_generator()
-        self.base_exception = S3BaseException
 
     def _exception_handler(self, exc: Exception):
         # TODO capture error
@@ -82,7 +97,7 @@ class S3Service:
         print(traceback.format_exc())
 
         # handle ClientError
-        if isinstance(exc, ClientError):
+        if isinstance(exc, exceptions.ClientError):
             exception = self.base_exception(exc)
             if exception.is_404_error:
                 return None
@@ -90,8 +105,12 @@ class S3Service:
                 return None
             raise exception
 
-        if isinstance(exc, ParamValidationError):
+        if isinstance(exc, self.DEVELOPER_ERRORS):
             # TODO : notify the developer
+            raise exc
+
+        if isinstance(exc, exceptions.CapacityNotAvailableError):
+            # TODO : notify
             raise exc
 
         raise exc
@@ -143,14 +162,11 @@ class S3Service:
             extra_args: dict = None,
             callback: callable = None,
             config: transfer.TransferConfig = None):
-
         bucket_name = bucket_name or self.DEFAULT_BUCKET
 
-        if not os.path.exists(destination_path):
-            # to ensure output directory is exist and create it if not exist
-            directory = destination_path.rpartition('/')[0]
-            os.makedirs(directory, exist_ok=True)
-            print("directory created:", directory)
+        # to ensure output directory is exist and create it if not exist
+        directory = destination_path.rpartition('/')[0]
+        os.makedirs(directory, exist_ok=True)
 
         try:
             with open(destination_path, 'wb') as file_like_object:
@@ -206,17 +222,8 @@ class S3Service:
         except Exception as e:
             return self._exception_handler(e)
 
-    def upload_directory(
-            self,
-            key: str,
-            directory: str,
-            bucket_name: str = None,
-            extra_args: dict = None,
-            config: transfer.TransferConfig = None,
-            directory_callback: callable = None
-            ):
-
-        # TODO : move this section to utils
+    @staticmethod
+    def get_directory_size(directory: str):
         total_size = 0
         files = []
         for entry in os.scandir(directory):
@@ -227,8 +234,19 @@ class S3Service:
                 )
                 total_size += entry_size
 
-        total_files = len(files)
+        return total_size, files
 
+    def upload_directory(
+            self,
+            key: str,
+            directory: str,
+            bucket_name: str = None,
+            extra_args: dict = None,
+            config: transfer.TransferConfig = None,
+            directory_callback: callable = None
+            ):
+        total_size, files = S3Service.get_directory_size(directory)
+        total_files = len(files)
         for number, (file_path, file_name, file_size) in enumerate(files):
             partial_callback = partial(
                 directory_callback,

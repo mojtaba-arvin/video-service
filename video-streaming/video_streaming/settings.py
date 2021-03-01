@@ -14,8 +14,14 @@ PROJECT_NAME = "video_streaming"
 #: Only add pickle to this list if your broker is secured
 #: from unwanted access (see userguide/security.html)
 
-CELERY_BROKER_URL = env_config.get('CELERY_BROKER_URL', cast=str)
-CELERY_RESULT_BACKEND = env_config.get('CELERY_RESULT_BACKEND', cast=str)
+CELERY_BROKER_URL = env_config.get(
+    "CELERY_BROKER_URL",
+    default="",
+    cast=str)
+CELERY_RESULT_BACKEND = env_config.get(
+    "CELERY_RESULT_BACKEND",
+    default="",
+    cast=str)
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -27,6 +33,12 @@ AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.grpc',
     f'{PROJECT_NAME}.ffmpeg'
 ]
+
+BASE_TASK_CLASS = 'video_streaming.core.celery:BaseCeleryTask'
+TASK_RETRY_BACKOFF_MAX = env_config.get(
+    "TASK_RETRY_BACKOFF_MAX",
+    default=10,
+    cast=int)
 
 ##################################################
 #    S3 Object Storage                           #
