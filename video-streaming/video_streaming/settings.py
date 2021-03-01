@@ -27,6 +27,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BROKER_HEARTBEAT = 60
 
+
 # load task modules from modules
 AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.core',
