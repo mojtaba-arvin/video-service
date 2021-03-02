@@ -31,7 +31,7 @@ class S3DownloadCallback(object):
         if self.task and self.task_id:
 
             # update state
-            current_state = custom_states.PreparationVideoDownloadingState().create(
+            current_state = custom_states.DownloadingVideoState().create(
                 progress_total=self._object_size,
                 progress_current=self.downloaded,
                 task_id=self.task_id
