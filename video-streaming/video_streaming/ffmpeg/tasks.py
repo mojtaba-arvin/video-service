@@ -1,7 +1,8 @@
 import os
 from video_streaming import settings
 from video_streaming.celery import celery_app
-from video_streaming.core.celery import VideoStreamingTask
+from video_streaming.core.celery import VideoStreamingTask, \
+    DownloadInputTask, CreatePlaylistTask, UploadDirectoryTask
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.utils import FfmpegCallback
 
@@ -14,7 +15,6 @@ The base class of task is `VideoStreamingTask`, and default values for
 required parameters of tasks can be set as attrs in the `VideoStreamingTask`
 """
 decorator_kwargs = dict(
-    base=VideoStreamingTask,
     bind=True,
     autoretry_for=S3Service.RETRY_FOR,
     retry_backoff_max=settings.TASK_RETRY_BACKOFF_MAX,
@@ -23,10 +23,12 @@ decorator_kwargs = dict(
 )
 
 
-@celery_app.task(name="check_input_key", **decorator_kwargs)
+@celery_app.task(name="check_input_key",
+                 base=VideoStreamingTask,
+                 **decorator_kwargs)
 def check_input_key(self,
                     s3_input_key: str = None,
-                    s3_input_bucket: str = None):
+                    s3_input_bucket: str = None) -> dict:
     """check s3_input_key is exist on s3_input_bucket
 
        required parameters:
@@ -39,13 +41,16 @@ def check_input_key(self,
     # check s3_input_key on s3_input_bucket by head request
     object_details = self.check_input_video()
 
-    return object_details
+    return dict(object_details=object_details)
 
 
-@celery_app.task(name="check_output_bucket", **decorator_kwargs)
+@celery_app.task(name="check_output_bucket",
+                 base=VideoStreamingTask,
+                 **decorator_kwargs)
 def check_output_bucket(self,
                         s3_output_bucket: str = None,
-                        s3_create_bucket: bool = None):
+                        s3_create_bucket: bool = None,
+                        ):
     """check output bucket or create if s3_create_bucket is True
 
        required parameters:
@@ -57,10 +62,13 @@ def check_output_bucket(self,
     # check output bucket is exist
     # or create if s3_create_bucket is True
     bucket_details, created = self.get_or_create_bucket()
-    return bucket_details, created
+
+    # return bucket_details, created
 
 
-@celery_app.task(name="check_output_key", **decorator_kwargs)
+@celery_app.task(name="check_output_key",
+                 base=VideoStreamingTask,
+                 **decorator_kwargs)
 def check_output_key(self,
                      s3_output_key: str = None,
                      s3_output_bucket: str = None,
@@ -79,10 +87,12 @@ def check_output_key(self,
     self.check_output_key()
 
 
-@celery_app.task(name="download_input", **decorator_kwargs)
+@celery_app.task(name="download_input",
+                 base=DownloadInputTask,
+                 **decorator_kwargs)
 def download_input(self, object_details: dict = None,
                    request_id: str = None, s3_input_key: str = None,
-                   s3_input_bucket: str = None) -> str:
+                   s3_input_bucket: str = None) -> dict:
     """download video to local input path
 
        required parameters:
@@ -101,10 +111,12 @@ def download_input(self, object_details: dict = None,
     if not downloaded:
         self.download_video()
 
-    return self.input_path
+    return dict(input_path=self.input_path)
 
 
-@celery_app.task(name="create_hls", **decorator_kwargs)
+@celery_app.task(name="create_hls",
+                 base=CreatePlaylistTask,
+                 **decorator_kwargs)
 def create_hls(self,
                input_path: str = None,
                output_path: str = None,
@@ -114,7 +126,7 @@ def create_hls(self,
                video_codec: str = None,
                audio_codec: str = None,
                quality_names: list[str] = None,
-               custom_qualities: list[dict] = None) -> str:
+               custom_qualities: list[dict] = None) -> dict:
     """create an HTTP Live Streaming (HLS)
 
        required parameters:
@@ -139,10 +151,12 @@ def create_hls(self,
         ).progress,
         ffmpeg_bin=settings.FFMPEG_BIN_PATH)
 
-    return self.directory
+    return dict(directory=self.directory)
 
 
-@celery_app.task(name="create_dash", **decorator_kwargs)
+@celery_app.task(name="create_dash",
+                 base=CreatePlaylistTask,
+                 **decorator_kwargs)
 def create_dash(self,
                 input_path: str = None,
                 output_path: str = None,
@@ -151,7 +165,7 @@ def create_dash(self,
                 video_codec: str = None,
                 audio_codec: str = None,
                 quality_names: list[str] = None,
-                custom_qualities: list[dict] = None) -> str:
+                custom_qualities: list[dict] = None) -> dict:
     """create a Dynamic Adaptive Streaming over HTTP (DASH)
 
        required parameters:
@@ -176,10 +190,11 @@ def create_dash(self,
         ).progress,
         ffmpeg_bin=settings.FFMPEG_BIN_PATH)
 
-    return self.directory
+    return dict(directory=self.directory)
 
 
-@celery_app.task(name="upload_directory", ignore_result=True,
+@celery_app.task(name="upload_directory",
+                 base=UploadDirectoryTask,
                  **decorator_kwargs)
 def upload_directory(self,
                      directory: str = None,

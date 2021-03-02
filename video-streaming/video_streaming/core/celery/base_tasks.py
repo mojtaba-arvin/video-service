@@ -17,7 +17,10 @@ from . import custom_states
 
 __all__ = [
     'BaseCeleryTask',
-    'VideoStreamingTask'
+    'VideoStreamingTask',
+    'DownloadInputTask',
+    'CreatePlaylistTask',
+    'UploadDirectoryTask'
 ]
 
 
@@ -108,6 +111,12 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     # 1. decrease used count to remove input file when reach 0
     # 2. decrease tasks counts to call webhook when reach 0
     # 3. remove outputs file
+
+    # def __call__(self, *args, **kwargs):
+    #     if len(args) == 1 and isinstance(args[0], dict):
+    #         kwargs.update(args[0])
+    #         args = ()
+    #     return super().__call__(*args, **kwargs)
 
     def retry(self, *args, **kwargs):
         # TODO get the task last state by
@@ -530,3 +539,60 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             settings.TMP_DOWNLOADED_DIR,
             self.request_id,
             self.s3_input_key)
+
+
+class ChordCallbackMixin:
+
+    def __call__(self, *args, **kwargs):
+        """
+        args=[[None, ["foo", False], dict(key1=value1, key2=value2), arg1, arg2]
+        kwargs=dict(key3=value3, key4=value4)
+        ->
+        args=[arg1 ,arg2]
+        kwargs=dict(key1=value1, key2=value2, key3=value3, key4=value4)
+        """
+
+        if self.request.args and len(self.request.args):
+            for result in self.request.args.pop(0):
+                if isinstance(result, dict):
+                    self.request.kwargs.update(result)
+
+        return super().__call__(*self.request.args, **self.request.kwargs)
+
+
+class ChainCallbackMixin:
+
+    def __call__(self, *args, **kwargs):
+        """
+        args=[dict(key1=value1, key2=value2), arg1, arg2]
+        kwargs=dict(key3=value3, key4=value4)
+        ->
+        args=[arg1 ,arg2]
+        kwargs=dict(key1=value1, key2=value2, key3=value3, key4=value4)
+        """
+        if self.request.args and len(self.request.args):
+            result = self.request.args.pop(0)
+            if isinstance(result, dict):
+                self.request.kwargs.update(result)
+        return super().__call__(*self.request.args, **self.request.kwargs)
+
+
+class DownloadInputTask(
+        ChordCallbackMixin,
+        VideoStreamingTask,
+        ABC):
+    pass
+
+
+class CreatePlaylistTask(
+        ChainCallbackMixin,
+        VideoStreamingTask,
+        ABC):
+    pass
+
+
+class UploadDirectoryTask(
+        ChainCallbackMixin,
+        VideoStreamingTask,
+        ABC):
+    pass

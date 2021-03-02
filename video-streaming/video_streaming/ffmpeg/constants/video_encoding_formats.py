@@ -22,6 +22,8 @@ class VideoEncodingFormats(Formats):
             self.HEVC: self.__class__.hevc(**codec_options),
             self.VP9: self.__class__.vp9(**codec_options)
         }
+        if name is None:
+            name = VideoEncodingFormats.H264
         try:
             return formats_dict[name]
         except KeyError:
