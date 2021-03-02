@@ -91,6 +91,10 @@ class S3Service:
         self.transfer_config = transfer_config or self.transfer_config_generator()
 
     def _exception_handler(self, exc: Exception):
+        """
+        returns None for 404 and 403 errors, raises other exceptions
+        """
+
         # TODO capture error
         # exc_type, exc_value, exc_traceback = sys.exc_info()
         # traceback.print_tb(exc_traceback)
@@ -162,6 +166,9 @@ class S3Service:
             extra_args: dict = None,
             callback: callable = None,
             config: transfer.TransferConfig = None):
+        """
+        returns destination_path if success
+        """
         bucket_name = bucket_name or self.DEFAULT_BUCKET
 
         # to ensure output directory is exist and create it if not exist
@@ -179,6 +186,11 @@ class S3Service:
                     Config=config or self.transfer_config)
             return destination_path
         except Exception as e:
+            # remove if file created
+            try:
+                os.remove(destination_path)
+            except OSError:
+                pass
             return self._exception_handler(e)
 
     def transfer_config_generator(
