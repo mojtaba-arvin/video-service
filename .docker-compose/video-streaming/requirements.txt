@@ -13,7 +13,9 @@ ffmpeg-python==0.2.0
 # celery
 
 celery==4.4.7
+flower==0.9.7
 gevent==21.1.2
+asgiref==1.1.1
 redis==3.5.3
 
 # circus

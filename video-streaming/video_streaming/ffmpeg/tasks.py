@@ -126,7 +126,8 @@ def create_hls(self,
                video_codec: str = None,
                audio_codec: str = None,
                quality_names: list[str] = None,
-               custom_qualities: list[dict] = None) -> dict:
+               custom_qualities: list[dict] = None,
+               async_run: bool = None) -> dict:
     """create an HTTP Live Streaming (HLS)
 
        required parameters:
@@ -149,7 +150,8 @@ def create_hls(self,
             task=self,
             task_id=self.request.id.__str__()
         ).progress,
-        ffmpeg_bin=settings.FFMPEG_BIN_PATH)
+        ffmpeg_bin=settings.FFMPEG_BIN_PATH,
+        async_run=self.async_run)
 
     return dict(directory=self.directory)
 
@@ -165,7 +167,8 @@ def create_dash(self,
                 video_codec: str = None,
                 audio_codec: str = None,
                 quality_names: list[str] = None,
-                custom_qualities: list[dict] = None) -> dict:
+                custom_qualities: list[dict] = None,
+                async_run: bool = None) -> dict:
     """create a Dynamic Adaptive Streaming over HTTP (DASH)
 
        required parameters:
@@ -188,7 +191,8 @@ def create_dash(self,
             task=self,
             task_id=self.request.id.__str__()
         ).progress,
-        ffmpeg_bin=settings.FFMPEG_BIN_PATH)
+        ffmpeg_bin=settings.FFMPEG_BIN_PATH,
+        async_run=self.async_run)
 
     return dict(directory=self.directory)
 

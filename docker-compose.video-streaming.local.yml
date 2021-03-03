@@ -17,13 +17,11 @@ services:
             - redis-network
             - rabbitmq-network
     rabbitmq:
-        image: 'rabbitmq:3.8.12'
+        image: 'rabbitmq:3.8.14-management'
         env_file:
             - ./.docker-compose/rabbitmq/.env
         volumes:
             - rabbitmq-volume:/var/lib/rabbitmq/
-        expose:
-            - "5672"
         networks:
             - rabbitmq-network
     redis:
@@ -38,8 +36,7 @@ services:
             --requirepass "$$(cat $$REDIS_PASS_FILE)"
             '
             ]
-        expose:
-            - "6379"
+
         volumes:
             - redis-volume:/data
             # pass host password to container
