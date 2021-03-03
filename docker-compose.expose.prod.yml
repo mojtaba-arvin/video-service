@@ -2,5 +2,7 @@ version: '3'
 
 services:
     video-streaming:
+         # TODO pass to the reverse proxy
         expose:
             - "9999"
+            - "5555"

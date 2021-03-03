@@ -107,21 +107,10 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     # The local output directory
     directory: str = None
 
-    # TODO when task executed :
-    # 1. decrease used count to remove input file when reach 0
-    # 2. decrease tasks counts to call webhook when reach 0
-    # 3. remove outputs file
-
-    # def __call__(self, *args, **kwargs):
-    #     if len(args) == 1 and isinstance(args[0], dict):
-    #         kwargs.update(args[0])
-    #         args = ()
-    #     return super().__call__(*args, **kwargs)
-
-    def retry(self, *args, **kwargs):
-        # TODO get the task last state by
-        #  self.AsyncResult(self.request.id).state to manage retry
-        super().retry(*args, **kwargs)
+    # default of async_run is False to don't call async method
+    # inside the task, it can raise RuntimeError: asyncio.run()
+    # cannot be called from a running event loop
+    async_run: bool = False
 
     def _initial_params(self):
         self.logger.info(
@@ -207,6 +196,11 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         # The local output directory
         self.directory = self.request.kwargs.get(
             'directory', self.directory)
+
+        # default of async_run is False to don't call async method
+        # inside the task
+        self.async_run = self.request.kwargs.get(
+            'async_run', self.async_run)
 
     def check_input_video(self) -> dict:
         """check s3_input_key on s3_input_bucket
@@ -418,10 +412,12 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             audio=self.audio_codec,
         )
         if is_hls:
+            # HLS Protocol
             protocol = video.hls(format_instance)
             if self.fragmented:
                 protocol.fragmented_mp4()
         else:
+            # MPEG-Dash Protocol
             protocol = video.dash(format_instance)
 
         self._add_representations(protocol)
