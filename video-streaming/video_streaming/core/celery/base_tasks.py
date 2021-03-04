@@ -86,7 +86,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     audio_codec: str = None
 
     # List of quality names to genrate.
-    # e.g. ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
+    # e.g. ["360p","480p","720p"] or [Resolutions.R_360P, Resolutions.R_480P, Resolutions.R_720P]
 
     quality_names: list[str] = None
 
@@ -112,95 +112,44 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     # cannot be called from a running event loop
     async_run: bool = False
 
+    # attrs that can not be empty or whitespace string
+    _NO_SPACE_STRINGS = [
+        'request_id',
+        's3_input_key',
+        's3_output_key',
+        's3_input_bucket',
+        's3_output_bucket',
+        'encode_format',
+        'video_codec',
+        'audio_codec',
+        'webhook_url',
+        'input_path',
+        'output_path',
+        'directory'
+    ]
+
     def _initial_params(self):
         self.logger.info(
             'Executing task id {0.id}, args: {0.args!r} kwargs: {0.kwargs!r}'.
             format(self.request)
         )
+        for name, value in self.request.kwargs.items():
 
-        self.s3_dont_replace = self.request.kwargs.get(
-            's3_dont_replace', self.s3_dont_replace)
+            # mapping attr value as default value when it's not exist
+            # in kwargs
+            value = self.request.kwargs.get(
+                name, getattr(self, name))
 
-        # a unique id as gRPC request id,
-        # several tasks can be points to one request_id.
-        # e.g. "3b06519e-1h5c-475b-p473-1c8ao63bbe58"
-        self.request_id = self.request.kwargs.get(
-            'request_id', self.request_id)
+            # mapping attr value as default value when string
+            # parameters is "" instead of None
+            if name in self._NO_SPACE_STRINGS:
 
-        # The S3 key of video for ffmpeg input.
-        # e.g. "/foo/bar/example.mp4"
-        self.s3_input_key = self.request.kwargs.get(
-            's3_input_key', self.s3_input_key)
+                # ensure value is not a whitespace string, and fill it
+                # by attr value as default
+                if isinstance(value, str) and value.isspace():
+                    value = getattr(self, name)
 
-        # The S3 key to save m3u8.
-        # e.g. "/foo/bar/example.m3u8"
-        self.s3_output_key = self.request.kwargs.get(
-            's3_output_key', self.s3_output_key)
-
-        self.s3_input_bucket = self.request.kwargs.get(
-            's3_input_bucket', self.s3_input_bucket)
-
-        self.s3_output_bucket = self.request.kwargs.get(
-            's3_output_bucket', self.s3_output_bucket)
-
-        # Create the output bucket If not exist
-        self.s3_create_bucket = self.request.kwargs.get(
-            's3_create_bucket', self.s3_create_bucket)
-
-        # Check if s3_output_key is already exist, ignore the task
-        self.s3_dont_replace = self.request.kwargs.get(
-            's3_dont_replace', self.s3_dont_replace)
-
-        # Set hls segment type to fmp4 if True
-        self.fragmented = self.request.kwargs.get(
-            'fragmented', self.fragmented)
-
-        # The encode format of HLS,
-        # e.g "h264", "hevc" or "vp9"
-        self.encode_format = self.request.kwargs.get(
-            'encode_format', self.encode_format)
-
-        # The video codec format,
-        # e.g "libx264", "libx265" or "libvpx-vp9"
-        self.video_codec = self.request.kwargs.get(
-            'video_codec', self.video_codec)
-
-        # The audio codec format, e.g "aac"
-        self.audio_codec = self.request.kwargs.get(
-            'audio_codec', self.audio_codec)
-
-        # List of quality names to genrate.
-        # e.g. ["360p","480p","720p"] or [Resolutions.360P, Resolutions.480P, Resolutions.720P]
-        self.quality_names = self.request.kwargs.get(
-            'quality_names', self.quality_names)
-
-        # e.g. [dict(size=[256, 144], bitrate=[97280, 65536])]
-        self.custom_qualities = self.request.kwargs.get(
-            'custom_qualities', self.custom_qualities)
-
-        self.webhook_url = self.request.kwargs.get(
-            'webhook_url', self.webhook_url)
-
-        # The response of head object of input video from S3
-        self.object_details = self.request.kwargs.get(
-            'object_details', self.object_details)
-
-        # The local input path
-        self.input_path = self.request.kwargs.get(
-            'input_path', self.input_path)
-
-        # The local output path
-        self.output_path = self.request.kwargs.get(
-            'output_path', self.output_path)
-
-        # The local output directory
-        self.directory = self.request.kwargs.get(
-            'directory', self.directory)
-
-        # default of async_run is False to don't call async method
-        # inside the task
-        self.async_run = self.request.kwargs.get(
-            'async_run', self.async_run)
+            setattr(self, name, value)
 
     def check_input_video(self) -> dict:
         """check s3_input_key on s3_input_bucket
@@ -239,7 +188,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         return object_details
 
     def get_or_create_bucket(self) -> tuple:
-        """_get_or_create_bucket
+        """get or create bucket
 
         1. send head bucket request to S3 to check bucket exist or no
         2. check the task s3_create_bucket boolean param to create a
@@ -446,19 +395,24 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             for quality in self.custom_qualities:
                 size = quality.get('size', None)
                 bitrate = quality.get('bitrate', None)
+
+                # when both of them has not valid value, just continue
                 if not (size or bitrate):
                     continue
+
+                # when just one of them is exist, force client to fill both of them
                 if not size or not bitrate:
                     raise self.raise_ignore(
                         message=ErrorMessages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
+
                 reps.append(
-                    Representation(Size(*size), Bitrate(*bitrate))
+                    Representation(
+                        Size(*size),
+                        Bitrate(*bitrate))
                 )
 
             # generate representations
-            protocol.representations(
-                *reps,
-                ffprobe_bin=settings.FFPROBE_BIN_PATH)
+            protocol.representations(*reps)
 
     def upload_directory(self):
         """upload the directory of the output files

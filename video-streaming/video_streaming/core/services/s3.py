@@ -94,12 +94,7 @@ class S3Service:
         """
         returns None for 404 and 403 errors, raises other exceptions
         """
-
-        # TODO capture error
-        # exc_type, exc_value, exc_traceback = sys.exc_info()
-        # traceback.print_tb(exc_traceback)
-        print(traceback.format_exc())
-
+        
         # handle ClientError
         if isinstance(exc, exceptions.ClientError):
             exception = self.base_exception(exc)
@@ -107,15 +102,17 @@ class S3Service:
                 return None
             if exception.is_403_error:
                 return None
-            raise exception
 
         if isinstance(exc, self.DEVELOPER_ERRORS):
             # TODO : notify the developer
-            raise exc
+            pass
 
         if isinstance(exc, exceptions.CapacityNotAvailableError):
             # TODO : notify
-            raise exc
+            pass
+
+        # TODO capture errors
+        print(traceback.format_exc())
 
         raise exc
 
