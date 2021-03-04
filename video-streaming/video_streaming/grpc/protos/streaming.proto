@@ -17,18 +17,14 @@ message JobRequest {
   repeated StreamingOutput outputs = 5;
 }
 
+enum Protocol {
+  HLS = 0;
+  DASH = 1;
+}
 
 message StreamingOutput{
-
-  enum StreamingProtocol {
-    HLS = 0;
-    DASH = 1;
-  }
-  StreamingProtocol protocol = 1;
-
-  // upload output to multi storages or buckets with different names
-  repeated S3Output s3 = 2;
-
+  Protocol protocol = 1;
+  S3Output s3 = 2;
   ConvertOptions options = 3;
 }
 
@@ -44,27 +40,91 @@ message S3Output{
   bool dont_replace = 4;
 }
 
+message H264{
+  enum VideoCodec {
+    LIBX264 = 0;
+    H264 = 1;
+    H264_AFM = 2;
+    H264_NVENC = 3;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2;
+    LIBFAAC = 3;
+    LIBMP3LAME = 4;
+    LIBFDK_AAC = 5;
+  }
+  VideoCodec video_codec = 1;
+  AudioCodec audio_codec = 2;
+}
+message Hevc{
+  enum VideoCodec {
+    LIBX265 = 0;
+    H265 = 1;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2;
+    LIBFAAC = 3;
+    LIBMP3LAME = 4;
+    LIBFDK_AAC = 5;
+  }
+  VideoCodec video_codec = 3;
+  AudioCodec audio_codec = 4;
+}
+message Vp9{
+  enum VideoCodec {
+    LIBVPX_VP9 = 0;
+    H265 = 1;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2;
+    LIBFAAC = 3;
+    LIBMP3LAME = 4;
+    LIBFDK_AAC = 5;
+  }
+  VideoCodec video_codec = 3;
+  AudioCodec audio_codec = 4;
+}
+
+enum QualityName {
+  R_144P = 0;
+  R_240P = 1;
+  R_360P = 2;
+  R_480P = 3;
+  R_720P = 4;
+  R_1080P = 5;
+  R_2K = 6;
+  R_4K = 7;
+}
+message QualitySize{
+  int32 width = 1;  // 256
+  int32 height = 2;  // 144
+}
+message QualityBitrate{
+  int32 video = 1;  // 95 * 1024
+  int32 audio = 2;  // 64 * 1024
+  int32 overall = 3;
+}
+message CustomQuality{
+    QualitySize size = 1;
+    QualityBitrate bitrate = 2;
+}
+
 message ConvertOptions{
   // HLS segments can be fmp4 or ts
   bool fmp4 = 1;
 
-  // common fields between HLS and MPEG-Dash
-
-  string encode_format = 2;
-  string video_codec = 3;
-  string audio_codec = 4;
-
-  message QualityName{
-    string name = 1;
+  oneof encode_format {
+     H264 h264 = 2;
+     Hevc hevc = 3;
+     Vp9 vp9 = 4;
   }
   repeated QualityName quality_names = 5;
-
-  message CustomQuality{
-    // e.g. [256, 144]
-    repeated int32 size = 1;
-    // e.g. [95 * 1024, 64 * 1024]
-    repeated int32 bitrate = 2;
-  }
   repeated CustomQuality custom_qualities = 6;
 }
 
