@@ -2,7 +2,7 @@ from grpc import StatusCode, ServicerContext
 
 
 __all__ = [
-    'GrpcBaseException'
+    'GrpcBaseException',
 ]
 
 
@@ -23,4 +23,4 @@ class GrpcBaseException(Exception):
         if context:
             context.set_code(self.status_code)
             context.set_details(self.message)
-        super().__init__()
+        super().__init__(message)

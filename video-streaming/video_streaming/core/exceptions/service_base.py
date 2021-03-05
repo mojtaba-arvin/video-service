@@ -7,5 +7,5 @@ __all__ = [
 
 class ServiceBaseException(Exception):
 
-    def __init__(self, exception: Exception = None):
-        super().__init__()
+    def __init__(self, *args):
+        super().__init__(*args)
