@@ -1,5 +1,11 @@
 
 
+__all__ = [
+    'ErrorMessages',
+    'ErrorCodes'
+]
+
+
 class ErrorMessages:
 
     INPUT_VIDEO_404_OR_403 = "Input video is not found on S3 or permission denieded. make sure bucket name and file name is exist."
@@ -19,4 +25,16 @@ class ErrorMessages:
     INPUT_SIZE_CAN_NOT_BE_ZERO = "input file size can not be zero"
     INPUT_FILE_IS_NOT_FOUND = "input file is not found"
 
-    UNKNOWN_ERROR = "Unknown error"
+    # gRPC
+    S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty"
+    s3_BUCKET_NAME_IS_NOT_VALID = "s3 bucket name is not valid"
+    DUPLICATE_OUTPUT_LOCATIONS = "there are duplicate output locations"
+    ONE_OUTPUT_IS_REQUIRED = "one output is required"
+
+
+class ErrorCodes:
+    # gRPC
+    S3_KEY_CAN_NOT_BE_EMPTY = 1001
+    s3_BUCKET_NAME_IS_NOT_VALID = 1002
+    DUPLICATE_OUTPUT_LOCATIONS = 1003
+    ONE_OUTPUT_IS_REQUIRED = 1004

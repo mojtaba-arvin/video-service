@@ -187,8 +187,8 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         return object_details
 
-    def get_or_create_bucket(self) -> tuple:
-        """get or create bucket
+    def ensure_bucket_exist(self):
+        """ensure bucket exist
 
         1. send head bucket request to S3 to check bucket exist or no
         2. check the task s3_create_bucket boolean param to create a
@@ -201,7 +201,6 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             raise self.raise_ignore(
                 message=ErrorMessages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
-        created = False
         # check output bucket is exist
         bucket_details = self.s3_service.head_bucket(
             bucket_name=self.s3_output_bucket)
@@ -210,9 +209,6 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                 raise self.raise_ignore(
                     message=ErrorMessages.OUTPUT_BUCKET_404_OR_403)
             self._create_output_bucket()
-            created = True
-
-        return bucket_details, created
 
     def _create_output_bucket(self):
         """create output bucket
@@ -228,10 +224,12 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         self.logger.info(
             self.custom_states.CreatingOutputBucketState().message)
 
-        # create s3_output_bucket
-        self.s3_service.create_bucket(
-            bucket_name=self.s3_output_bucket)
-        # TODO handle possible errors on create_bucket
+        try:
+            # create s3_output_bucket
+            self.s3_service.create_bucket(
+                bucket_name=self.s3_output_bucket)
+        except self.s3_service.exceptions.BucketExist:
+            pass
 
     def check_output_key(self):
         """check if s3_output_key is already exist
@@ -323,11 +321,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
             # if it's an Exception, just raise it,
             # task decorator have autoretry_for attr for some exceptions
-            if type(result, Exception):
-                raise result
-
-            # there is a serious problem
-            raise self.raise_ignore()
+            raise result
 
     def initial_protocol(self, is_hls=True):
         """build HLS or MPEG ffmpeg command

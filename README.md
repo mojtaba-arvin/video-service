@@ -1,4 +1,4 @@
-# Python Video Streaming Service
+# Python Video Streaming Microservice
 Dockerized video processing service that using **[Circus](https://circus.readthedocs.io/en/latest/)** to run **[gRPC](https://grpc.io/)** server and **[Celery](https://docs.celeryproject.org/en/stable/)**
  task queue. 
 

@@ -61,9 +61,7 @@ def check_output_bucket(self,
 
     # check output bucket is exist
     # or create if s3_create_bucket is True
-    bucket_details, created = self.get_or_create_bucket()
-
-    # return bucket_details, created
+    self.ensure_bucket_exist()
 
 
 @celery_app.task(name="check_output_key",
@@ -143,15 +141,19 @@ def create_hls(self,
     # ensure set self.directory and self.output_path
     self.ensure_set_output_location()
 
-    # self.output_path includes the file name
-    hls.output(
-        self.output_path,
-        monitor=FfmpegCallback(
-            task=self,
-            task_id=self.request.id.__str__()
-        ).progress,
-        ffmpeg_bin=settings.FFMPEG_BIN_PATH,
-        async_run=self.async_run)
+    try:
+        # self.output_path includes the file name
+        hls.output(
+            self.output_path,
+            monitor=FfmpegCallback(
+                task=self,
+                task_id=self.request.id.__str__()
+            ).progress,
+            ffmpeg_bin=settings.FFMPEG_BIN_PATH,
+            async_run=self.async_run)
+    except Exception as e:
+        # TODO handle possible Runtime Errors
+        raise e
 
     return dict(directory=self.directory)
 
@@ -184,15 +186,19 @@ def create_dash(self,
     # ensure set self.directory and self.output_path
     self.ensure_set_output_location()
 
-    # self.output_path includes the file name
-    dash.output(
-        self.output_path,
-        monitor=FfmpegCallback(
-            task=self,
-            task_id=self.request.id.__str__()
-        ).progress,
-        ffmpeg_bin=settings.FFMPEG_BIN_PATH,
-        async_run=self.async_run)
+    try:
+        # self.output_path includes the file name
+        dash.output(
+            self.output_path,
+            monitor=FfmpegCallback(
+                task=self,
+                task_id=self.request.id.__str__()
+            ).progress,
+            ffmpeg_bin=settings.FFMPEG_BIN_PATH,
+            async_run=self.async_run)
+    except Exception as e:
+        # TODO handle possible Runtime Errors
+        raise e
 
     return dict(directory=self.directory)
 

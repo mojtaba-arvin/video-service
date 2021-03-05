@@ -1,13 +1,14 @@
+import re
 import os
 import traceback
 import boto3
 from functools import partial
 from typing import Union
 from boto3.s3 import transfer
-from botocore import exceptions
+from botocore import exceptions as botocore_exceptions
 from botocore.config import Config
 from video_streaming import settings
-from video_streaming.core.exceptions import S3BaseException
+from video_streaming.core.exceptions import s3_exceptions
 
 
 class S3Service:
@@ -29,19 +30,19 @@ class S3Service:
     TRANSFER_IO_CHUNKSIZE = settings.S3_TRANSFER_IO_CHUNKSIZE
     TRANSFER_USE_THREADS = settings.S3_TRANSFER_USE_THREADS
 
-    # exception
-    base_exception = S3BaseException
+    # exceptions
+    exceptions = s3_exceptions
     RETRY_FOR = (
-        exceptions.ConnectionError,  # such as EndpointConnectionError, ConnectionClosedError, ...
-        exceptions.HTTPClientError,  # such as ConnectionClosedError, ReadTimeoutError
-        exceptions.IncompleteReadError,
+        botocore_exceptions.ConnectionError,  # such as EndpointConnectionError, ConnectionClosedError, ...
+        botocore_exceptions.HTTPClientError,  # such as ConnectionClosedError, ReadTimeoutError
+        botocore_exceptions.IncompleteReadError,
     )
     DEVELOPER_ERRORS = (
-        exceptions.ParamValidationError,
-        exceptions.ValidationError,
-        exceptions.MissingParametersError,
-        exceptions.UnknownServiceError,
-        exceptions.ApiVersionNotFoundError,
+        botocore_exceptions.ParamValidationError,
+        botocore_exceptions.ValidationError,
+        botocore_exceptions.MissingParametersError,
+        botocore_exceptions.UnknownServiceError,
+        botocore_exceptions.ApiVersionNotFoundError,
         # TODO add more
     )
 
@@ -88,26 +89,27 @@ class S3Service:
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
             config=config)
+        # self.s3_exceptions = self.client.exceptions
         self.transfer_config = transfer_config or self.transfer_config_generator()
 
     def _exception_handler(self, exc: Exception):
         """
         returns None for 404 and 403 errors, raises other exceptions
         """
-        
+
         # handle ClientError
-        if isinstance(exc, exceptions.ClientError):
-            exception = self.base_exception(exc)
-            if exception.is_404_error:
+        if isinstance(exc, botocore_exceptions.ClientError):
+            exception = self.exceptions.S3BaseException(exc)
+            print(exception.response_object)
+            if exception.is_404_error or exception.is_403_error:
                 return None
-            if exception.is_403_error:
-                return None
+            raise exception
 
         if isinstance(exc, self.DEVELOPER_ERRORS):
             # TODO : notify the developer
             pass
 
-        if isinstance(exc, exceptions.CapacityNotAvailableError):
+        if isinstance(exc, botocore_exceptions.CapacityNotAvailableError):
             # TODO : notify
             pass
 
@@ -115,6 +117,11 @@ class S3Service:
         print(traceback.format_exc())
 
         raise exc
+
+    @staticmethod
+    def validate_bucket_name(name: str) -> bool:
+        regex = "(?!^(\d{1,3}\.){3}\d{1,3}$)(^[a-z0-9]([a-z0-9-]*(\.[a-z0-9])?)*$(?<!\-))"
+        return bool(re.search(regex, name))
 
     def head(self,
              key: str,

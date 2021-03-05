@@ -50,10 +50,9 @@ message H264{
   enum AudioCodec {
     AAC = 0;
     COPY = 1;
-    LIBVO_AACENC = 2;
-    LIBFAAC = 3;
-    LIBMP3LAME = 4;
-    LIBFDK_AAC = 5;
+    LIBVO_AACENC = 2; // libfaac is not supported anymore. Instead use libvo_aacenc
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
   }
   VideoCodec video_codec = 1;
   AudioCodec audio_codec = 2;
@@ -67,9 +66,8 @@ message Hevc{
     AAC = 0;
     COPY = 1;
     LIBVO_AACENC = 2;
-    LIBFAAC = 3;
-    LIBMP3LAME = 4;
-    LIBFDK_AAC = 5;
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
   }
   VideoCodec video_codec = 3;
   AudioCodec audio_codec = 4;
@@ -83,9 +81,8 @@ message Vp9{
     AAC = 0;
     COPY = 1;
     LIBVO_AACENC = 2;
-    LIBFAAC = 3;
-    LIBMP3LAME = 4;
-    LIBFDK_AAC = 5;
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
   }
   VideoCodec video_codec = 3;
   AudioCodec audio_codec = 4;
