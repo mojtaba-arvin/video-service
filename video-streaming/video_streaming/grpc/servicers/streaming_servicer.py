@@ -1,125 +1,20 @@
 import json
 import uuid
-from google.protobuf import reflection
 from celery import chain, group
-from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimarySteps
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg import tasks
-from video_streaming.ffmpeg.constants import VideoEncodingFormats
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.exceptions import \
     DuplicateOutputLocationsException
-from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
+from video_streaming.grpc.mixins import BaseGrpcServiceMixin
+from video_streaming.grpc.protos import streaming_pb2_grpc
 
 
-class Streaming(streaming_pb2_grpc.StreamingServicer):
-
-    cache = RedisCache()
-
-    @staticmethod
-    def _codec_names(
-            format_cls: reflection.GeneratedProtocolMessageType,
-            video_codec_id: int,
-            audio_codec_id: int):
-        video_codec = format_cls.VideoCodec.__dict__['_enum_type'].values[video_codec_id].name.lower()
-
-        # 'libvpx-vp9' format due to the dashed line in the name, it is
-        # defined as underline in the proto, so here just map it to correct name
-        if video_codec == 'libvpx_vp9':
-            video_codec = 'libvpx-vp9'
-
-        audio_codec = format_cls.AudioCodec.__dict__['_enum_type'].values[audio_codec_id].name.lower()
-        return video_codec.lower(), audio_codec
-
-    @staticmethod
-    def _has_create_flag(output_bucket, request_outputs):
-        # check bucket has one create flag
-        for output in request_outputs:
-            if output.s3.bucket == output_bucket and \
-                    output.s3.create_bucket:
-                return True
-        return False
-
-    def _get_format(self, output):
-        encode_format = output.options.WhichOneof('encode_format')
-        video_codec = None
-        audio_codec = None
-
-        if encode_format == VideoEncodingFormats.H264:
-            video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.H264,
-                video_codec_id=output.options.h264.video_codec,
-                audio_codec_id=output.options.h264.audio_codec
-            )
-        elif encode_format == VideoEncodingFormats.HEVC:
-            video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.Hevc,
-                video_codec_id=output.options.hevc.video_codec,
-                audio_codec_id=output.options.hevc.audio_codec
-            )
-        elif encode_format == VideoEncodingFormats.VP9:
-            video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.Vp9,
-                video_codec_id=output.options.vp9.video_codec,
-                audio_codec_id=output.options.vp9.audio_codec
-            )
-        return encode_format, video_codec, audio_codec
-
-    @staticmethod
-    def _parse_quality_names(qualities):
-        quality_names = []
-        for idx in qualities:
-            quality_names.append(
-                (
-                    streaming_pb2.
-                        QualityName.
-                        __dict__['_enum_type'].
-                        values[idx].
-                        name
-                ).lower()[2:]
-                # remove first character "r_" from the name
-            )
-        # sample : ["360p", "480p", "720p"]
-        return quality_names
-
-    @staticmethod
-    def _parse_custom_qualities(qualities):
-        custom_qualities = []
-        for quality in qualities:
-
-            size = None
-            # width and height can not be zero
-            if quality.size.width and quality.size.height:
-                size = [quality.size.width, quality.size.height]
-
-            bitrate = None
-            # bitrate required one of (video, audio or overall) at least
-            if quality.bitrate.overall or \
-                    quality.bitrate.video or \
-                    quality.bitrate.audio:
-                bitrate = [
-                    quality.bitrate.video or None,  # map 0 to None
-                    quality.bitrate.audio or None,
-                    quality.bitrate.overall or None
-                ]
-
-            # When size and bitrate are None, not append
-            # quality_dict to the custom_qualities
-            if not size and not bitrate:
-                continue
-
-            quality_dict = dict(
-                size=size,
-                bitrate=[
-                    quality.bitrate.video,
-                    quality.bitrate.audio,
-                    quality.bitrate.overall]
-            )
-            custom_qualities.append(quality_dict)
-        # sample : [dict(size=[256, 144], bitrate=[97280, 65536])]
-        return custom_qualities
+class Streaming(
+        BaseGrpcServiceMixin,
+        streaming_pb2_grpc.StreamingServicer):
 
     def video_processor(self, request, context):
         """
@@ -246,7 +141,7 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
 
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
-            quality_names = self.__class__._parse_quality_names(
+            quality_names = self._parse_quality_names(
                 output.options.quality_names)
             custom_qualities = self.__class__._parse_custom_qualities(
                 output.options.custom_qualities)
@@ -265,7 +160,7 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
                         custom_qualities=custom_qualities,
                         request_id=request_id,
                         output_number=output_number,
-                        is_hls=output.protocol == streaming_pb2.Protocol.HLS
+                        is_hls=output.protocol == self.pb2.Protocol.HLS
                     ),
                     # directory will come from create playlist task
                     tasks.upload_directory.s(
@@ -317,12 +212,38 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
             ),
             str(result.id)
         )
-        response = streaming_pb2.JobResponse()
+        response = self.pb2.JobResponse()
         response.tracking_id = request_id
         return response
 
-    def _add_to_server(self, server):
-        streaming_pb2_grpc.add_StreamingServicer_to_server(
-            self.__class__(),
-            server)
-
+    def get_result(self, request, context):
+        result = []
+        for request_id in request.tracking_ids:
+            job_details = self.cache.get(
+                CacheKeysTemplates.JOB_DETAILS.format(
+                    request_id=request_id))
+            ready_outputs = self.cache.get(
+                CacheKeysTemplates.READY_OUTPUTS.format(
+                    request_id=request_id))
+            passed_checks = self.cache.get(
+                CacheKeysTemplates.PASSED_CHECKS.format(
+                    request_id=request_id))
+            # TODO
+            result.append(
+                self.pb2.ResultDetails(
+                    request_id=request_id,
+                    reference_id=job_details['reference_id'],
+                    total_outputs=job_details['total_outputs'],
+                    ready_outputs=ready_outputs,
+                    checks=self.pb2.Checks(
+                        total=job_details['total_checks'],
+                        passed=passed_checks
+                    ),
+                    inputs=[],
+                    outputs=[]
+                )
+            )
+        response = self.pb2.ResultResponse(
+            result=result
+        )
+        return response
