@@ -1,6 +1,10 @@
+import json
 import uuid
 from google.protobuf import reflection
 from celery import chain, group
+from video_streaming.cache import RedisCache
+from video_streaming.core.constants import CacheKeysTemplates, \
+    PrimarySteps
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg import tasks
 from video_streaming.ffmpeg.constants import VideoEncodingFormats
@@ -12,8 +16,10 @@ from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
 
 class Streaming(streaming_pb2_grpc.StreamingServicer):
 
+    cache = RedisCache()
+
     @staticmethod
-    def codec_names(
+    def _codec_names(
             format_cls: reflection.GeneratedProtocolMessageType,
             video_codec_id: int,
             audio_codec_id: int):
@@ -28,7 +34,7 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
         return video_codec.lower(), audio_codec
 
     @staticmethod
-    def has_create_flag(output_bucket, request_outputs):
+    def _has_create_flag(output_bucket, request_outputs):
         # check bucket has one create flag
         for output in request_outputs:
             if output.s3.bucket == output_bucket and \
@@ -42,19 +48,19 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
         audio_codec = None
 
         if encode_format == VideoEncodingFormats.H264:
-            video_codec, audio_codec = self.__class__.codec_names(
+            video_codec, audio_codec = self.__class__._codec_names(
                 format_cls=streaming_pb2.H264,
                 video_codec_id=output.options.h264.video_codec,
                 audio_codec_id=output.options.h264.audio_codec
             )
         elif encode_format == VideoEncodingFormats.HEVC:
-            video_codec, audio_codec = self.__class__.codec_names(
+            video_codec, audio_codec = self.__class__._codec_names(
                 format_cls=streaming_pb2.Hevc,
                 video_codec_id=output.options.hevc.video_codec,
                 audio_codec_id=output.options.hevc.audio_codec
             )
         elif encode_format == VideoEncodingFormats.VP9:
-            video_codec, audio_codec = self.__class__.codec_names(
+            video_codec, audio_codec = self.__class__._codec_names(
                 format_cls=streaming_pb2.Vp9,
                 video_codec_id=output.options.vp9.video_codec,
                 audio_codec_id=output.options.vp9.audio_codec
@@ -147,7 +153,7 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
 
         # 2.generate unique uuid for the current request
         request_id = str(uuid.uuid4())
-        # reference_id = request.reference_id
+        reference_id = request.reference_id
         # webhook_url = request.webhook_url
 
         # 3. check input video parameter is not empty
@@ -165,7 +171,8 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
         first_level_tasks.append(
             tasks.check_input_key.s(
                 s3_input_key=s3_input_key,
-                s3_input_bucket=s3_input_bucket
+                s3_input_bucket=s3_input_bucket,
+                request_id=request_id
             ))
 
         # 5. check outputs list is empty
@@ -200,7 +207,8 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
                 tasks.check_output_key.s(
                     s3_output_key=output.s3.key,
                     s3_output_bucket=output.s3.bucket,
-                    s3_dont_replace=output.s3.dont_replace
+                    s3_dont_replace=output.s3.dont_replace,
+                    request_id=request_id
                 )
             )
 
@@ -215,8 +223,9 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
             first_level_tasks.append(
                 tasks.check_output_bucket.s(
                     s3_output_bucket=bucket,
-                    s3_create_bucket=self.__class__.has_create_flag(
-                        bucket, request.outputs)
+                    s3_create_bucket=self.__class__._has_create_flag(
+                        bucket, request.outputs),
+                    request_id=request_id
                 ))
 
         # 10. add second level tasks, e.g. download input
@@ -226,13 +235,14 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
                 # object_details=object_details,
                 request_id=request_id,
                 s3_input_key=s3_input_key,
-                s3_input_bucket=s3_input_bucket
+                s3_input_bucket=s3_input_bucket,
+                input_number=0
             )
         )
 
         # 11. initial processing tasks by output formats
         # and chains them with upload task
-        for output in request.outputs:
+        for output_number, output in enumerate(request.outputs):
 
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
@@ -241,40 +251,28 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
             custom_qualities = self.__class__._parse_custom_qualities(
                 output.options.custom_qualities)
 
-            create_playlist = None
-            if output.protocol == streaming_pb2.Protocol.HLS:
-                fragmented = output.options.fmp4
-                # input_path will come from second level
-                create_playlist = tasks.create_hls.s(
-                    s3_output_key=output.s3.key,
-                    fragmented=fragmented,
-                    encode_format=encode_format,
-                    video_codec=video_codec,
-                    audio_codec=audio_codec,
-                    quality_names=quality_names,
-                    custom_qualities=custom_qualities
-                )
-            else:
-                # MPEG-Dash Protocol
-
-                # input_path will come from second level
-                create_playlist = tasks.create_hls.s(
-                    s3_output_key=output.s3.key,
-                    encode_format=encode_format,
-                    video_codec=video_codec,
-                    audio_codec=audio_codec,
-                    quality_names=quality_names,
-                    custom_qualities=custom_qualities
-                )
-
             third_level_tasks.append(
                 # chain of create_hls and upload_directory
                 chain(
-                    create_playlist,
+                    # input_path will come from second level
+                    tasks.create_playlist.s(
+                        s3_output_key=output.s3.key,
+                        fragmented=output.options.fmp4,  # just for HLS type
+                        encode_format=encode_format,
+                        video_codec=video_codec,
+                        audio_codec=audio_codec,
+                        quality_names=quality_names,
+                        custom_qualities=custom_qualities,
+                        request_id=request_id,
+                        output_number=output_number,
+                        is_hls=output.protocol == streaming_pb2.Protocol.HLS
+                    ),
                     # directory will come from create playlist task
                     tasks.upload_directory.s(
                         s3_output_key=output.s3.key,
-                        s3_output_bucket=output.s3.bucket
+                        s3_output_bucket=output.s3.bucket,
+                        request_id=request_id,
+                        output_number=output_number
                     )
                 )
             )
@@ -286,12 +284,41 @@ class Streaming(streaming_pb2_grpc.StreamingServicer):
             group(*second_level_tasks),
             group(*third_level_tasks)
         )
+
+        job_details = dict(
+            reference_id=reference_id,
+            total_checks=len(first_level_tasks),
+            total_inputs=len(second_level_tasks),
+            total_outputs=len(third_level_tasks)
+        )
+
+        # saving job details
+        self.cache.set(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=request_id
+            ),
+            json.dumps(job_details))
+
+        # set first primary step as QUEUING_CHECKS
+        self.cache.set(
+            CacheKeysTemplates.PRIMARY_STEP.format(
+                request_id=request_id),
+            PrimarySteps.QUEUING_CHECKS
+        )
+
+        # queuing the job
         result = job.apply_async()
-        # TODO
+        result.save()
 
+        # saving celery result id of the request
+        self.cache.set(
+            CacheKeysTemplates.REQUEST_RESULT_ID.format(
+                request_id=request_id
+            ),
+            str(result.id)
+        )
         response = streaming_pb2.JobResponse()
-        # response.tracking_id =
-
+        response.tracking_id = request_id
         return response
 
     def _add_to_server(self, server):

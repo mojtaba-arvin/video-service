@@ -28,7 +28,8 @@ decorator_kwargs = dict(
                  **decorator_kwargs)
 def check_input_key(self,
                     s3_input_key: str = None,
-                    s3_input_bucket: str = None) -> dict:
+                    s3_input_bucket: str = None,
+                    request_id: str = None) -> dict:
     """check s3_input_key is exist on s3_input_bucket
 
        required parameters:
@@ -37,9 +38,12 @@ def check_input_key(self,
     """
 
     self._initial_params()
+    self.save_primary_step(self.primary_steps.CHECKING)
 
     # check s3_input_key on s3_input_bucket by head request
     object_details = self.check_input_video()
+
+    self.incr_passed_checks()
 
     return dict(object_details=object_details)
 
@@ -50,7 +54,7 @@ def check_input_key(self,
 def check_output_bucket(self,
                         s3_output_bucket: str = None,
                         s3_create_bucket: bool = None,
-                        ):
+                        request_id: str = None):
     """check output bucket or create if s3_create_bucket is True
 
        required parameters:
@@ -58,10 +62,13 @@ def check_output_bucket(self,
     """
 
     self._initial_params()
+    self.save_primary_step(self.primary_steps.CHECKING)
 
     # check output bucket is exist
     # or create if s3_create_bucket is True
     self.ensure_bucket_exist()
+
+    self.incr_passed_checks()
 
 
 @celery_app.task(name="check_output_key",
@@ -70,7 +77,8 @@ def check_output_bucket(self,
 def check_output_key(self,
                      s3_output_key: str = None,
                      s3_output_bucket: str = None,
-                     s3_dont_replace: bool = None):
+                     s3_dont_replace: bool = None,
+                     request_id: str = None):
     """check if s3_output_key is already exist
 
        required parameters:
@@ -79,10 +87,13 @@ def check_output_key(self,
     """
 
     self._initial_params()
+    self.save_primary_step(self.primary_steps.CHECKING)
 
     # check if s3_output_key is already exist
     # and raise if s3_dont_replace is True
     self.check_output_key()
+
+    self.incr_passed_checks()
 
 
 @celery_app.task(name="download_input",
@@ -90,7 +101,8 @@ def check_output_key(self,
                  **decorator_kwargs)
 def download_input(self, object_details: dict = None,
                    request_id: str = None, s3_input_key: str = None,
-                   s3_input_bucket: str = None) -> dict:
+                   s3_input_bucket: str = None, input_number: int = None
+                   ) -> dict:
     """download video to local input path
 
        required parameters:
@@ -102,6 +114,12 @@ def download_input(self, object_details: dict = None,
 
     self._initial_params()
 
+    # save primary step using request_id
+    self.save_primary_step(self.primary_steps.INPUTS_DOWNLOADING)
+
+    # save input step using input_number and request_id
+    self.save_input_step(self.input_steps.PREPARATION_DOWNLOADS)
+
     # set self.input_path
     self.set_input_path()
 
@@ -109,24 +127,32 @@ def download_input(self, object_details: dict = None,
     if not downloaded:
         self.download_video()
 
+    # save input step using input_number and request_id
+    self.save_input_step(self.input_steps.DOWNLOADING_FINISHED)
+
+    self.incr_ready_inputs()
+
     return dict(input_path=self.input_path)
 
 
-@celery_app.task(name="create_hls",
+@celery_app.task(name="create_playlist",
                  base=CreatePlaylistTask,
                  **decorator_kwargs)
-def create_hls(self,
-               input_path: str = None,
-               output_path: str = None,
-               s3_output_key: str = None,
-               fragmented: bool = None,
-               encode_format: str = None,
-               video_codec: str = None,
-               audio_codec: str = None,
-               quality_names: list[str] = None,
-               custom_qualities: list[dict] = None,
-               async_run: bool = None) -> dict:
-    """create an HTTP Live Streaming (HLS)
+def create_playlist(self,
+                    input_path: str = None,
+                    output_path: str = None,
+                    s3_output_key: str = None,
+                    fragmented: bool = None,
+                    encode_format: str = None,
+                    video_codec: str = None,
+                    audio_codec: str = None,
+                    quality_names: list[str] = None,
+                    custom_qualities: list[dict] = None,
+                    async_run: bool = None,
+                    request_id: str = None,
+                    output_number: int = None,
+                    is_hls: bool = None) -> dict:
+    """create an playlist ( HLS or DASH )
 
        required parameters:
          - input_path
@@ -136,14 +162,20 @@ def create_hls(self,
 
     self._initial_params()
 
-    hls = self.initial_protocol(is_hls=True)
+    # save primary step using request_id
+    self.save_primary_step(self.primary_steps.OUTPUTS_PROGRESSING)
+
+    # save output step using output_number and request_id
+    self.save_output_step(self.output_steps.PREPARATION_PROCESSING)
+
+    playlist = self.initial_protocol()
 
     # ensure set self.directory and self.output_path
     self.ensure_set_output_location()
 
     try:
         # self.output_path includes the file name
-        hls.output(
+        playlist.output(
             self.output_path,
             monitor=FfmpegCallback(
                 task=self,
@@ -155,50 +187,7 @@ def create_hls(self,
         # TODO handle possible Runtime Errors
         raise e
 
-    return dict(directory=self.directory)
-
-
-@celery_app.task(name="create_dash",
-                 base=CreatePlaylistTask,
-                 **decorator_kwargs)
-def create_dash(self,
-                input_path: str = None,
-                output_path: str = None,
-                s3_output_key: str = None,
-                encode_format: str = None,
-                video_codec: str = None,
-                audio_codec: str = None,
-                quality_names: list[str] = None,
-                custom_qualities: list[dict] = None,
-                async_run: bool = None) -> dict:
-    """create a Dynamic Adaptive Streaming over HTTP (DASH)
-
-       required parameters:
-         - input_path
-         - output_path or s3_output_key
-         - encode_format
-    """
-
-    self._initial_params()
-
-    dash = self.initial_protocol(is_hls=False)
-
-    # ensure set self.directory and self.output_path
-    self.ensure_set_output_location()
-
-    try:
-        # self.output_path includes the file name
-        dash.output(
-            self.output_path,
-            monitor=FfmpegCallback(
-                task=self,
-                task_id=self.request.id.__str__()
-            ).progress,
-            ffmpeg_bin=settings.FFMPEG_BIN_PATH,
-            async_run=self.async_run)
-    except Exception as e:
-        # TODO handle possible Runtime Errors
-        raise e
+    self.save_output_step(self.output_steps.PROCESSING_FINISHED)
 
     return dict(directory=self.directory)
 
@@ -209,7 +198,9 @@ def create_dash(self,
 def upload_directory(self,
                      directory: str = None,
                      s3_output_key: str = None,
-                     s3_output_bucket: str = None):
+                     s3_output_bucket: str = None,
+                     request_id: str = None,
+                     output_number: int = None):
     """upload the directory of the output files to S3 object storage
 
        required parameters:
@@ -220,4 +211,11 @@ def upload_directory(self,
 
     self._initial_params()
 
+    # save output step using output_number and request_id
+    self.save_output_step(self.output_steps.PLAYLIST_UPLOADING)
+
     self.upload_directory()
+
+    self.save_output_step(self.output_steps.UPLOADING_FINISHED)
+
+    self.incr_ready_outputs()

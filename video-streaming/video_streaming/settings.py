@@ -175,3 +175,18 @@ FFMPEG_BIN_PATH = env_config.get(
     "FFMPEG_BIN_PATH",
     default="/usr/local/bin/ffmpeg",
     cast=str)
+
+##################################################
+#    Redis                                       #
+##################################################
+
+REDIS_TIMEOUT_SECOND = env_config.get(
+    "REDIS_TIMEOUT_SECOND",
+    default=60 * 60 * 24,
+    cast=int)
+
+REDIS_URL = env_config.get(
+    "REDIS_URL",
+    default="",
+    cast=str
+)
