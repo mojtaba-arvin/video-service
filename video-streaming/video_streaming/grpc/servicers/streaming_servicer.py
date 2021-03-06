@@ -9,7 +9,7 @@ from video_streaming.grpc import exceptions
 from video_streaming.grpc.exceptions import \
     DuplicateOutputLocationsException
 from video_streaming.grpc.mixins import BaseGrpcServiceMixin
-from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
+from video_streaming.grpc.protos import streaming_pb2_grpc
 
 
 class Streaming(
@@ -141,7 +141,7 @@ class Streaming(
 
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
-            quality_names = self.__class__._parse_quality_names(
+            quality_names = self._parse_quality_names(
                 output.options.quality_names)
             custom_qualities = self.__class__._parse_custom_qualities(
                 output.options.custom_qualities)
@@ -160,7 +160,7 @@ class Streaming(
                         custom_qualities=custom_qualities,
                         request_id=request_id,
                         output_number=output_number,
-                        is_hls=output.protocol == streaming_pb2.Protocol.HLS
+                        is_hls=output.protocol == self.pb2.Protocol.HLS
                     ),
                     # directory will come from create playlist task
                     tasks.upload_directory.s(
@@ -212,7 +212,38 @@ class Streaming(
             ),
             str(result.id)
         )
-        response = streaming_pb2.JobResponse()
+        response = self.pb2.JobResponse()
         response.tracking_id = request_id
         return response
 
+    def get_result(self, request, context):
+        result = []
+        for request_id in request.tracking_ids:
+            job_details = self.cache.get(
+                CacheKeysTemplates.JOB_DETAILS.format(
+                    request_id=request_id))
+            ready_outputs = self.cache.get(
+                CacheKeysTemplates.READY_OUTPUTS.format(
+                    request_id=request_id))
+            passed_checks = self.cache.get(
+                CacheKeysTemplates.PASSED_CHECKS.format(
+                    request_id=request_id))
+            # TODO
+            result.append(
+                self.pb2.ResultDetails(
+                    request_id=request_id,
+                    reference_id=job_details['reference_id'],
+                    total_outputs=job_details['total_outputs'],
+                    ready_outputs=ready_outputs,
+                    checks=self.pb2.Checks(
+                        total=job_details['total_checks'],
+                        passed=passed_checks
+                    ),
+                    inputs=[],
+                    outputs=[]
+                )
+            )
+        response = self.pb2.ResultResponse(
+            result=result
+        )
+        return response

@@ -7,6 +7,7 @@ from video_streaming.grpc.protos import streaming_pb2, streaming_pb2_grpc
 class BaseGrpcServiceMixin(object):
 
     cache = RedisCache()
+    pb2 = streaming_pb2
 
     def _add_to_server(self, server):
         streaming_pb2_grpc.add_StreamingServicer_to_server(
@@ -20,19 +21,19 @@ class BaseGrpcServiceMixin(object):
 
         if encode_format == VideoEncodingFormats.H264:
             video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.H264,
+                format_cls=self.pb2.H264,
                 video_codec_id=output.options.h264.video_codec,
                 audio_codec_id=output.options.h264.audio_codec
             )
         elif encode_format == VideoEncodingFormats.HEVC:
             video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.Hevc,
+                format_cls=self.pb2.Hevc,
                 video_codec_id=output.options.hevc.video_codec,
                 audio_codec_id=output.options.hevc.audio_codec
             )
         elif encode_format == VideoEncodingFormats.VP9:
             video_codec, audio_codec = self.__class__._codec_names(
-                format_cls=streaming_pb2.Vp9,
+                format_cls=self.pb2.Vp9,
                 video_codec_id=output.options.vp9.video_codec,
                 audio_codec_id=output.options.vp9.audio_codec
             )
@@ -62,17 +63,16 @@ class BaseGrpcServiceMixin(object):
                 return True
         return False
 
-    @staticmethod
-    def _parse_quality_names(qualities):
+    def _parse_quality_names(self, qualities):
         quality_names = []
         for idx in qualities:
             quality_names.append(
                 (
-                    streaming_pb2.
-                        QualityName.
-                        __dict__['_enum_type'].
-                        values[idx].
-                        name
+                    self.pb2.
+                    QualityName.
+                    __dict__['_enum_type'].
+                    values[idx].
+                    name
                 ).lower()[2:]
                 # remove first character "r_" from the name
             )

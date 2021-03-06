@@ -124,7 +124,7 @@ message JobResponse {
 
 
 message ResultRequest {
-  repeated string tracking_id = 1;
+  repeated string tracking_ids = 1;
 }
 message ResultResponse {
   repeated ResultDetails result = 1;
