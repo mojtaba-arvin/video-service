@@ -16,30 +16,25 @@ message JobRequest {
   // every output includes destination s3 key, and convert details
   repeated StreamingOutput outputs = 5;
 }
-
 enum Protocol {
   HLS = 0;
   DASH = 1;
 }
-
 message StreamingOutput{
   Protocol protocol = 1;
   S3Output s3 = 2;
   ConvertOptions options = 3;
 }
-
 message S3Input{
   string key = 1;
   string bucket = 2;
 }
-
 message S3Output{
   string key = 1;
   string bucket = 2;
   bool create_bucket = 3;
   bool dont_replace = 4;
 }
-
 message H264{
   enum VideoCodec {
     LIBX264 = 0;
@@ -87,7 +82,6 @@ message Vp9{
   VideoCodec video_codec = 3;
   AudioCodec audio_codec = 4;
 }
-
 enum QualityName {
   R_144P = 0;
   R_240P = 1;
@@ -111,7 +105,6 @@ message CustomQuality{
     QualitySize size = 1;
     QualityBitrate bitrate = 2;
 }
-
 message ConvertOptions{
   // HLS segments can be fmp4 or ts
   bool fmp4 = 1;
@@ -124,9 +117,6 @@ message ConvertOptions{
   repeated QualityName quality_names = 5;
   repeated CustomQuality custom_qualities = 6;
 }
-
-
-
 message JobResponse {
   string tracking_id = 1;
 }

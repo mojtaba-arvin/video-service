@@ -1,3 +1,4 @@
+import json
 import os
 import ffmpeg_streaming
 from abc import ABC
@@ -6,14 +7,16 @@ from celery import Task, states
 from celery.exceptions import Ignore
 from celery.utils.log import get_task_logger
 from video_streaming import settings
+from video_streaming.cache import RedisCache
+from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.core.services import S3Service
-from video_streaming.core.constants import ErrorMessages
+from video_streaming.core.constants import ErrorMessages, \
+    PrimarySteps, InputSteps, OutputSteps
 from video_streaming.ffmpeg.utils import S3DownloadCallback, \
     S3UploadDirectoryCallback
 from video_streaming.ffmpeg.constants import Resolutions, \
     VideoEncodingFormats
-from . import custom_states
-
+logger = get_task_logger(__name__)
 
 __all__ = [
     'BaseCeleryTask',
@@ -45,9 +48,12 @@ class BaseCeleryTask(Task, ABC):
 class VideoStreamingTask(BaseCeleryTask, ABC):
 
     s3_service = S3Service()  # create s3 client
-    custom_states = custom_states
     error_messages = ErrorMessages
-    logger = get_task_logger(__name__)
+    logger = logger
+    cache = RedisCache()
+    primary_steps = PrimarySteps
+    input_steps = InputSteps
+    output_steps = OutputSteps
 
     # a unique id as gRPC request id,
     # several tasks can be points to one request_id.
@@ -112,6 +118,17 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     # cannot be called from a running event loop
     async_run: bool = False
 
+    # output_number is using in redis key, to save progress of every output
+    # also it's using to create different path for outputs
+    output_number: int = None
+
+    # input_number is using in redis key, to save progress of every input
+    # also it's using to create different path for inputs
+    input_number: int = None
+
+    # HLS or MPEG-Dash
+    is_hls: bool = True
+
     # attrs that can not be empty or whitespace string
     _NO_SPACE_STRINGS = [
         'request_id',
@@ -151,12 +168,226 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
             setattr(self, name, value)
 
+    def save_primary_step(self, step_name):
+        """
+            1. save as celery task status
+            2. add to celery logger
+            3. save primary step on cache when request_id
+            and JOB_DETAILS has been set
+        """
+
+        # save as celery task status
+        self.update_state(
+            task_id=self.request.id,
+            state=step_name)
+
+        # add to celery logger
+        log_message = f"primary step: {step_name}"
+        if self.request_id:
+            log_message += f" ,request id: {self.request_id}"
+        self.logger.info(log_message)
+
+        # save primary step on cache when request_id
+        # and JOB_DETAILS has been set
+        if self.request_id is None:
+            # request_id has been not set
+            return
+
+        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id)):
+            # JOB_DETAILS has been not set
+            return None
+
+        self.cache.set(
+            CacheKeysTemplates.PRIMARY_STEP.format(
+                request_id=self.request_id),
+            step_name
+        )
+
+    def save_input_step(self, step_name):
+        # add input step name as message to logger
+        log_message = f"input step: {step_name}"
+        if self.request_id:
+            log_message += f" ,request id: {self.request_id}"
+        if self.input_number:
+            log_message += f" ,input number: {self.input_number}"
+        self.logger.info(log_message)
+
+        # save input step when request_id , input_number
+        # and JOB_DETAILS has been set
+
+        if self.request_id is None:
+            # request_id has been not set
+            return
+
+        if self.input_number is None:
+            # input_number has been not set
+            return None
+
+        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id)):
+            # JOB_DETAILS has been not set
+            return None
+
+        self.cache.set(
+            CacheKeysTemplates.INPUT_STEP.format(
+                request_id=self.request_id,
+                input_number=self.input_number),
+            step_name
+        )
+        # check to delete progress data of downloading
+        if step_name == self.input_steps.DOWNLOADING_FINISHED:
+            self.cache.delete(
+                CacheKeysTemplates.INPUT_DOWNLOADING_PROGRESS.format(
+                    request_id=self.request_id,
+                    input_number=self.input_number
+                ))
+
+    def save_output_step(self, step_name):
+        # add output step name as message to logger
+        log_message = f"output step: {step_name}"
+        if self.request_id:
+            log_message += f" ,request id: {self.request_id}"
+        if self.output_number:
+            log_message += f" ,output number: {self.output_number}"
+        self.logger.info(log_message)
+
+        # save output step when request_id , input_number
+        # and JOB_DETAILS has been set
+
+        if self.request_id is None:
+            # request_id has been not set
+            return
+
+        if self.output_number is None:
+            # input_number has been not set
+            return None
+
+        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id)):
+            # JOB_DETAILS has been not set
+            return None
+
+        self.cache.set(
+            CacheKeysTemplates.OUTPUT_STEP.format(
+                request_id=self.request_id,
+                output_number=self.output_number),
+            step_name
+        )
+
+        # check to delete unnecessary data
+        if step_name == self.output_steps.PROCESSING_FINISHED:
+            self.cache.delete(
+                CacheKeysTemplates.OUTPUT_PROCESSING_PROGRESS.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number
+                ))
+        elif step_name == self.output_steps.UPLOADING_FINISHED:
+            self.cache.delete(
+                CacheKeysTemplates.OUTPUT_UPLOADING_PROGRESS.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number
+                ))
+
+    def incr_passed_checks(self):
+        if self.request_id is None:
+            return
+
+        job_details = self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+            request_id=self.request_id))
+        if job_details:
+            key = CacheKeysTemplates.PASSED_CHECKS.format(
+                    request_id=self.request_id)
+            self.cache.incr(key)
+            if self.cache.get(key) == job_details['total_checks']:
+                self.save_primary_step(
+                    self.primary_steps.CHECKS_FINISHED
+                )
+
+    def incr_ready_inputs(self):
+        if self.request_id is None:
+            return
+
+        job_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id))
+        if job_details:
+            key = CacheKeysTemplates.READY_INPUTS.format(
+                    request_id=self.request_id)
+            self.cache.incr(key)
+            if self.cache.get(key) == job_details['total_inputs']:
+                self.save_primary_step(
+                    self.primary_steps.ALL_INPUTS_DOWNLOADED
+                )
+
+    def incr_ready_outputs(self):
+        if self.request_id is None:
+            return
+
+        job_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id))
+        if job_details:
+            key = CacheKeysTemplates.READY_OUTPUTS.format(
+                request_id=self.request_id)
+            self.cache.incr(key)
+            if self.cache.get(key) == job_details['total_outputs']:
+                self.save_primary_step(
+                    self.primary_steps.ALL_OUTPUTS_ARE_READY
+                )
+
+    def save_input_downloading_progress(self, total, current):
+        if self.request_id is not None and \
+                self.input_number is not None:
+            # save progress of input downloading
+            # by input_number and request_id
+            self.cache.set(
+                CacheKeysTemplates.INPUT_DOWNLOADING_PROGRESS.format(
+                    request_id=self.request_id,
+                    input_number=self.input_number
+                ),
+                json.dumps(dict(
+                    total=total,
+                    current=current
+                )))
+
+    def save_output_processing_progress(self, total, current):
+        if self.request_id is not None and \
+                self.output_number is not None:
+            # save progress of processing
+            # by output_number and request_id
+            self.cache.set(
+                CacheKeysTemplates.OUTPUT_PROCESSING_PROGRESS.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number
+                ),
+                json.dumps(dict(
+                    total=total,
+                    current=current
+                )))
+
+    def save_output_uploading_progress(self, total, current):
+        if self.request_id is not None and \
+                self.output_number is not None:
+            # save progress of uploading
+            # by output_number and request_id
+            self.cache.set(
+                CacheKeysTemplates.OUTPUT_UPLOADING_PROGRESS.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number
+                ),
+                json.dumps(dict(
+                    total=total,
+                    current=current
+                )))
+
     def check_input_video(self) -> dict:
         """check s3_input_key on s3_input_bucket
 
-        1. update state of the task
-        2. using self.s3_service to send head object request to S3 and get object details
-        3. ignore the task, when object_details is None for 404 or 403 reason
+        1. using self.s3_service to send head object request to S3
+            and get object details
+        2. ignore the task, when object_details is None for 404 or
+            403 reason
 
         Returns:
           object_details
@@ -169,13 +400,6 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         if self.s3_input_bucket is None:
             raise self.raise_ignore(
                 message=ErrorMessages.S3_INPUT_BUCKET_IS_REQUIRED)
-
-        # update state
-        if not self.request.called_directly:
-            current_state = self.custom_states.CheckingInputVideoState().create()
-            self.update_state(**current_state)
-        self.logger.info(
-            self.custom_states.CheckingInputVideoState().message)
 
         # check s3_input_key on s3_input_bucket
         object_details = self.s3_service.head(
@@ -211,18 +435,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             self._create_output_bucket()
 
     def _create_output_bucket(self):
-        """create output bucket
-
-        1. update state of the task
-        2. create bucket
-        """
-
-        # update state
-        if not self.request.called_directly:
-            current_state = self.custom_states.CreatingOutputBucketState().create()
-            self.update_state(**current_state)
-        self.logger.info(
-            self.custom_states.CreatingOutputBucketState().message)
+        """create output bucket"""
 
         try:
             # create s3_output_bucket
@@ -259,10 +472,9 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     def download_video(self):
         """download video to local input path
 
-        1. update state of the task
-        2. get video size
-        3. initial callback of downloader
-        4. download video from s3 cloud
+        1. get video size
+        2. initial callback of downloader
+        3. download video from s3 cloud
         """
 
         if self.input_path is None:
@@ -284,13 +496,6 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         if self.s3_input_bucket is None:
             raise self.raise_ignore(
                 message=ErrorMessages.S3_INPUT_BUCKET_IS_REQUIRED)
-
-        # update state
-        if not self.request.called_directly:
-            current_state = self.custom_states.PreparationVideoDownloadingState().create()
-            self.update_state(**current_state)
-        self.logger.info(
-            self.custom_states.PreparationVideoDownloadingState().message)
 
         # Size of the body in bytes.
         object_size = S3Service.get_object_size(self.object_details)
@@ -323,7 +528,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             # task decorator have autoretry_for attr for some exceptions
             raise result
 
-    def initial_protocol(self, is_hls=True):
+    def initial_protocol(self):
         """build HLS or MPEG ffmpeg command
         using ffmpeg_streaming package
         """
@@ -341,20 +546,13 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             raise self.raise_ignore(
                 message=ErrorMessages.INPUT_FILE_IS_NOT_FOUND)
 
-        # update state
-        if not self.request.called_directly:
-            current_state = self.custom_states.PreparationVideoProcessingState().create()
-            self.update_state(**current_state)
-        self.logger.info(
-            self.custom_states.PreparationVideoProcessingState().message)
-
         video = ffmpeg_streaming.input(self.input_path)
         format_instance = VideoEncodingFormats().get_format_class(
             self.encode_format,
             video=self.video_codec,
             audio=self.audio_codec,
         )
-        if is_hls:
+        if self.is_hls:
             # HLS Protocol
             protocol = video.hls(format_instance)
             if self.fragmented:
@@ -424,13 +622,6 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             raise self.raise_ignore(
                 message=ErrorMessages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
-        # update state
-        if not self.request.called_directly:
-            current_state = self.custom_states.PreparationUploadOutputsState().create()
-            self.update_state(**current_state)
-        self.logger.info(
-            self.custom_states.PreparationUploadOutputsState().message)
-
         self.s3_service.upload_directory(
             self.s3_output_key,
             self.directory,
@@ -457,12 +648,12 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             self.directory = self.output_path.rpartition('/')[0]
         else:
             # s3_output_key : "/foo/bar/example.mpd"
-            folders, _, output_filename = self.s3_output_key.rpartition('/')
-            
+            output_filename = self.s3_output_key.rpartition('/')[-1]
+
             self.directory = os.path.join(
                 settings.TMP_TRANSCODED_DIR,
-                self.request.id.__str__(),  # create_dash task id
-                folders)
+                str(self.request_id),
+                str(self.output_number))
 
             self.output_path = os.path.join(self.directory,
                                             output_filename)
@@ -478,11 +669,14 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             raise self.raise_ignore(
                 message=ErrorMessages.S3_INPUT_KEY_IS_REQUIRED)
 
+        input_filename = self.s3_input_key.rpartition('/')[-1]
+
         # destination path of input on local machine
         self.input_path = os.path.join(
             settings.TMP_DOWNLOADED_DIR,
             self.request_id,
-            self.s3_input_key)
+            str(self.input_number),
+            input_filename)
 
 
 class ChordCallbackMixin:
