@@ -2,6 +2,7 @@ syntax = "proto3";
 
 service Streaming{
   rpc video_processor(JobRequest) returns (JobResponse) {}
+  rpc get_result(ResultRequest) returns (ResultResponse) {}
 }
 
 message JobRequest {
@@ -119,4 +120,64 @@ message ConvertOptions{
 }
 message JobResponse {
   string tracking_id = 1;
+}
+
+
+message ResultRequest {
+  repeated string tracking_id = 1;
+}
+message ResultResponse {
+  repeated ResultDetails result = 1;
+}
+enum PrimaryStatus {
+    QUEUING_CHECKS = 0;
+    CHECKING = 1;
+    CHECKS_FINISHED = 2;
+
+    QUEUING_INPUTS_DOWNLOADING = 3;
+    INPUTS_DOWNLOADING = 4;
+    ALL_INPUTS_DOWNLOADED = 5;
+
+    QUEUING_OUTPUTS = 6;
+    OUTPUTS_PROGRESSING= 7;
+    ALL_OUTPUTS_ARE_READY = 8;
+}
+message ResultDetails {
+  string request_id = 1;
+  string reference_id = 2;
+  PrimaryStatus status = 3;
+  int32 total_outputs = 4;
+  int32 ready_outputs = 5;
+  Checks checks = 6;
+  repeated InputProgress inputs = 7;
+  repeated OutputProgress outputs = 8;
+}
+message Checks {
+    int64 total = 3;
+    int64 passed = 4;
+}
+enum OutputStep {
+    PREPARATION_PROCESSING = 0;
+    PROCESSING = 1;
+    PROCESSING_FINISHED = 2;
+    QUEUING_UPLOADING = 3;
+    PLAYLIST_UPLOADING = 4;
+    UPLOADING_FINISHED = 5;
+}
+message OutputProgress {
+    int32 id = 1;
+    OutputStep step = 2;
+    int64 total = 3;
+    int64 current = 4;
+}
+enum InputStep {
+    PREPARATION_DOWNLOADS = 0;
+    DOWNLOADING = 1;
+    DOWNLOADING_FINISHED = 2;
+}
+message InputProgress {
+    int32 id = 1;
+    InputStep step = 2;
+    int64 total = 3;
+    int64 current = 4;
 }
