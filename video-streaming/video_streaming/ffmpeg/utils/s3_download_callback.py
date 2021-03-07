@@ -1,8 +1,5 @@
-import json
 import sys
 from celery import Task
-# from video_streaming.core.celery import custom_states
-from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 
 
 class S3DownloadCallback(object):
@@ -23,9 +20,9 @@ class S3DownloadCallback(object):
 
     def progress(self, chunk):
         if self.downloaded == 0:
-            # save input step using input_number and request_id
-            self.task.save_input_step(
-                self.task.input_steps.DOWNLOADING)
+            # save input status using input_number and request_id
+            self.task.save_input_status(
+                self.task.input_status.DOWNLOADING)
 
         self.downloaded += chunk
 
@@ -41,11 +38,3 @@ class S3DownloadCallback(object):
             )
             sys.stdout.flush()
 
-        # if self.task and self.task_id:
-        #     # update state
-        #     current_state = custom_states.DownloadingVideoState().create(
-        #         progress_total=self._object_size,
-        #         progress_current=self.downloaded,
-        #         task_id=self.task_id
-        #     )
-        #     self.task.update_state(**current_state)

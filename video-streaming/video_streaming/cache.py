@@ -23,11 +23,20 @@ class RedisCache:
     def incr(self, key, amount: int = 1):
         self.redis.incr(key, amount=amount)
 
-    def get(self, key):
-        # getting right type of float and int values
+    def get(self, key, decode=True):
+        """
+        set decode to False when value stored as a string
+        """
         value = self.redis.get(key)
+        if not decode:
+            return value
         if value is not None:
-            return json.loads(value)
+            try:
+                return json.loads(value)
+            except Exception as e:
+                # TODO capture error
+                print(e)
+        return value
 
     def delete(self, *key):
         return self.redis.delete(*key)

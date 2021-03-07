@@ -11,9 +11,9 @@ class GrpcBaseException(Exception):
     message: str = None
 
     def __init__(self,
+                 message: str = None,
                  context: ServicerContext = None,
-                 status_code: tuple = None,
-                 message: str = None):
+                 status_code: tuple = None):
 
         self.status_code = self.status_code if status_code is None\
             else status_code
