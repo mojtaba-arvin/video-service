@@ -2,7 +2,7 @@ syntax = "proto3";
 
 service Streaming{
   rpc video_processor(JobRequest) returns (JobResponse) {}
-  rpc get_result(ResultRequest) returns (ResultResponse) {}
+  rpc get_results(ResultRequest) returns (ResultResponse) {}
 }
 
 message JobRequest {
@@ -127,7 +127,7 @@ message ResultRequest {
   repeated string tracking_ids = 1;
 }
 message ResultResponse {
-  repeated ResultDetails result = 1;
+  repeated ResultDetails results = 1;
 }
 enum PrimaryStatus {
     QUEUING_CHECKS = 0;
@@ -156,7 +156,7 @@ message Checks {
     int64 total = 3;
     int64 passed = 4;
 }
-enum OutputStep {
+enum OutputStatus {
     PREPARATION_PROCESSING = 0;
     PROCESSING = 1;
     PROCESSING_FINISHED = 2;
@@ -166,18 +166,18 @@ enum OutputStep {
 }
 message OutputProgress {
     int32 id = 1;
-    OutputStep step = 2;
+    OutputStatus status = 2;
     int64 total = 3;
     int64 current = 4;
 }
-enum InputStep {
+enum InputStatus {
     PREPARATION_DOWNLOADS = 0;
     DOWNLOADING = 1;
     DOWNLOADING_FINISHED = 2;
 }
 message InputProgress {
     int32 id = 1;
-    InputStep step = 2;
+    InputStatus status = 2;
     int64 total = 3;
     int64 current = 4;
 }

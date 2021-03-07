@@ -38,7 +38,7 @@ def check_input_key(self,
     """
 
     self._initial_params()
-    self.save_primary_step(self.primary_steps.CHECKING)
+    self.save_primary_status(self.primary_status.CHECKING)
 
     # check s3_input_key on s3_input_bucket by head request
     object_details = self.check_input_video()
@@ -62,7 +62,7 @@ def check_output_bucket(self,
     """
 
     self._initial_params()
-    self.save_primary_step(self.primary_steps.CHECKING)
+    self.save_primary_status(self.primary_status.CHECKING)
 
     # check output bucket is exist
     # or create if s3_create_bucket is True
@@ -87,7 +87,7 @@ def check_output_key(self,
     """
 
     self._initial_params()
-    self.save_primary_step(self.primary_steps.CHECKING)
+    self.save_primary_status(self.primary_status.CHECKING)
 
     # check if s3_output_key is already exist
     # and raise if s3_dont_replace is True
@@ -114,11 +114,11 @@ def download_input(self, object_details: dict = None,
 
     self._initial_params()
 
-    # save primary step using request_id
-    self.save_primary_step(self.primary_steps.INPUTS_DOWNLOADING)
+    # save primary status using request_id
+    self.save_primary_status(self.primary_status.INPUTS_DOWNLOADING)
 
-    # save input step using input_number and request_id
-    self.save_input_step(self.input_steps.PREPARATION_DOWNLOADS)
+    # save input status using input_number and request_id
+    self.save_input_status(self.input_status.PREPARATION_DOWNLOADS)
 
     # set self.input_path
     self.set_input_path()
@@ -127,8 +127,8 @@ def download_input(self, object_details: dict = None,
     if not downloaded:
         self.download_video()
 
-    # save input step using input_number and request_id
-    self.save_input_step(self.input_steps.DOWNLOADING_FINISHED)
+    # save input status using input_number and request_id
+    self.save_input_status(self.input_status.DOWNLOADING_FINISHED)
 
     self.incr_ready_inputs()
 
@@ -162,11 +162,11 @@ def create_playlist(self,
 
     self._initial_params()
 
-    # save primary step using request_id
-    self.save_primary_step(self.primary_steps.OUTPUTS_PROGRESSING)
+    # save primary status using request_id
+    self.save_primary_status(self.primary_status.OUTPUTS_PROGRESSING)
 
-    # save output step using output_number and request_id
-    self.save_output_step(self.output_steps.PREPARATION_PROCESSING)
+    # save output status using output_number and request_id
+    self.save_output_status(self.output_status.PREPARATION_PROCESSING)
 
     playlist = self.initial_protocol()
 
@@ -187,7 +187,7 @@ def create_playlist(self,
         # TODO handle possible Runtime Errors
         raise e
 
-    self.save_output_step(self.output_steps.PROCESSING_FINISHED)
+    self.save_output_status(self.output_status.PROCESSING_FINISHED)
 
     return dict(directory=self.directory)
 
@@ -211,11 +211,11 @@ def upload_directory(self,
 
     self._initial_params()
 
-    # save output step using output_number and request_id
-    self.save_output_step(self.output_steps.PLAYLIST_UPLOADING)
+    # save output status using output_number and request_id
+    self.save_output_status(self.output_status.PLAYLIST_UPLOADING)
 
     self.upload_directory()
 
-    self.save_output_step(self.output_steps.UPLOADING_FINISHED)
+    self.save_output_status(self.output_status.UPLOADING_FINISHED)
 
     self.incr_ready_outputs()

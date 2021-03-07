@@ -1,13 +1,13 @@
 
 
 __all__ = [
-    'PrimarySteps',
-    'InputSteps',
-    'OutputSteps'
+    'PrimaryStatus',
+    'InputStatus',
+    'OutputStatus'
 ]
 
 
-class PrimarySteps:
+class PrimaryStatus:
 
     QUEUING_CHECKS = "QUEUING_CHECKS"
     # one of checks tasks has been started
@@ -24,7 +24,7 @@ class PrimarySteps:
     ALL_INPUTS_DOWNLOADED = "ALL_INPUTS_DOWNLOADED"
 
     # It will be set outside of tasks,
-    # when DOWNLOADING_FINISHED and not OUTPUTS_PROGRESSING
+    # when ALL_INPUTS_DOWNLOADED and not QUEUING_OUTPUTS
     QUEUING_OUTPUTS = "QUEUING_OUTPUTS"
     # when one of level3 chains has been started
     OUTPUTS_PROGRESSING = "OUTPUTS_PROGRESSING"
@@ -32,7 +32,7 @@ class PrimarySteps:
     ALL_OUTPUTS_ARE_READY = "ALL_OUTPUTS_ARE_READY"
 
 
-class InputSteps:
+class InputStatus:
     # for every input
 
     PREPARATION_DOWNLOADS = "PREPARATION_DOWNLOAD"
@@ -40,7 +40,7 @@ class InputSteps:
     DOWNLOADING_FINISHED = "DOWNLOADING_FINISHED"
 
 
-class OutputSteps:
+class OutputStatus:
     # for every output
 
     PREPARATION_PROCESSING = "PREPARATION_PROCESSING"

@@ -19,13 +19,13 @@ class S3UploadDirectoryCallback(object):
 
     def progress(self, total_size, total_files, number, chunk):
         if self.uploaded == 0:
-            # save input step using input_number and request_id
-            self.task.save_output_step(
-                self.task.output_steps.PLAYLIST_UPLOADING)
+            # save input status using input_number and request_id
+            self.task.save_output_status(
+                self.task.output_status.PLAYLIST_UPLOADING)
 
         self.uploaded += chunk
 
-        self.task.save_output_uploading_progress(
+        self.task.save_output_progress(
             total=total_size,
             current=self.uploaded
         )
@@ -37,11 +37,3 @@ class S3UploadDirectoryCallback(object):
             )
             sys.stdout.flush()
 
-        # if self.task and self.task_id:
-        #     # update state
-        #     current_state = custom_states.UploadingOutputsState().create(
-        #         progress_total=total_size,
-        #         progress_current=self.uploaded,
-        #         task_id=self.task_id
-        #     )
-        #     self.task.update_state(**current_state)

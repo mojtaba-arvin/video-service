@@ -2,7 +2,7 @@ import json
 import uuid
 from celery import chain, group
 from video_streaming.core.constants import CacheKeysTemplates, \
-    PrimarySteps
+    PrimaryStatus
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg import tasks
 from video_streaming.grpc import exceptions
@@ -147,7 +147,7 @@ class Streaming(
                 output.options.custom_qualities)
 
             third_level_tasks.append(
-                # chain of create_hls and upload_directory
+                # chain of create playlist and upload_directory
                 chain(
                     # input_path will come from second level
                     tasks.create_playlist.s(
@@ -194,11 +194,11 @@ class Streaming(
             ),
             json.dumps(job_details))
 
-        # set first primary step as QUEUING_CHECKS
+        # set first primary status as QUEUING_CHECKS
         self.cache.set(
-            CacheKeysTemplates.PRIMARY_STEP.format(
+            CacheKeysTemplates.PRIMARY_STATUS.format(
                 request_id=request_id),
-            PrimarySteps.QUEUING_CHECKS
+            PrimaryStatus.QUEUING_CHECKS
         )
 
         # queuing the job
@@ -216,34 +216,38 @@ class Streaming(
         response.tracking_id = request_id
         return response
 
-    def get_result(self, request, context):
-        result = []
+    def get_results(self, request, context):
+        results: list[Streaming.pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
-            job_details = self.cache.get(
+            primary_status: str = self.cache.get(
+                CacheKeysTemplates.PRIMARY_STATUS.format(
+                    request_id=request_id), decode=False)
+            job_details: dict = self.cache.get(
                 CacheKeysTemplates.JOB_DETAILS.format(
                     request_id=request_id))
-            ready_outputs = self.cache.get(
-                CacheKeysTemplates.READY_OUTPUTS.format(
-                    request_id=request_id))
-            passed_checks = self.cache.get(
-                CacheKeysTemplates.PASSED_CHECKS.format(
-                    request_id=request_id))
-            # TODO
-            result.append(
-                self.pb2.ResultDetails(
+            if primary_status and job_details:
+                status = self.pb2.PrimaryStatus.Value(
+                    primary_status)
+                total_checks = job_details['total_checks']
+                total_inputs = job_details['total_inputs']
+                total_outputs = job_details['total_outputs']
+                ready_outputs = self.cache.get(
+                        CacheKeysTemplates.READY_OUTPUTS.format(
+                            request_id=request_id)) or 0
+                checks = self.pb2.Checks(
+                    total=total_checks,
+                    passed=self.cache.get(
+                        CacheKeysTemplates.PASSED_CHECKS.format(
+                            request_id=request_id)) or 0)
+                result_details = dict(
                     request_id=request_id,
-                    reference_id=job_details['reference_id'],
-                    total_outputs=job_details['total_outputs'],
+                    status=status,
+                    total_outputs=total_outputs,
                     ready_outputs=ready_outputs,
-                    checks=self.pb2.Checks(
-                        total=job_details['total_checks'],
-                        passed=passed_checks
-                    ),
-                    inputs=[],
-                    outputs=[]
+                    checks=checks,
+                    inputs=self._inputs(request_id, total_inputs),
+                    outputs=self._outputs(request_id, total_outputs)
                 )
-            )
-        response = self.pb2.ResultResponse(
-            result=result
-        )
+                results.append(self.pb2.ResultDetails(**result_details))
+        response = self.pb2.ResultResponse(results=results)
         return response

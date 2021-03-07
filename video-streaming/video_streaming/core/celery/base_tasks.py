@@ -11,7 +11,7 @@ from video_streaming.cache import RedisCache
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.core.services import S3Service
 from video_streaming.core.constants import ErrorMessages, \
-    PrimarySteps, InputSteps, OutputSteps
+    PrimaryStatus, InputStatus, OutputStatus
 from video_streaming.ffmpeg.utils import S3DownloadCallback, \
     S3UploadDirectoryCallback
 from video_streaming.ffmpeg.constants import Resolutions, \
@@ -51,9 +51,9 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
     error_messages = ErrorMessages
     logger = logger
     cache = RedisCache()
-    primary_steps = PrimarySteps
-    input_steps = InputSteps
-    output_steps = OutputSteps
+    primary_status = PrimaryStatus
+    input_status = InputStatus
+    output_status = OutputStatus
 
     # a unique id as gRPC request id,
     # several tasks can be points to one request_id.
@@ -168,26 +168,26 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
             setattr(self, name, value)
 
-    def save_primary_step(self, step_name):
+    def save_primary_status(self, status_name):
         """
             1. save as celery task status
             2. add to celery logger
-            3. save primary step on cache when request_id
+            3. save primary status on cache when request_id
             and JOB_DETAILS has been set
         """
 
         # save as celery task status
         self.update_state(
             task_id=self.request.id,
-            state=step_name)
+            state=status_name)
 
         # add to celery logger
-        log_message = f"primary step: {step_name}"
+        log_message = f"primary status: {status_name}"
         if self.request_id:
             log_message += f" ,request id: {self.request_id}"
         self.logger.info(log_message)
 
-        # save primary step on cache when request_id
+        # save primary status on cache when request_id
         # and JOB_DETAILS has been set
         if self.request_id is None:
             # request_id has been not set
@@ -199,21 +199,21 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             return None
 
         self.cache.set(
-            CacheKeysTemplates.PRIMARY_STEP.format(
+            CacheKeysTemplates.PRIMARY_STATUS.format(
                 request_id=self.request_id),
-            step_name
+            status_name
         )
 
-    def save_input_step(self, step_name):
-        # add input step name as message to logger
-        log_message = f"input step: {step_name}"
+    def save_input_status(self, status_name):
+        # add input status name as message to logger
+        log_message = f"input status: {status_name}"
         if self.request_id:
             log_message += f" ,request id: {self.request_id}"
         if self.input_number:
             log_message += f" ,input number: {self.input_number}"
         self.logger.info(log_message)
 
-        # save input step when request_id , input_number
+        # save input status when request_id , input_number
         # and JOB_DETAILS has been set
 
         if self.request_id is None:
@@ -230,29 +230,29 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             return None
 
         self.cache.set(
-            CacheKeysTemplates.INPUT_STEP.format(
+            CacheKeysTemplates.INPUT_STATUS.format(
                 request_id=self.request_id,
                 input_number=self.input_number),
-            step_name
+            status_name
         )
         # check to delete progress data of downloading
-        if step_name == self.input_steps.DOWNLOADING_FINISHED:
+        if status_name == self.input_status.DOWNLOADING_FINISHED:
             self.cache.delete(
                 CacheKeysTemplates.INPUT_DOWNLOADING_PROGRESS.format(
                     request_id=self.request_id,
                     input_number=self.input_number
                 ))
 
-    def save_output_step(self, step_name):
-        # add output step name as message to logger
-        log_message = f"output step: {step_name}"
+    def save_output_status(self, status_name):
+        # add output status name as message to logger
+        log_message = f"output status: {status_name}"
         if self.request_id:
             log_message += f" ,request id: {self.request_id}"
         if self.output_number:
             log_message += f" ,output number: {self.output_number}"
         self.logger.info(log_message)
 
-        # save output step when request_id , input_number
+        # save output status when request_id , input_number
         # and JOB_DETAILS has been set
 
         if self.request_id is None:
@@ -269,22 +269,18 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             return None
 
         self.cache.set(
-            CacheKeysTemplates.OUTPUT_STEP.format(
+            CacheKeysTemplates.OUTPUT_STATUS.format(
                 request_id=self.request_id,
                 output_number=self.output_number),
-            step_name
+            status_name
         )
 
         # check to delete unnecessary data
-        if step_name == self.output_steps.PROCESSING_FINISHED:
+        if status_name in [
+                self.output_status.PROCESSING_FINISHED,
+                self.output_status.UPLOADING_FINISHED]:
             self.cache.delete(
-                CacheKeysTemplates.OUTPUT_PROCESSING_PROGRESS.format(
-                    request_id=self.request_id,
-                    output_number=self.output_number
-                ))
-        elif step_name == self.output_steps.UPLOADING_FINISHED:
-            self.cache.delete(
-                CacheKeysTemplates.OUTPUT_UPLOADING_PROGRESS.format(
+                CacheKeysTemplates.OUTPUT_PROGRESS.format(
                     request_id=self.request_id,
                     output_number=self.output_number
                 ))
@@ -300,8 +296,8 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                     request_id=self.request_id)
             self.cache.incr(key)
             if self.cache.get(key) == job_details['total_checks']:
-                self.save_primary_step(
-                    self.primary_steps.CHECKS_FINISHED
+                self.save_primary_status(
+                    self.primary_status.CHECKS_FINISHED
                 )
 
     def incr_ready_inputs(self):
@@ -316,8 +312,8 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                     request_id=self.request_id)
             self.cache.incr(key)
             if self.cache.get(key) == job_details['total_inputs']:
-                self.save_primary_step(
-                    self.primary_steps.ALL_INPUTS_DOWNLOADED
+                self.save_primary_status(
+                    self.primary_status.ALL_INPUTS_DOWNLOADED
                 )
 
     def incr_ready_outputs(self):
@@ -332,8 +328,8 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                 request_id=self.request_id)
             self.cache.incr(key)
             if self.cache.get(key) == job_details['total_outputs']:
-                self.save_primary_step(
-                    self.primary_steps.ALL_OUTPUTS_ARE_READY
+                self.save_primary_status(
+                    self.primary_status.ALL_OUTPUTS_ARE_READY
                 )
 
     def save_input_downloading_progress(self, total, current):
@@ -351,28 +347,13 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                     current=current
                 )))
 
-    def save_output_processing_progress(self, total, current):
+    def save_output_progress(self, total, current):
         if self.request_id is not None and \
                 self.output_number is not None:
-            # save progress of processing
+            # save progress of processing or uploading
             # by output_number and request_id
             self.cache.set(
-                CacheKeysTemplates.OUTPUT_PROCESSING_PROGRESS.format(
-                    request_id=self.request_id,
-                    output_number=self.output_number
-                ),
-                json.dumps(dict(
-                    total=total,
-                    current=current
-                )))
-
-    def save_output_uploading_progress(self, total, current):
-        if self.request_id is not None and \
-                self.output_number is not None:
-            # save progress of uploading
-            # by output_number and request_id
-            self.cache.set(
-                CacheKeysTemplates.OUTPUT_UPLOADING_PROGRESS.format(
+                CacheKeysTemplates.OUTPUT_PROGRESS.format(
                     request_id=self.request_id,
                     output_number=self.output_number
                 ),
