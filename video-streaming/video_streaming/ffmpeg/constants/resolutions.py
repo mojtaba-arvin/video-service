@@ -49,7 +49,7 @@ class Resolutions:
                 try:
                     reps.append(self.QUALITIES[name])
                 except KeyError:
-                    raise KeyError(f"{name} is a valid quality name.")
+                    raise KeyError(f"{name} is not a valid quality name.")
         return reps
 
 

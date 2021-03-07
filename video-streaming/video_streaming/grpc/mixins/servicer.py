@@ -75,7 +75,7 @@ class BaseGrpcServiceMixin(object):
                     values[idx].
                     name
                 ).lower()[2:]
-                # remove first character "r_" from the name
+                # remove "r_" from the name
             )
         # sample : ["360p", "480p", "720p"]
         return quality_names

@@ -16,8 +16,8 @@ class S3KeyCanNotBeEmptyException(GrpcBaseException):
 
 
 class BucketNameIsNotValidException(GrpcBaseException):
-    status_code = ErrorCodes.s3_BUCKET_NAME_IS_NOT_VALID
-    message = ErrorMessages.s3_BUCKET_NAME_IS_NOT_VALID
+    status_code = ErrorCodes.S3_BUCKET_NAME_IS_NOT_VALID
+    message = ErrorMessages.S3_BUCKET_NAME_IS_NOT_VALID
 
 
 class DuplicateOutputLocationsException(GrpcBaseException):

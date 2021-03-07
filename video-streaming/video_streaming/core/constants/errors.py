@@ -27,7 +27,7 @@ class ErrorMessages:
 
     # gRPC
     S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty"
-    s3_BUCKET_NAME_IS_NOT_VALID = "s3 bucket name is not valid"
+    S3_BUCKET_NAME_IS_NOT_VALID = "s3 bucket name is not valid"
     DUPLICATE_OUTPUT_LOCATIONS = "there are duplicate output locations"
     ONE_OUTPUT_IS_REQUIRED = "one output is required"
 
@@ -35,6 +35,6 @@ class ErrorMessages:
 class ErrorCodes:
     # gRPC
     S3_KEY_CAN_NOT_BE_EMPTY = 1001
-    s3_BUCKET_NAME_IS_NOT_VALID = 1002
+    S3_BUCKET_NAME_IS_NOT_VALID = 1002
     DUPLICATE_OUTPUT_LOCATIONS = 1003
     ONE_OUTPUT_IS_REQUIRED = 1004
