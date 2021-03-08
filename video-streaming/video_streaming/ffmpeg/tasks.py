@@ -2,7 +2,8 @@ import os
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.celery import VideoStreamingTask, \
-    DownloadInputTask, CreatePlaylistTask, UploadDirectoryTask
+    DownloadInputTask, CreatePlaylistTask, UploadDirectoryTask, \
+    CallWebhookTask
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.utils import FfmpegCallback
 
@@ -27,6 +28,7 @@ decorator_kwargs = dict(
                  base=VideoStreamingTask,
                  **decorator_kwargs)
 def check_input_key(self,
+                    *args,
                     s3_input_key: str = None,
                     s3_input_bucket: str = None,
                     request_id: str = None) -> dict:
@@ -52,6 +54,7 @@ def check_input_key(self,
                  base=VideoStreamingTask,
                  **decorator_kwargs)
 def check_output_bucket(self,
+                        *args,
                         s3_output_bucket: str = None,
                         s3_create_bucket: bool = None,
                         request_id: str = None):
@@ -75,6 +78,7 @@ def check_output_bucket(self,
                  base=VideoStreamingTask,
                  **decorator_kwargs)
 def check_output_key(self,
+                     *args,
                      s3_output_key: str = None,
                      s3_output_bucket: str = None,
                      s3_dont_replace: bool = None,
@@ -99,7 +103,7 @@ def check_output_key(self,
 @celery_app.task(name="download_input",
                  base=DownloadInputTask,
                  **decorator_kwargs)
-def download_input(self, object_details: dict = None,
+def download_input(self, *args, object_details: dict = None,
                    request_id: str = None, s3_input_key: str = None,
                    s3_input_bucket: str = None, input_number: int = None
                    ) -> dict:
@@ -118,7 +122,7 @@ def download_input(self, object_details: dict = None,
     self.save_primary_status(self.primary_status.INPUTS_DOWNLOADING)
 
     # save input status using input_number and request_id
-    self.save_input_status(self.input_status.PREPARATION_DOWNLOADS)
+    self.save_input_status(self.input_status.PREPARATION_DOWNLOAD)
 
     # set self.input_path
     self.set_input_path()
@@ -139,6 +143,7 @@ def download_input(self, object_details: dict = None,
                  base=CreatePlaylistTask,
                  **decorator_kwargs)
 def create_playlist(self,
+                    *args,
                     input_path: str = None,
                     output_path: str = None,
                     s3_output_key: str = None,
@@ -151,7 +156,8 @@ def create_playlist(self,
                     async_run: bool = None,
                     request_id: str = None,
                     output_number: int = None,
-                    is_hls: bool = None) -> dict:
+                    is_hls: bool = None,
+                    delete_inputs: bool = None) -> dict:
     """create an playlist ( HLS or DASH )
 
        required parameters:
@@ -189,6 +195,10 @@ def create_playlist(self,
 
     self.save_output_status(self.output_status.PROCESSING_FINISHED)
 
+    # It will be used to safely delete local inputs
+    # after all outputs have been processed
+    self.incr_processed_outputs()
+
     return dict(directory=self.directory)
 
 
@@ -196,6 +206,7 @@ def create_playlist(self,
                  base=UploadDirectoryTask,
                  **decorator_kwargs)
 def upload_directory(self,
+                     *args,
                      directory: str = None,
                      s3_output_key: str = None,
                      s3_output_bucket: str = None,
@@ -218,4 +229,22 @@ def upload_directory(self,
 
     self.save_output_status(self.output_status.UPLOADING_FINISHED)
 
+    # It will be used to safely delete local outputs
+    # after all outputs have been uploaded
     self.incr_ready_outputs()
+
+
+@celery_app.task(name="call_webhook",
+                 base=CallWebhookTask,
+                 **decorator_kwargs)
+def call_webhook(self, *args, request_id: str = None):
+    """notify the client that the outputs are ready
+       required parameters:
+         - request_id
+    """
+
+    self._initial_params()
+
+    is_delivered = self.call_webhook()
+
+    return dict(is_delivered=is_delivered)

@@ -22,7 +22,10 @@ class CacheKeysTemplates:
     # to save number of downloaded inputs as int
     READY_INPUTS = _PREFIX + "ready_inputs_{request_id}"
 
-    # to save number of finished outputs as int
+    # to save number of processed outputs as int
+    PROCESSED_OUTPUTS = _PREFIX + "processed_outputs_{request_id}"
+
+    # to save number of ready outputs after upload directory as int
     READY_OUTPUTS = _PREFIX + "ready_outputs_{request_id}"
 
     # save status

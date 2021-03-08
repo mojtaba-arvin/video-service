@@ -1,6 +1,6 @@
 import json
 import uuid
-from celery import chain, group
+from celery import chord, chain, group, result as celery_result
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
 from video_streaming.core.services import S3Service
@@ -40,21 +40,32 @@ class Streaming(
         # 1. create empty tasks lists for the workflow
 
         # some checks tasks before download anythings
-        first_level_tasks = []
+        first_level_tasks: list = []
         # some download tasks, like target video, watermarks ...
-        second_level_tasks = []
-        # some chains of create playlist and upload directory for every output
-        third_level_tasks = []
+        second_level_tasks: list = []
+        # some chains of create playlist and upload directory
+        # for every output
+        third_level_tasks: list[chain] = []
+        # delete local inputs and outputs files and call webhook
+        fourth_level_tasks: list = []
 
         # 2.generate unique uuid for the current request
-        request_id = str(uuid.uuid4())
-        reference_id = request.reference_id
-        # webhook_url = request.webhook_url
+        request_id: str = str(uuid.uuid4())
+
+        #
+        webhook_url: str = request.webhook_url
+        if webhook_url:
+            # TODO check webhook_url is valid and raise error
+            fourth_level_tasks.append(
+                # webhook_url value will come from job_details cache
+                # by request id
+                tasks.call_webhook.s(request_id=request_id)
+            )
 
         # 3. check input video parameter is not empty
 
-        s3_input_key = request.s3_input.key
-        s3_input_bucket = request.s3_input.bucket
+        s3_input_key: str = request.s3_input.key
+        s3_input_bucket: str = request.s3_input.bucket
 
         # For strings in proto3, the default value is the empty string
         # check input key to not be empty string
@@ -76,8 +87,8 @@ class Streaming(
 
         # 6. check output keys are not empty and bucket names
         # are compatible with s3
-        output_buckets = []
-        output_locations = []
+        output_buckets: list[str] = []
+        output_locations: list[tuple] = []
         for output in request.outputs:
 
             # check the output key is filled
@@ -125,6 +136,8 @@ class Streaming(
 
         # 10. add second level tasks, e.g. download input
         second_level_tasks.append(
+            # TODO chain with ffprobe and save ffprobe result to use
+            #  in grpc get_results
             # input object_details will come from first level
             tasks.download_input.s(
                 # object_details=object_details,
@@ -141,9 +154,9 @@ class Streaming(
 
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
-            quality_names = self._parse_quality_names(
+            quality_names: list[str] = self._parse_quality_names(
                 output.options.quality_names)
-            custom_qualities = self.__class__._parse_custom_qualities(
+            custom_qualities: list[dict] = self.__class__._parse_custom_qualities(
                 output.options.custom_qualities)
 
             third_level_tasks.append(
@@ -172,16 +185,24 @@ class Streaming(
                 )
             )
 
-        # 12. apply tasks
+        ordered_levels = [
+            # chord 1
+            first_level_tasks,
+            # callback of chord 1
+            second_level_tasks,
 
-        job = chain(
-            group(*first_level_tasks),
-            group(*second_level_tasks),
-            group(*third_level_tasks)
-        )
+            # chord 2
+            third_level_tasks,
+            # callback of chard 2
+            fourth_level_tasks
+        ]
 
+        job = chain(*[group(*level_tasks) for level_tasks in ordered_levels])
+
+        reference_id: str = request.reference_id
         job_details = dict(
             reference_id=reference_id,
+            webhook_url=webhook_url,
             total_checks=len(first_level_tasks),
             total_inputs=len(second_level_tasks),
             total_outputs=len(third_level_tasks)
@@ -201,9 +222,13 @@ class Streaming(
             PrimaryStatus.QUEUING_CHECKS
         )
 
-        # queuing the job
+        # 12. apply tasks
         result = job.apply_async()
-        result.save()
+
+        # check last level has one task or more to detect result type
+        if len(ordered_levels[-1]) > 1:
+            result: celery_result.GroupResult
+            result.save()
 
         # saving celery result id of the request
         self.cache.set(
@@ -228,10 +253,11 @@ class Streaming(
             if primary_status and job_details:
                 status = self.pb2.PrimaryStatus.Value(
                     primary_status)
-                total_checks = job_details['total_checks']
-                total_inputs = job_details['total_inputs']
-                total_outputs = job_details['total_outputs']
-                ready_outputs = self.cache.get(
+                reference_id: str = job_details['reference_id']
+                total_checks: int = job_details['total_checks']
+                total_inputs: int = job_details['total_inputs']
+                total_outputs: int = job_details['total_outputs']
+                ready_outputs: int = self.cache.get(
                         CacheKeysTemplates.READY_OUTPUTS.format(
                             request_id=request_id)) or 0
                 checks = self.pb2.Checks(
@@ -241,6 +267,7 @@ class Streaming(
                             request_id=request_id)) or 0)
                 result_details = dict(
                     request_id=request_id,
+                    reference_id=reference_id,
                     status=status,
                     total_outputs=total_outputs,
                     ready_outputs=ready_outputs,
