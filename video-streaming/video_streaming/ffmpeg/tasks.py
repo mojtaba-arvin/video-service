@@ -3,7 +3,7 @@ from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.celery import VideoStreamingTask, \
     DownloadInputTask, CreatePlaylistTask, UploadDirectoryTask, \
-    CallWebhookTask
+    CallWebhookTask, AnalyzeInputTask
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.utils import FfmpegCallback
 
@@ -135,6 +135,29 @@ def download_input(self, *args, object_details: dict = None,
     self.save_input_status(self.input_status.DOWNLOADING_FINISHED)
 
     self.incr_ready_inputs()
+
+    return dict(input_path=self.input_path)
+
+
+@celery_app.task(name="analyze_input",
+                 base=AnalyzeInputTask,
+                 **decorator_kwargs)
+def analyze_input(self,
+                  *args,
+                  input_path: str = None,
+                  request_id: str = None,
+                  input_number: int = None
+                  ) -> dict:
+    """analyze input with ffprobe
+
+       required parameters:
+         - input_path
+         - request_id
+    """
+
+    self._initial_params()
+
+    self.analyze_input()
 
     return dict(input_path=self.input_path)
 

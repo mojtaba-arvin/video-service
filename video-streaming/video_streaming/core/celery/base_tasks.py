@@ -1,12 +1,10 @@
 import json
 import os
 import shutil
-
+import urllib3
 import ffmpeg_streaming
 from abc import ABC
-
-import urllib3
-from ffmpeg_streaming import Representation, Size, Bitrate
+from ffmpeg_streaming import Representation, Size, Bitrate, FFProbe
 from celery import Task, states
 from celery.exceptions import Ignore
 from celery.utils.log import get_task_logger
@@ -28,7 +26,8 @@ __all__ = [
     'DownloadInputTask',
     'CreatePlaylistTask',
     'UploadDirectoryTask',
-    'CallWebhookTask'
+    'CallWebhookTask',
+    'AnalyzeInputTask'
 ]
 
 
@@ -562,6 +561,31 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             # task decorator have autoretry_for attr for some exceptions
             raise result
 
+    def analyze_input(self):
+        if self.input_path is None:
+            raise self.raise_ignore(
+                message=self.error_messages.INPUT_PATH_IS_REQUIRED)
+
+        if self.request_id is None:
+            raise self.raise_ignore(
+                message=self.error_messages.REQUEST_ID_IS_REQUIRED)
+
+        ffprobe = FFProbe(self.input_path)
+
+        """
+        exmaples :
+            ffprobe.format()
+            ffprobe.all()
+            ffprobe.streams().audio().get('bit_rate', 0)
+        """
+        self.cache.set(
+            CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
+                request_id=self.request_id,
+                input_number=self.input_number
+            ),
+            ffprobe.out)
+        return ffprobe
+
     def initial_protocol(self):
         """build HLS or MPEG ffmpeg command
         using ffmpeg_streaming package
@@ -821,6 +845,13 @@ class ChainCallbackMixin:
 
 class DownloadInputTask(
         ChordCallbackMixin,
+        VideoStreamingTask,
+        ABC):
+    pass
+
+
+class AnalyzeInputTask(
+        ChainCallbackMixin,
         VideoStreamingTask,
         ABC):
     pass

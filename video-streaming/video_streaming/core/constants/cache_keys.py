@@ -14,7 +14,8 @@ class CacheKeysTemplates:
     # to save celery result id of the request
     REQUEST_RESULT_ID = _PREFIX + "result_{request_id}"
 
-    # count keys
+    # to save ffprobe data of input video as json
+    INPUT_FFPROBE_DATA = _PREFIX + "i_ffprobe_{request_id}_{input_number}"
 
     # to save number of passed checks as int
     PASSED_CHECKS = _PREFIX + "passed_{request_id}"
