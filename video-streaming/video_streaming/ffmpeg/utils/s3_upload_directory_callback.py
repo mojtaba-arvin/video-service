@@ -3,6 +3,7 @@ from celery import Task
 
 
 class S3UploadDirectoryCallback(object):
+
     def __init__(
             self,
             task: Task = None,

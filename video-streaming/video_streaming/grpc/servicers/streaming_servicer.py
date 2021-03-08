@@ -136,15 +136,21 @@ class Streaming(
 
         # 10. add second level tasks, e.g. download input
         second_level_tasks.append(
-            # TODO chain with ffprobe and save ffprobe result to use
-            #  in grpc get_results
-            # input object_details will come from first level
-            tasks.download_input.s(
-                # object_details=object_details,
-                request_id=request_id,
-                s3_input_key=s3_input_key,
-                s3_input_bucket=s3_input_bucket,
-                input_number=0
+            # chain of create playlist and upload_directory
+            chain(
+                # input object_details will come from first level
+                tasks.download_input.s(
+                    # object_details=object_details,
+                    request_id=request_id,
+                    s3_input_key=s3_input_key,
+                    s3_input_bucket=s3_input_bucket,
+                    input_number=0
+                ),
+                # input_path will come from download_input task
+                tasks.analyze_input.s(
+                    request_id=request_id,
+                    input_number=0
+                )
             )
         )
 
@@ -184,6 +190,8 @@ class Streaming(
                     )
                 )
             )
+
+        # TODO delete local files on failure callback
 
         ordered_levels = [
             # chord 1
@@ -237,6 +245,7 @@ class Streaming(
             ),
             str(result.id)
         )
+
         response = self.pb2.JobResponse()
         response.tracking_id = request_id
         return response
@@ -244,6 +253,7 @@ class Streaming(
     def get_results(self, request, context):
         results: list[Streaming.pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
+            # TODO set flag on proto to add INPUT_FFPROBE_DATA to the result
             primary_status: str = self.cache.get(
                 CacheKeysTemplates.PRIMARY_STATUS.format(
                     request_id=request_id), decode=False)
@@ -278,3 +288,5 @@ class Streaming(
                 results.append(self.pb2.ResultDetails(**result_details))
         response = self.pb2.ResultResponse(results=results)
         return response
+
+    # TODO add revoke method
