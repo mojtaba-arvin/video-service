@@ -1,7 +1,11 @@
 import json
 import os
+import shutil
+
 import ffmpeg_streaming
 from abc import ABC
+
+import urllib3
 from ffmpeg_streaming import Representation, Size, Bitrate
 from celery import Task, states
 from celery.exceptions import Ignore
@@ -16,14 +20,15 @@ from video_streaming.ffmpeg.utils import S3DownloadCallback, \
     S3UploadDirectoryCallback
 from video_streaming.ffmpeg.constants import Resolutions, \
     VideoEncodingFormats
-logger = get_task_logger(__name__)
+celery_logger = get_task_logger(__name__)
 
 __all__ = [
     'BaseCeleryTask',
     'VideoStreamingTask',
     'DownloadInputTask',
     'CreatePlaylistTask',
-    'UploadDirectoryTask'
+    'UploadDirectoryTask',
+    'CallWebhookTask'
 ]
 
 
@@ -49,11 +54,17 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
     s3_service = S3Service()  # create s3 client
     error_messages = ErrorMessages
-    logger = logger
+    logger = celery_logger
     cache = RedisCache()
     primary_status = PrimaryStatus
     input_status = InputStatus
     output_status = OutputStatus
+
+    TMP_DOWNLOADED_DIR: str = settings.TMP_DOWNLOADED_DIR or ""
+    INPUTS_DIRECTORY_PREFIX: str = "inputs_"
+    TMP_TRANSCODED_DIR: str = settings.TMP_TRANSCODED_DIR or ""
+    OUTPUTS_DIRECTORY_PREFIX: str = "outputs_"
+
 
     # a unique id as gRPC request id,
     # several tasks can be points to one request_id.
@@ -128,6 +139,12 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
     # HLS or MPEG-Dash
     is_hls: bool = True
+
+    # delete local inputs files after after all outputs have been processed
+    delete_inputs: bool = True
+
+    # delete local outputs files after after all outputs have been uploaded
+    delete_outputs: bool = True
 
     # attrs that can not be empty or whitespace string
     _NO_SPACE_STRINGS = [
@@ -285,52 +302,88 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                     output_number=self.output_number
                 ))
 
-    def incr_passed_checks(self):
+    def _get_job_details_by_request_id(self) -> None or dict:
         if self.request_id is None:
-            return
-
-        job_details = self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
-            request_id=self.request_id))
+            return None
+        job_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id))
         if job_details:
-            key = CacheKeysTemplates.PASSED_CHECKS.format(
-                    request_id=self.request_id)
-            self.cache.incr(key)
-            if self.cache.get(key) == job_details['total_checks']:
+            return job_details
+
+    def _incr(self, key_template: str) -> None or int:
+        if self.request_id is None:
+            return None
+        key = getattr(CacheKeysTemplates, key_template).format(
+            request_id=self.request_id)
+        self.cache.incr(key)
+        return self.cache.get(key)
+
+    def incr_passed_checks(self):
+        job_details = self._get_job_details_by_request_id()
+        if job_details:
+            passed_checks = self._incr("PASSED_CHECKS")
+            if passed_checks == job_details['total_checks']:
                 self.save_primary_status(
                     self.primary_status.CHECKS_FINISHED
                 )
 
     def incr_ready_inputs(self):
-        if self.request_id is None:
-            return
-
-        job_details = self.cache.get(
-            CacheKeysTemplates.JOB_DETAILS.format(
-                request_id=self.request_id))
+        job_details = self._get_job_details_by_request_id()
         if job_details:
-            key = CacheKeysTemplates.READY_INPUTS.format(
-                    request_id=self.request_id)
-            self.cache.incr(key)
-            if self.cache.get(key) == job_details['total_inputs']:
+            ready_inputs = self._incr("READY_INPUTS")
+            if ready_inputs == job_details['total_inputs']:
                 self.save_primary_status(
                     self.primary_status.ALL_INPUTS_DOWNLOADED
                 )
 
-    def incr_ready_outputs(self):
-        if self.request_id is None:
-            return
+    def _delete_outputs(self, directory: str = None):
+        if not directory:
+            directory = self._get_outputs_root_directory_by_request_id()
 
-        job_details = self.cache.get(
-            CacheKeysTemplates.JOB_DETAILS.format(
-                request_id=self.request_id))
+        # check remove directory is safe and not remove other outputs
+        if directory and directory != self.OUTPUTS_DIRECTORY_PREFIX:
+            shutil.rmtree(
+                directory,
+                ignore_errors=False,
+                onerror=self._on_error_delete_outputs)
+
+    def _on_error_delete_outputs(self, func, path, exc_info: tuple):
+        # TODO capture error and notify developer
+        self.logger.error(f"error_delete_outputs : {path}")
+
+    def incr_ready_outputs(self):
+        job_details = self._get_job_details_by_request_id()
         if job_details:
-            key = CacheKeysTemplates.READY_OUTPUTS.format(
-                request_id=self.request_id)
-            self.cache.incr(key)
-            if self.cache.get(key) == job_details['total_outputs']:
+            ready_outputs = self._incr("READY_OUTPUTS")
+            if ready_outputs == job_details['total_outputs']:
                 self.save_primary_status(
                     self.primary_status.ALL_OUTPUTS_ARE_READY
                 )
+                if self.delete_outputs:
+                    self._delete_outputs()
+
+    def _delete_inputs(self, directory: str = None):
+        if not directory:
+            directory = self._get_inputs_root_directory_by_request_id()
+
+        # check remove directory is safe and not remove other inputs
+        if directory and directory != self.INPUTS_DIRECTORY_PREFIX:
+            shutil.rmtree(
+                directory,
+                ignore_errors=False,
+                onerror=self._on_error_delete_inputs)
+
+    def _on_error_delete_inputs(self, func, path, exc_info: tuple):
+        # TODO capture error and notify developer
+        self.logger.error(f"error_delete_inputs : {path}")
+
+    def incr_processed_outputs(self):
+        job_details = self._get_job_details_by_request_id()
+        if job_details:
+            processed_outputs = self._incr("PROCESSED_OUTPUTS")
+            if self.delete_inputs and processed_outputs == job_details['total_outputs']:
+                self._delete_inputs()
 
     def save_input_downloading_progress(self, total, current):
         if self.request_id is not None and \
@@ -376,11 +429,11 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         if self.s3_input_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_INPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         if self.s3_input_bucket is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_INPUT_BUCKET_IS_REQUIRED)
+                message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED)
 
         # check s3_input_key on s3_input_bucket
         object_details = self.s3_service.head(
@@ -388,7 +441,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             bucket_name=self.s3_input_bucket)
         if not object_details:
             raise self.raise_ignore(
-                message=ErrorMessages.INPUT_VIDEO_404_OR_403)
+                message=self.error_messages.INPUT_VIDEO_404_OR_403)
 
         return object_details
 
@@ -404,7 +457,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         if self.s3_output_bucket is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_OUTPUT_BUCKET_IS_REQUIRED)
+                message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
         # check output bucket is exist
         bucket_details = self.s3_service.head_bucket(
@@ -412,7 +465,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         if not bucket_details:
             if not self.s3_create_bucket:
                 raise self.raise_ignore(
-                    message=ErrorMessages.OUTPUT_BUCKET_404_OR_403)
+                    message=self.error_messages.OUTPUT_BUCKET_404_OR_403)
             self._create_output_bucket()
 
     def _create_output_bucket(self):
@@ -437,18 +490,18 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         if self.s3_output_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_OUTPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED)
 
         if self.s3_output_bucket is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_OUTPUT_BUCKET_IS_REQUIRED)
+                message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
         if self.s3_service.head(
                 key=self.s3_output_key,
                 bucket_name=self.s3_output_bucket):
             if self.s3_dont_replace:
                 raise self.raise_ignore(
-                    message=ErrorMessages.OUTPUT_KEY_IS_ALREADY_EXIST)
+                    message=self.error_messages.OUTPUT_KEY_IS_ALREADY_EXIST)
 
     def download_video(self):
         """download video to local input path
@@ -460,23 +513,23 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         if self.input_path is None:
             raise self.raise_ignore(
-                message=ErrorMessages.INPUT_PATH_IS_REQUIRED)
+                message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
         if self.object_details is None:
             raise self.raise_ignore(
-                message=ErrorMessages.OBJECT_DETAILS_IS_REQUIRED)
+                message=self.error_messages.OBJECT_DETAILS_IS_REQUIRED)
 
         if self.request_id is None:
             raise self.raise_ignore(
-                message=ErrorMessages.REQUEST_ID_IS_REQUIRED)
+                message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_INPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         if self.s3_input_bucket is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_INPUT_BUCKET_IS_REQUIRED)
+                message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED)
 
         # Size of the body in bytes.
         object_size = S3Service.get_object_size(self.object_details)
@@ -503,7 +556,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             # when it's 404 or 403
             if result is None:
                 raise self.raise_ignore(
-                    message=ErrorMessages.INPUT_VIDEO_404_OR_403)
+                    message=self.error_messages.INPUT_VIDEO_404_OR_403)
 
             # if it's an Exception, just raise it,
             # task decorator have autoretry_for attr for some exceptions
@@ -516,16 +569,16 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
 
         if self.input_path is None:
             raise self.raise_ignore(
-                message=ErrorMessages.INPUT_PATH_IS_REQUIRED)
+                message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
         # checking file is exist and not empty
         try:
             if os.stat(self.input_path).st_size == 0:
                 raise self.raise_ignore(
-                    message=ErrorMessages.INPUT_SIZE_CAN_NOT_BE_ZERO)
+                    message=self.error_messages.INPUT_SIZE_CAN_NOT_BE_ZERO)
         except FileNotFoundError:
             raise self.raise_ignore(
-                message=ErrorMessages.INPUT_FILE_IS_NOT_FOUND)
+                message=self.error_messages.INPUT_FILE_IS_NOT_FOUND)
 
         video = ffmpeg_streaming.input(self.input_path)
         format_instance = VideoEncodingFormats().get_format_class(
@@ -576,7 +629,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
                 # when just one of them is exist, force client to fill both of them
                 if not size or not bitrate:
                     raise self.raise_ignore(
-                        message=ErrorMessages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
+                        message=self.error_messages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
 
                 reps.append(
                     Representation(
@@ -593,15 +646,15 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
          """
         if self.directory is None:
             raise self.raise_ignore(
-                message=ErrorMessages.DIRECTORY_IS_REQUIRED)
+                message=self.error_messages.DIRECTORY_IS_REQUIRED)
 
         if self.s3_output_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_OUTPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED)
 
         if self.s3_output_bucket is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_OUTPUT_BUCKET_IS_REQUIRED)
+                message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
         self.s3_service.upload_directory(
             self.s3_output_key,
@@ -623,7 +676,7 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
         """
         if self.output_path is None and self.s3_output_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.OUTPUT_PATH_OR_S3_OUTPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.OUTPUT_PATH_OR_S3_OUTPUT_KEY_IS_REQUIRED)
 
         if self.output_path:
             self.directory = self.output_path.rpartition('/')[0]
@@ -632,39 +685,108 @@ class VideoStreamingTask(BaseCeleryTask, ABC):
             output_filename = self.s3_output_key.rpartition('/')[-1]
 
             self.directory = os.path.join(
-                settings.TMP_TRANSCODED_DIR,
-                str(self.request_id),
+                self._get_outputs_root_directory_by_request_id(),
                 str(self.output_number))
 
             self.output_path = os.path.join(self.directory,
                                             output_filename)
+
+    def _get_outputs_root_directory_by_request_id(self) -> None or str:
+        if self.request_id is None:
+            return None
+        return os.path.join(
+            self.TMP_TRANSCODED_DIR,
+            self.OUTPUTS_DIRECTORY_PREFIX + str(self.request_id))
+
+    def _get_inputs_root_directory_by_request_id(self) -> None or str:
+        if self.request_id is None:
+            return None
+        return os.path.join(
+            self.TMP_DOWNLOADED_DIR,
+            self.INPUTS_DIRECTORY_PREFIX + str(self.request_id))
 
     def set_input_path(self):
         """set self.input_path"""
 
         if self.request_id is None:
             raise self.raise_ignore(
-                message=ErrorMessages.REQUEST_ID_IS_REQUIRED)
+                message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
             raise self.raise_ignore(
-                message=ErrorMessages.S3_INPUT_KEY_IS_REQUIRED)
+                message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         input_filename = self.s3_input_key.rpartition('/')[-1]
 
         # destination path of input on local machine
         self.input_path = os.path.join(
-            settings.TMP_DOWNLOADED_DIR,
-            self.request_id,
+            self._get_inputs_root_directory_by_request_id(),
             str(self.input_number),
             input_filename)
+
+    def call_webhook(self, url: str = None) -> None or True:
+        if not url or self.request_id:
+            return None
+        job_details = self._get_job_details_by_request_id()
+        if job_details is None:
+            return None
+
+        http_method = 'POST'
+        headers = {'Content-Type': 'application/json'}
+        encoded_body = json.dumps({
+            "request_id": self.request_id,
+            "reference_id": job_details["reference_id"]
+        })
+        http_pool = urllib3.PoolManager()
+        try:
+            http_response = http_pool.request(
+                http_method,
+                url,
+                headers=headers,
+                body=encoded_body)
+        except Exception as e:
+            # urllib3.exceptions.NewConnectionError
+            raise self.retry(exc=e)
+
+        self.logger.info(
+            f'http status: {http_response.status}, url: {url}')
+
+        # check the HTTP status code to raise ignore/retry
+        is_delivered = self._check_http_status(http_response)
+        return is_delivered
+
+    def _check_http_status(self, http_response) -> True or None:
+        if 200 <= http_response.status < 300:
+            # success
+            return True
+        if 300 <= http_response.status < 400:
+            raise self.raise_ignore(
+                message=self.error_messages.WEBHOOK_URL_MUST_NOT_BE_REDIRECTED
+            )
+        if 400 <= http_response.status < 500:
+            raise self.raise_ignore(
+                message=self.error_messages.WEBHOOK_HTTP_FAILED.format(
+                    status=http_response.status,
+                    reason=http_response.reason,
+                    request_id=self.request_id
+                )
+            )
+        if 500 <= http_response.status:
+            raise self.retry(
+                exc=Exception(
+                    self.error_messages.WEBHOOK_HTTP_FAILED.format(
+                        status=http_response.status,
+                        reason=http_response.reason,
+                        request_id=self.request_id
+                    )))
 
 
 class ChordCallbackMixin:
 
     def __call__(self, *args, **kwargs):
+        print(self.request.args)
         """
-        args=[[None, ["foo", False], dict(key1=value1, key2=value2), arg1, arg2]
+        args=[[None, dict(key1=value1), dict(key2=value2), None,...], arg1, arg2]
         kwargs=dict(key3=value3, key4=value4)
         ->
         args=[arg1 ,arg2]
@@ -682,8 +804,9 @@ class ChordCallbackMixin:
 class ChainCallbackMixin:
 
     def __call__(self, *args, **kwargs):
+        print(self.request.args)
         """
-        args=[dict(key1=value1, key2=value2), arg1, arg2]
+        args=[None, dict(key1=value1, key2=value2), None, arg1, arg2]
         kwargs=dict(key3=value3, key4=value4)
         ->
         args=[arg1 ,arg2]
@@ -712,6 +835,12 @@ class CreatePlaylistTask(
 
 class UploadDirectoryTask(
         ChainCallbackMixin,
+        VideoStreamingTask,
+        ABC):
+    pass
+
+
+class CallWebhookTask(
         VideoStreamingTask,
         ABC):
     pass

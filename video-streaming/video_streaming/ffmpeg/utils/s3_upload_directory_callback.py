@@ -1,7 +1,5 @@
-import json
 import sys
 from celery import Task
-from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 
 
 class S3UploadDirectoryCallback(object):

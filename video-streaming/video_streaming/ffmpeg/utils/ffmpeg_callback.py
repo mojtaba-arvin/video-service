@@ -23,7 +23,7 @@ class FfmpegCallback(object):
     def progress(self, ffmpeg, duration, time_, time_left, process):
 
         if self.first_chunk:
-            # save input status using output_number and request_id
+            # save output status using output_number and request_id
             self.task.save_output_status(
                 self.task.output_status.PROCESSING)
             self.first_chunk = False
