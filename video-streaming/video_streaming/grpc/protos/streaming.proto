@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 service Streaming{
-  rpc video_processor(JobRequest) returns (JobResponse) {}
+  rpc create_job(JobRequest) returns (JobResponse) {}
   rpc get_results(ResultRequest) returns (ResultResponse) {}
 }
 
