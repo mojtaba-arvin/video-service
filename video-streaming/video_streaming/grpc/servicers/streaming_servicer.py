@@ -1,6 +1,7 @@
 import json
 import uuid
 from celery import chord, chain, group, result as celery_result
+from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
 from video_streaming.core.services import S3Service
@@ -8,15 +9,25 @@ from video_streaming.ffmpeg import tasks
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.exceptions import \
     DuplicateOutputLocationsException
-from video_streaming.grpc.mixins import BaseGrpcServiceMixin
-from video_streaming.grpc.protos import streaming_pb2_grpc
+from video_streaming.grpc.protos import streaming_pb2_grpc, \
+    streaming_pb2
+from .mixins import CreateJobMixin, GetResultsMixin
 
 
 class Streaming(
-        BaseGrpcServiceMixin,
+        GetResultsMixin,
+        CreateJobMixin,
         streaming_pb2_grpc.StreamingServicer):
 
-    def video_processor(self, request, context):
+    cache = RedisCache()
+    pb2 = streaming_pb2
+
+    def _add_to_server(self, server):
+        streaming_pb2_grpc.add_StreamingServicer_to_server(
+            self.__class__(),
+            server)
+
+    def create_job(self, request, context):
         """
 
         1. create empty tasks lists for the workflow

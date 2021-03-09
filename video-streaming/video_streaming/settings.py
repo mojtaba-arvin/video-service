@@ -35,7 +35,7 @@ AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.ffmpeg'
 ]
 
-BASE_TASK_CLASS = 'video_streaming.core.celery:BaseCeleryTask'
+BASE_TASK_CLASS = 'video_streaming.core.tasks:BaseTask'
 TASK_RETRY_BACKOFF_MAX = env_config.get(
     "TASK_RETRY_BACKOFF_MAX",
     default=10,
