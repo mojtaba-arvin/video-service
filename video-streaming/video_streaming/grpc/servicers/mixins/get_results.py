@@ -5,8 +5,8 @@ from video_streaming.grpc.protos import streaming_pb2
 
 class GetResultsMixin(object):
 
-    cache = RedisCache()
-    pb2 = streaming_pb2
+    cache: RedisCache
+    pb2: streaming_pb2
 
     def _outputs(self, request_id, total_outputs):
         outputs: list[streaming_pb2.OutputProgress] = []
@@ -49,3 +49,39 @@ class GetResultsMixin(object):
                             input_status),
                         **progress))
         return inputs
+
+    def _get_result(self,
+                    request_id: str
+                    ) -> None or streaming_pb2.ResultDetails:
+        primary_status: str = self.cache.get(
+            CacheKeysTemplates.PRIMARY_STATUS.format(
+                request_id=request_id), decode=False)
+        job_details: dict = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=request_id))
+        if primary_status and job_details:
+            status = self.pb2.PrimaryStatus.Value(
+                primary_status)
+            reference_id: str = job_details['reference_id']
+            total_checks: int = job_details['total_checks']
+            total_inputs: int = job_details['total_inputs']
+            total_outputs: int = job_details['total_outputs']
+            ready_outputs: int = self.cache.get(
+                CacheKeysTemplates.READY_OUTPUTS.format(
+                    request_id=request_id)) or 0
+            checks = self.pb2.Checks(
+                total=total_checks,
+                passed=self.cache.get(
+                    CacheKeysTemplates.PASSED_CHECKS.format(
+                        request_id=request_id)) or 0)
+            result_details = dict(
+                request_id=request_id,
+                reference_id=reference_id,
+                status=status,
+                total_outputs=total_outputs,
+                ready_outputs=ready_outputs,
+                checks=checks,
+                inputs=self._inputs(request_id, total_inputs),
+                outputs=self._outputs(request_id, total_outputs)
+            )
+            return self.pb2.ResultDetails(**result_details)

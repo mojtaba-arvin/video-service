@@ -3,6 +3,8 @@ syntax = "proto3";
 service Streaming{
   rpc create_job(JobRequest) returns (JobResponse) {}
   rpc get_results(ResultRequest) returns (ResultResponse) {}
+  rpc revoke_jobs(JobsRevokeRequest) returns (JobsRevokeResponse) {}
+  rpc revoke_job_outputs(JobOutputsRevokeRequest) returns (JobOutputsRevokeResponse) {}
 }
 
 message JobRequest {
@@ -139,7 +141,7 @@ enum PrimaryStatus {
     ALL_INPUTS_DOWNLOADED = 5;
 
     QUEUING_OUTPUTS = 6;
-    OUTPUTS_PROGRESSING= 7;
+    OUTPUTS_PROGRESSING = 7;
     ALL_OUTPUTS_ARE_READY = 8;
 }
 message ResultDetails {
@@ -180,4 +182,29 @@ message InputProgress {
     InputStatus status = 2;
     int64 total = 3;
     int64 current = 4;
+}
+
+
+message JobsRevokeRequest {
+  repeated string tracking_ids = 1;
+}
+message JobsRevokeResponse{
+  repeated RevokeDetails results = 1;
+}
+message RevokeDetails{
+    string request_id = 1;
+    string reference_id = 2;
+    PrimaryStatus status = 3;
+}
+
+
+message JobOutputsRevokeRequest{
+  string tracking_id = 1;
+  repeated int32 output_numbers = 2;
+}
+message JobOutputsRevokeResponse{
+    string request_id = 1;
+    string reference_id = 2;
+    PrimaryStatus status = 3;
+    repeated int32 revoked_outputs = 4;
 }

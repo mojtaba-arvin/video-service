@@ -1,9 +1,8 @@
 import json
 import uuid
-from celery import chord, chain, group, result as celery_result
+from celery import chain
 from video_streaming.cache import RedisCache
-from video_streaming.core.constants import CacheKeysTemplates, \
-    PrimaryStatus
+from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg import tasks
 from video_streaming.grpc import exceptions
@@ -11,10 +10,11 @@ from video_streaming.grpc.exceptions import \
     DuplicateOutputLocationsException
 from video_streaming.grpc.protos import streaming_pb2_grpc, \
     streaming_pb2
-from .mixins import CreateJobMixin, GetResultsMixin
+from .mixins import CreateJobMixin, GetResultsMixin, RevokeJobsMixin
 
 
 class Streaming(
+        RevokeJobsMixin,
         GetResultsMixin,
         CreateJobMixin,
         streaming_pb2_grpc.StreamingServicer):
@@ -167,56 +167,11 @@ class Streaming(
 
         # 11. initial processing tasks by output formats
         # and chains them with upload task
-        for output_number, output in enumerate(request.outputs):
-
-            encode_format, video_codec, audio_codec = self._get_format(
-                output)
-            quality_names: list[str] = self._parse_quality_names(
-                output.options.quality_names)
-            custom_qualities: list[dict] = self.__class__._parse_custom_qualities(
-                output.options.custom_qualities)
-
-            third_level_tasks.append(
-                # chain of create playlist and upload_directory
-                chain(
-                    # input_path will come from second level
-                    tasks.create_playlist.s(
-                        s3_output_key=output.s3.key,
-                        fragmented=output.options.fmp4,  # just for HLS type
-                        encode_format=encode_format,
-                        video_codec=video_codec,
-                        audio_codec=audio_codec,
-                        quality_names=quality_names,
-                        custom_qualities=custom_qualities,
-                        request_id=request_id,
-                        output_number=output_number,
-                        is_hls=output.protocol == self.pb2.Protocol.HLS
-                    ),
-                    # directory will come from create playlist task
-                    tasks.upload_directory.s(
-                        s3_output_key=output.s3.key,
-                        s3_output_bucket=output.s3.bucket,
-                        request_id=request_id,
-                        output_number=output_number
-                    )
-                )
-            )
-
-        # TODO delete local files on failure callback
-
-        ordered_levels = [
-            # chord 1
-            first_level_tasks,
-            # callback of chord 1
-            second_level_tasks,
-
-            # chord 2
-            third_level_tasks,
-            # callback of chard 2
-            fourth_level_tasks
-        ]
-
-        job = chain(*[group(*level_tasks) for level_tasks in ordered_levels])
+        third_level_tasks = self._append_tasks(
+            request_id=request_id,
+            outputs=request.outputs,
+            append_to=third_level_tasks
+        )
 
         reference_id: str = request.reference_id
         job_details = dict(
@@ -234,70 +189,42 @@ class Streaming(
             ),
             json.dumps(job_details))
 
-        # set first primary status as QUEUING_CHECKS
-        self.cache.set(
-            CacheKeysTemplates.PRIMARY_STATUS.format(
-                request_id=request_id),
-            PrimaryStatus.QUEUING_CHECKS
-        )
+        ordered_levels = [
+            # chord 1
+            first_level_tasks,
+            # callback of chord 1
+            second_level_tasks,
+
+            # chord 2
+            third_level_tasks,
+            # callback of chard 2
+            fourth_level_tasks
+        ]
 
         # 12. apply tasks
-        result = job.apply_async()
-
-        # check last level has one task or more to detect result type
-        if len(ordered_levels[-1]) > 1:
-            result: celery_result.GroupResult
-            result.save()
-
-        # saving celery result id of the request
-        self.cache.set(
-            CacheKeysTemplates.REQUEST_RESULT_ID.format(
-                request_id=request_id
-            ),
-            str(result.id)
-        )
-
-        response = self.pb2.JobResponse()
-        response.tracking_id = request_id
-        return response
+        self._apply_job(request_id, ordered_levels)
+        return self._job_response(request_id)
 
     def get_results(self, request, context):
         results: list[Streaming.pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
-            # TODO set flag on proto to add INPUT_FFPROBE_DATA to the result
-            primary_status: str = self.cache.get(
-                CacheKeysTemplates.PRIMARY_STATUS.format(
-                    request_id=request_id), decode=False)
-            job_details: dict = self.cache.get(
-                CacheKeysTemplates.JOB_DETAILS.format(
-                    request_id=request_id))
-            if primary_status and job_details:
-                status = self.pb2.PrimaryStatus.Value(
-                    primary_status)
-                reference_id: str = job_details['reference_id']
-                total_checks: int = job_details['total_checks']
-                total_inputs: int = job_details['total_inputs']
-                total_outputs: int = job_details['total_outputs']
-                ready_outputs: int = self.cache.get(
-                        CacheKeysTemplates.READY_OUTPUTS.format(
-                            request_id=request_id)) or 0
-                checks = self.pb2.Checks(
-                    total=total_checks,
-                    passed=self.cache.get(
-                        CacheKeysTemplates.PASSED_CHECKS.format(
-                            request_id=request_id)) or 0)
-                result_details = dict(
-                    request_id=request_id,
-                    reference_id=reference_id,
-                    status=status,
-                    total_outputs=total_outputs,
-                    ready_outputs=ready_outputs,
-                    checks=checks,
-                    inputs=self._inputs(request_id, total_inputs),
-                    outputs=self._outputs(request_id, total_outputs)
-                )
-                results.append(self.pb2.ResultDetails(**result_details))
+            result = self._get_result(request_id)
+            if result:
+                results.append(result)
         response = self.pb2.ResultResponse(results=results)
         return response
 
-    # TODO add revoke method
+    def revoke_jobs(self, request, context):
+        results: list[Streaming.pb2.RevokeDetails] = []
+        for request_id in request.tracking_ids:
+            result = self._revoke_job(request_id)
+            if result:
+                results.append(result)
+        response = self.pb2.JobsRevokeResponse(results=results)
+        return response
+
+    # TODO revoke some outputs of a job
+
+
+
+
