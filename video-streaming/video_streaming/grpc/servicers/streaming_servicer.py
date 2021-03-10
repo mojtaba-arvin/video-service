@@ -1,6 +1,6 @@
 import json
 import uuid
-from celery import chain
+from celery import chain, group
 from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.services import S3Service
@@ -38,8 +38,7 @@ class Streaming(
         5. check outputs list is empty
         6. check output keys are not empty and bucket names are
             compatible with s3
-        7. check if output keys are exist can be replace as first level
-            tasks
+        7. check if output keys are exist to prevent upload risk
         8. check duplicate output locations in current request
         9. check unique output buckets are exist on the cloud or create
             them if has one create flag ,as first level tasks
@@ -100,6 +99,7 @@ class Streaming(
         # are compatible with s3
         output_buckets: list[str] = []
         output_locations: list[tuple] = []
+        checking_upload_risk_tasks: list = []
         for output in request.outputs:
 
             # check the output key is filled
@@ -118,16 +118,24 @@ class Streaming(
             # to use for checking duplicate output locations
             output_locations.append((output.s3.bucket, output.s3.key))
 
-            # 7. check if output keys are exist can be replace
-            # as first level tasks
-            first_level_tasks.append(
-                tasks.check_output_key.s(
-                    s3_output_key=output.s3.key,
-                    s3_output_bucket=output.s3.bucket,
-                    s3_dont_replace=output.s3.dont_replace,
-                    request_id=request_id
+            if output.s3.dont_replace:
+                # 7. check if output keys are exist can be replace
+                # checking_upload_risk_tasks.append(
+                #     tasks.check_output_key.s(
+                #         s3_output_key=output.s3.key,
+                #         s3_output_bucket=output.s3.bucket,
+                #         s3_dont_replace=output.s3.dont_replace,
+                #         request_id=request_id
+                #     )
+                # )
+                first_level_tasks.append(
+                    tasks.check_output_key.s(
+                        s3_output_key=output.s3.key,
+                        s3_output_bucket=output.s3.bucket,
+                        s3_dont_replace=output.s3.dont_replace,
+                        request_id=request_id
+                    )
                 )
-            )
 
         # 8. check duplicate output locations in current request
         if len(output_locations) != len(set(output_locations)):
@@ -136,14 +144,32 @@ class Streaming(
         # 9. check unique output buckets are exist on the cloud or
         # create them if has one create flag ,as first level tasks
         unique_output_buckets = list(set(output_buckets))
+        # checking_output_buckets_tasks: list = []
         for bucket in unique_output_buckets:
+            # checking_output_buckets_tasks.append(
+            #     tasks.check_output_bucket.s(
+            #         s3_output_bucket=bucket,
+            #         s3_create_bucket=self.__class__._has_create_flag(
+            #             bucket, request.outputs),
+            #         request_id=request_id
+            #     )
+            # )
             first_level_tasks.append(
                 tasks.check_output_bucket.s(
                     s3_output_bucket=bucket,
                     s3_create_bucket=self.__class__._has_create_flag(
                         bucket, request.outputs),
                     request_id=request_id
-                ))
+                )
+            )
+
+        # # check upload risk after checking buckets are exist
+        # first_level_tasks.append(
+        #     chain(
+        #         group(*checking_output_buckets_tasks),
+        #         group(*checking_upload_risk_tasks)
+        #     )
+        # )
 
         # 10. add second level tasks, e.g. download input
         second_level_tasks.append(
@@ -224,7 +250,3 @@ class Streaming(
         return response
 
     # TODO revoke some outputs of a job
-
-
-
-

@@ -16,9 +16,11 @@ class DownloadInputMixin(object):
     input_path: str
     object_details: str
 
+    failed_reason: BaseStreamingTask.failed_reason
     error_messages: BaseStreamingTask.error_messages
     s3_service: BaseStreamingTask.s3_service
     get_inputs_root_directory_by_request_id: BaseStreamingTask.get_inputs_root_directory_by_request_id
+    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
 
     raise_ignore: BaseTask.raise_ignore
 
@@ -26,10 +28,14 @@ class DownloadInputMixin(object):
         """set self.input_path"""
 
         if self.request_id is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
@@ -41,31 +47,43 @@ class DownloadInputMixin(object):
             str(self.input_number),
             input_filename)
 
-    def download_video(self):
+    def download_video(self) -> bool:
         """download video to local input path
 
         1. get video size
         2. initial callback of downloader
         3. download video from s3 cloud
+
+        returns False the input video is 404 or 403
         """
 
         if self.input_path is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
         if self.object_details is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.OBJECT_DETAILS_IS_REQUIRED)
 
         if self.request_id is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         if self.s3_input_bucket is None:
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED)
 
@@ -88,14 +106,6 @@ class DownloadInputMixin(object):
         )
 
         # check result same as destination_path
-        if result != self.input_path:
-
-            # the _exception_handler of S3Service returns None
-            # when it's 404 or 403
-            if result is None:
-                raise self.raise_ignore(
-                    message=self.error_messages.INPUT_VIDEO_404_OR_403)
-
-            # if it's an Exception, just raise it,
-            # task decorator have autoretry_for attr for some exceptions
-            raise result
+        # the _exception_handler of S3Service returns None
+        # when it's 404 or 403
+        return result == self.input_path

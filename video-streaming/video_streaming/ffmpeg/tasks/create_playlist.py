@@ -5,17 +5,32 @@ from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
-from .mixins import CreatePlaylistMixin, BaseOutputMixin
+from .mixins import CreatePlaylistMixin
 
 
 class CreatePlaylistTask(
         ChainCallbackMixin,
         CreatePlaylistMixin,
-        BaseOutputMixin,
         BaseStreamingTask,
         ABC
         ):
-    pass
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+
+        self.save_output_status(self.output_status.OUTPUT_FAILED)
+
+        # incr failed_outputs and check all outputs are finished and
+        # set primary_status to 'FAILED' and delete local outputs files
+        # when delete_outputs flag is True
+        self.incr_failed_outputs()
+
+        # notice : failed reason will only be set if there is no reason
+        #  before.
+
+        # set common reason for the task after many retries or etc.
+        self.save_job_failed_reason(
+            self.failed_reason.FAILED_CREATE_PLAYLIST)
+        return super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
 @celery_app.task(name="create_playlist",
@@ -70,7 +85,14 @@ def create_playlist(self,
             async_run=self.async_run)
     except Exception as e:
         # TODO handle possible Runtime Errors
-        raise e
+
+        # notice : video processing has cost to retry
+        raise self.retry(
+            exc=e,
+            max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
+
+    # checking the force stop before continuing
+    self.check_to_force_stop()
 
     self.save_output_status(self.output_status.PROCESSING_FINISHED)
 

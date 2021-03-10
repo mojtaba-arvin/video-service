@@ -13,7 +13,13 @@ class AnalyzeInputTask(
         BaseStreamingTask,
         ABC
         ):
-    pass
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        self.save_primary_status(self.primary_status.FAILED)
+        self.save_input_status(self.input_status.INPUT_FAILED)
+        self.save_job_failed_reason(
+            self.failed_reason.FAILED_ANALYZE_INPUT)
+        return super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
 @celery_app.task(name="analyze_input",
@@ -34,8 +40,20 @@ def analyze_input(self,
 
     self._initial_params()
 
-    # TODO : change status
+    # save input status using input_number and request_id
+    self.save_input_status(self.input_status.ANALYZING)
 
-    self.analyze_input()
+    try:
+        self.analyze_input()
+    except RuntimeError as e:
+        # TODO capture error and notify developer
+        raise self.retry(exc=e)
+    except Exception as e:
+        # FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'
+        # TODO capture error and notify developer
+        raise self.retry(exc=e)
+
+    # save input status using input_number and request_id
+    self.save_input_status(self.input_status.ANALYZING_FINISHED)
 
     return dict(input_path=self.input_path)

@@ -22,6 +22,12 @@ class FfmpegCallback(object):
 
     def progress(self, ffmpeg, duration, time_, time_left, process):
 
+        if self.task.is_forced_to_stop():
+            process.kill()
+            # raise inside callback, is just to finish processing,
+            # so, will write 'ffmpeg executed command successfully' log
+            self.task.raise_revoked()
+
         if self.first_chunk:
             # save output status using output_number and request_id
             self.task.save_output_status(

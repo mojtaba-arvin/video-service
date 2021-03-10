@@ -14,7 +14,19 @@ class DownloadInputTask(
         BaseStreamingTask,
         ABC
         ):
-    pass
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        self.save_primary_status(self.primary_status.FAILED)
+        self.save_input_status(self.input_status.INPUT_FAILED)
+
+        # notice : failed reason will only be set if there is no reason
+        #  before.
+
+        # set common reason for the task, it's can be connection error
+        # after many retries or etc.
+        self.save_job_failed_reason(
+            self.failed_reason.DOWNLOADING_FAILED)
+        return super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
 @celery_app.task(name="download_input",
@@ -50,7 +62,18 @@ def download_input(self,
 
     downloaded = os.path.exists(self.input_path)
     if not downloaded:
-        self.download_video()
+        if not self.download_video():
+            # the input video is 404 or 403
+            # set primary status
+            self.save_primary_status(self.primary_status.FAILED)
+            # set input status
+            self.save_input_status(self.input_status.INPUT_FAILED)
+            # set failed reason
+            self.save_job_failed_reason(
+                self.failed_reason.INPUT_VIDEO_ON_S3_IS_404_OR_403)
+            # ignore task
+            raise self.raise_ignore(
+                message=self.error_messages.INPUT_VIDEO_404_OR_403)
 
     # save input status using input_number and request_id
     self.save_input_status(self.input_status.DOWNLOADING_FINISHED)

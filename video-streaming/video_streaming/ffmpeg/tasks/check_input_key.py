@@ -11,7 +11,18 @@ class CheckInputKeyTask(
         BaseStreamingTask,
         ABC
         ):
-    pass
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        self.save_primary_status(self.primary_status.FAILED)
+
+        # notice : failed reason will only be set if there is no reason
+        #  before.
+
+        # set common reason for the task, it's can be connection error
+        # after many retries or etc.
+        self.save_job_failed_reason(
+            self.failed_reason.FAILED_INPUT_KEY_CHECKING)
+        return super().on_failure(exc, task_id, args, kwargs, einfo)
 
 
 @celery_app.task(name="check_input_key",
@@ -32,8 +43,16 @@ def check_input_key(self,
     self._initial_params()
     self.save_primary_status(self.primary_status.CHECKING)
 
-    # check s3_input_key on s3_input_bucket by head request
-    object_details = self.check_input_video()
+    # get object details by s3_input_key on s3_input_bucket
+    object_details = self.get_object_details()
+
+    # object_details is None for 404 or 403 reason
+    if not object_details:
+        self.save_primary_status(self.primary_status.FAILED)
+        self.save_job_failed_reason(
+            self.failed_reason.INPUT_VIDEO_ON_S3_IS_404_OR_403)
+        raise self.raise_ignore(
+            message=self.error_messages.INPUT_VIDEO_404_OR_403)
 
     self.incr_passed_checks()
 

@@ -2,9 +2,11 @@ import json
 import os
 import shutil
 from abc import ABC
+from celery import states
 from celery.utils.log import get_task_logger
 from video_streaming import settings
 from video_streaming.cache import RedisCache
+from video_streaming.core.constants.status import FailedReason
 from video_streaming.core.tasks import BaseTask
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.core.services import S3Service
@@ -26,6 +28,7 @@ class BaseStreamingTask(BaseTask, ABC):
     primary_status = PrimaryStatus
     input_status = InputStatus
     output_status = OutputStatus
+    failed_reason = FailedReason
 
     TMP_DOWNLOADED_DIR: str = settings.TMP_DOWNLOADED_DIR or ""
     INPUTS_DIRECTORY_PREFIX: str = "inputs_"
@@ -105,10 +108,10 @@ class BaseStreamingTask(BaseTask, ABC):
     # HLS or MPEG-Dash
     is_hls: bool = True
 
-    # delete local inputs after after all outputs have been processed
+    # delete local inputs after all outputs have been processed
     delete_inputs: bool = True
 
-    # delete local outputs after after all outputs have been uploaded
+    # delete local outputs after all outputs have been uploaded
     delete_outputs: bool = True
 
     # attrs that can not be empty or whitespace string
@@ -127,7 +130,7 @@ class BaseStreamingTask(BaseTask, ABC):
         'directory'
     ]
 
-    def _initial_params(self):
+    def _initial_params(self, callback: callable = None):
         self.logger.info(
             'Executing task id {0.id},'
             ' args: {0.args!r} kwargs: {0.kwargs!r}'.
@@ -151,12 +154,17 @@ class BaseStreamingTask(BaseTask, ABC):
 
             setattr(self, name, value)
 
+        if not callable(callback):
+            callback = self.check_to_force_stop
+
+        callback()
+
     def save_primary_status(self, status_name):
         """
             1. save as celery task status
             2. add to celery logger
-            3. save primary status on cache when request_id
-            and JOB_DETAILS has been set
+            3. save primary status on cache when request_id and
+            JOB_DETAILS has been set and current status is not 'FAILED'
         """
 
         # save as celery task status
@@ -181,11 +189,27 @@ class BaseStreamingTask(BaseTask, ABC):
             # JOB_DETAILS has been not set
             return None
 
-        self.cache.set(
+        # to prevent set any status after it was set to 'FAILED' or 'REVOKED'
+        if self.can_set_status():
+            self.cache.set(
+                CacheKeysTemplates.PRIMARY_STATUS.format(
+                    request_id=self.request_id),
+                status_name
+            )
+
+    def can_set_status(self) -> None or bool:
+        """to check current primary status of job is
+         in 'FAILED' and 'REVOKED'
+        """
+        if self.request_id is None:
+            return None
+        current_status = self.cache.get(
             CacheKeysTemplates.PRIMARY_STATUS.format(
-                request_id=self.request_id),
-            status_name
-        )
+                request_id=self.request_id), decode=False)
+        return current_status not in [
+            self.primary_status.FAILED,
+            self.primary_status.REVOKED
+        ]
 
     def get_job_details_by_request_id(self) -> None or dict:
         if self.request_id is None:
@@ -218,6 +242,7 @@ class BaseStreamingTask(BaseTask, ABC):
     def on_error_delete_inputs(self, func, path, exc_info: tuple):
         # TODO capture error and notify developer
         self.logger.error(f"error_delete_inputs : {path}")
+        self.logger.error(exc_info)
 
     def outputs_remover(self, directory: str = None):
         if not directory:
@@ -233,6 +258,7 @@ class BaseStreamingTask(BaseTask, ABC):
     def on_error_delete_outputs(self, func, path, exc_info: tuple):
         # TODO capture error and notify developer
         self.logger.error(f"error_delete_outputs : {path}")
+        self.logger.error(exc_info)
 
     def save_input_downloading_progress(self, total, current):
         if self.request_id is not None and \
@@ -277,3 +303,63 @@ class BaseStreamingTask(BaseTask, ABC):
         return os.path.join(
             self.TMP_TRANSCODED_DIR,
             self.OUTPUTS_DIRECTORY_PREFIX + str(self.request_id))
+
+    def check_to_force_stop(
+            self, delete_inputs=True, delete_outputs=True):
+        if self.is_forced_to_stop():
+            if delete_inputs:
+                self.inputs_remover()
+            if delete_outputs:
+                self.outputs_remover()
+            self.save_primary_status(self.primary_status.REVOKED)
+            self.raise_revoked()
+
+    def is_forced_to_stop(self) -> None or bool:
+        if self.request_id is None:
+            return None
+        force_stop = self.cache.get(
+            CacheKeysTemplates.FORCE_STOP_REQUEST.format(
+                request_id=self.request_id))
+        return force_stop
+
+    def raise_revoked(self):
+        raise self.raise_ignore(
+            message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
+            state=states.REVOKED
+        )
+
+    def save_job_failed_reason(self, reason):
+        if not reason:
+            return
+
+        # add to celery logger
+        self.logger.info(f"failed reason: {reason}")
+
+        # save primary status on cache when request_id
+        # and JOB_DETAILS has been set
+        if self.request_id is None:
+            # request_id has been not set
+            return
+
+        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=self.request_id)):
+            # JOB_DETAILS has been not set
+            return None
+
+        # check already has failed reason, to prevent rewrite reason
+        if not self.has_already_failed_reason():
+            self.cache.set(
+                CacheKeysTemplates.FAILED_REASON.format(
+                    request_id=self.request_id),
+                reason
+            )
+
+    def has_already_failed_reason(self) -> None or bool:
+        """to check already has failed reason
+        """
+        if self.request_id is None:
+            return None
+        reason = self.cache.get(
+            CacheKeysTemplates.FAILED_REASON.format(
+                request_id=self.request_id), decode=False)
+        return reason is not None

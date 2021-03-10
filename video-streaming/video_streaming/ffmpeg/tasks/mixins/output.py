@@ -44,12 +44,15 @@ class BaseOutputMixin(object):
             # JOB_DETAILS has been not set
             return None
 
-        self.cache.set(
-            CacheKeysTemplates.OUTPUT_STATUS.format(
-                request_id=self.request_id,
-                output_number=self.output_number),
-            status_name
-        )
+        # to prevent set output status after it was set to
+        # in 'OUTPUT_FAILED' and 'OUTPUT_REVOKED'
+        if self.can_set_output_status():
+            self.cache.set(
+                CacheKeysTemplates.OUTPUT_STATUS.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number),
+                status_name
+            )
 
         # check to delete unnecessary data
         if status_name in [
@@ -61,21 +64,93 @@ class BaseOutputMixin(object):
                     output_number=self.output_number
                 ))
 
-    def incr_processed_outputs(self):
+    def can_set_output_status(self) -> None or bool:
+        """to check output current status of job is not in
+         'OUTPUT_FAILED', 'OUTPUT_REVOKED'
+        """
+        if self.request_id is None:
+            return None
+        if self.output_number is None:
+            return None
+
+        output_current_status = self.cache.get(
+            CacheKeysTemplates.OUTPUT_STATUS.format(
+                request_id=self.request_id,
+                output_number=self.output_number), decode=False)
+        return output_current_status not in [
+            self.output_status.OUTPUT_REVOKED,
+            self.output_status.OUTPUT_FAILED]
+
+    def incr_processed_outputs(self, incr_callback: callable = None):
         job_details = self.get_job_details_by_request_id()
         if job_details:
             processed_outputs = self.incr("PROCESSED_OUTPUTS")
-            if self.delete_inputs and processed_outputs == job_details['total_outputs']:
-                self.inputs_remover()
+
+            # do after incr processed_outputs
+            if not callable(incr_callback):
+                incr_callback = self.after_incr_processed_outputs
+            incr_callback(processed_outputs, job_details['total_outputs'])
+
+    def incr_failed_outputs(self):
+        job_details = self.get_job_details_by_request_id()
+        if job_details:
+            self.incr("FAILED_OUTPUTS")
+            self.check_all_outputs_are_finished()
 
     def incr_ready_outputs(self):
         job_details = self.get_job_details_by_request_id()
         if job_details:
-            ready_outputs = self.incr("READY_OUTPUTS")
-            if ready_outputs == job_details['total_outputs']:
-                self.save_primary_status(
-                    self.primary_status.ALL_OUTPUTS_ARE_READY
-                )
-                if self.delete_outputs:
-                    self.outputs_remover()
+            self.incr("READY_OUTPUTS")
+            self.check_all_outputs_are_finished()
 
+    def outputs_finished(self):
+        """determine all outputs are finished"""
+        job_details: dict = self.get_job_details_by_request_id()
+        if job_details:
+            total_outputs: int = job_details['total_outputs']
+            ready_outputs: int = self.cache.get(
+                CacheKeysTemplates.READY_OUTPUTS.format(
+                    request_id=self.request_id)) or 0
+            revoked_outputs: int = self.cache.get(
+                CacheKeysTemplates.REVOKED_OUTPUTS.format(
+                    request_id=self.request_id)) or 0
+            failed_outputs: int = self.cache.get(
+                CacheKeysTemplates.FAILED_OUTPUTS.format(
+                    request_id=self.request_id)) or 0
+
+            return total_outputs == (ready_outputs + revoked_outputs + failed_outputs)
+
+    def after_incr_processed_outputs(
+            self,
+            processed_outputs: int,
+            total_outputs: int):
+        """after incr processed outputs, check to safe delete inputs"""
+
+        revoked_outputs: int = self.cache.get(
+            CacheKeysTemplates.REVOKED_OUTPUTS.format(
+                request_id=self.request_id)) or 0
+        failed_outputs: int = self.cache.get(
+            CacheKeysTemplates.FAILED_OUTPUTS.format(
+                request_id=self.request_id)) or 0
+
+        # when delete_inputs flag is True,
+        # check all videos processed to no need for inputs anymore
+        if self.delete_inputs and \
+            total_outputs == (
+                processed_outputs +
+                revoked_outputs +
+                failed_outputs):
+            # delete all local inputs
+            self.inputs_remover()
+
+    def check_all_outputs_are_finished(self):
+        """
+            1. check all outputs are finished
+            2. set primary status to 'FINISHED'
+            3. remove local outputs files if delete_outputs flag is True
+        """
+        # calculate that all outputs are finished
+        if self.outputs_finished():
+            self.save_primary_status(self.primary_status.FINISHED)
+            if self.delete_outputs:
+                self.outputs_remover()

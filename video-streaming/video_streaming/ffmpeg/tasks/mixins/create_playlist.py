@@ -1,14 +1,16 @@
 import os
 import ffmpeg_streaming
+from celery import Task
 from ffmpeg_streaming import Representation, Size, Bitrate
 from video_streaming import settings
 from video_streaming.core.tasks import BaseTask
 from video_streaming.ffmpeg.constants import Resolutions, \
     VideoEncodingFormats
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
+from .output import BaseOutputMixin
 
 
-class CreatePlaylistMixin(object):
+class CreatePlaylistMixin(BaseOutputMixin):
     directory: str
     output_path: str
     s3_output_key: str
@@ -23,10 +25,14 @@ class CreatePlaylistMixin(object):
     custom_qualities: list[dict]
     request_id: str
 
+    failed_reason: BaseStreamingTask.failed_reason
     error_messages: BaseStreamingTask.error_messages
     get_outputs_root_directory_by_request_id: BaseStreamingTask.get_outputs_root_directory_by_request_id
+    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
 
     raise_ignore: BaseTask.raise_ignore
+
+    retry: Task.retry
 
     def initial_protocol(self):
         """build HLS or MPEG ffmpeg command
@@ -34,15 +40,31 @@ class CreatePlaylistMixin(object):
         """
 
         if self.input_path is None:
+            # TODO notify developer
+            self.save_output_status(self.output_status.OUTPUT_FAILED)
+            self.incr_failed_outputs()
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
         # checking file is exist and not empty
         try:
             if os.stat(self.input_path).st_size == 0:
+                self.save_output_status(
+                    self.output_status.OUTPUT_FAILED)
+                self.incr_failed_outputs()
+                self.save_job_failed_reason(
+                    self.failed_reason.INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO)
                 raise self.raise_ignore(
                     message=self.error_messages.INPUT_SIZE_CAN_NOT_BE_ZERO)
         except FileNotFoundError:
+            # TODO notify developer
+            self.save_output_status(
+                self.output_status.OUTPUT_FAILED)
+            self.incr_failed_outputs()
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_FILE_IS_NOT_FOUND)
 
@@ -69,43 +91,57 @@ class CreatePlaylistMixin(object):
         add to the protocol instance
         """
 
+        # generate default representations
         if not (self.custom_qualities or self.quality_names):
-            # generate default representations
-            protocol.auto_generate_representations(
-                ffprobe_bin=settings.FFPROBE_BIN_PATH)
-        else:
-            reps = []
+            try:
+                protocol.auto_generate_representations(
+                    ffprobe_bin=settings.FFPROBE_BIN_PATH)
+                return
+            except RuntimeError as e:
+                # TODO capture error and notify developer
+                raise self.retry(exc=e)
+            except Exception as e:
+                # FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'
+                # TODO capture error and notify developer
+                raise self.retry(exc=e)
 
-            # quality_names is like ["360p","480p","720p"]
-            if self.quality_names:
-                reps.extend(
-                    Resolutions().get_reps(self.quality_names)
-                )
+        reps = []
 
-            # custom_qualities is like :
-            # [dict(size=[256, 144], bitrate=[97280, 65536])]
-            for quality in self.custom_qualities:
-                size = quality.get('size', None)
-                bitrate = quality.get('bitrate', None)
+        # quality_names is like ["360p","480p","720p"]
+        if self.quality_names:
+            reps.extend(
+                Resolutions().get_reps(self.quality_names)
+            )
 
-                # when both of them has not valid value, just continue
-                if not (size or bitrate):
-                    continue
+        # custom_qualities is like :
+        # [dict(size=[256, 144], bitrate=[97280, 65536])]
+        for quality in self.custom_qualities:
+            size = quality.get('size', None)
+            bitrate = quality.get('bitrate', None)
 
-                # when just one of them is exist,
-                # force client to fill both of them
-                if not size or not bitrate:
-                    raise self.raise_ignore(
-                        message=self.error_messages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
+            # when both of them has not valid value, just continue
+            if not (size or bitrate):
+                continue
 
-                reps.append(
-                    Representation(
-                        Size(*size),
-                        Bitrate(*bitrate))
-                )
+            # when just one of them is exist,
+            # force client to fill both of them
+            if not size or not bitrate:
+                self.save_output_status(
+                    self.output_status.OUTPUT_FAILED)
+                self.incr_failed_outputs()
+                self.save_job_failed_reason(
+                    self.failed_reason.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
+                raise self.raise_ignore(
+                    message=self.error_messages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
 
-            # generate representations
-            protocol.representations(*reps)
+            reps.append(
+                Representation(
+                    Size(*size),
+                    Bitrate(*bitrate))
+            )
+
+        # generate representations
+        protocol.representations(*reps)
 
     def ensure_set_output_location(self):
         """ensure set self.directory and self.output_path
@@ -115,20 +151,31 @@ class CreatePlaylistMixin(object):
            3. when self.output_path is None, using self.s3_output_key
              to set self.directory and self.output_path
         """
+
+        # check requirement
         if self.output_path is None and self.s3_output_key is None:
+            # TODO notify developer
+            self.save_output_status(self.output_status.OUTPUT_FAILED)
+            self.incr_failed_outputs()
+            self.save_job_failed_reason(
+                self.failed_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.OUTPUT_PATH_OR_S3_OUTPUT_KEY_IS_REQUIRED)
 
+        # using self.output_path to set self.directory
         if self.output_path:
             self.directory = self.output_path.rpartition('/')[0]
-        else:
-            # s3_output_key : "/foo/bar/example.mpd"
-            output_filename = self.s3_output_key.rpartition('/')[-1]
+            return
 
-            self.directory = os.path.join(
-                self.get_outputs_root_directory_by_request_id(),
-                str(self.output_number))
+        # when self.output_path is None, using self.s3_output_key
+        #  to set self.directory and self.output_path
 
-            self.output_path = os.path.join(self.directory,
-                                            output_filename)
+        # s3_output_key : "/foo/bar/example.mpd"
+        output_filename = self.s3_output_key.rpartition('/')[-1]
 
+        self.directory = os.path.join(
+            self.get_outputs_root_directory_by_request_id(),
+            str(self.output_number))
+
+        self.output_path = os.path.join(self.directory,
+                                        output_filename)
