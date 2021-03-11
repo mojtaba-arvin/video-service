@@ -99,7 +99,7 @@ class Streaming(
         # are compatible with s3
         output_buckets: list[str] = []
         output_locations: list[tuple] = []
-        checking_upload_risk_tasks: list = []
+        # checking_upload_risk_tasks: list = []
         for output in request.outputs:
 
             # check the output key is filled
@@ -120,14 +120,6 @@ class Streaming(
 
             if output.s3.dont_replace:
                 # 7. check if output keys are exist can be replace
-                # checking_upload_risk_tasks.append(
-                #     tasks.check_output_key.s(
-                #         s3_output_key=output.s3.key,
-                #         s3_output_bucket=output.s3.bucket,
-                #         s3_dont_replace=output.s3.dont_replace,
-                #         request_id=request_id
-                #     )
-                # )
                 first_level_tasks.append(
                     tasks.check_output_key.s(
                         s3_output_key=output.s3.key,
@@ -136,6 +128,14 @@ class Streaming(
                         request_id=request_id
                     )
                 )
+                # checking_upload_risk_tasks.append(
+                #     tasks.check_output_key.s(
+                #         s3_output_key=output.s3.key,
+                #         s3_output_bucket=output.s3.bucket,
+                #         s3_dont_replace=output.s3.dont_replace,
+                #         request_id=request_id
+                #     )
+                # )
 
         # 8. check duplicate output locations in current request
         if len(output_locations) != len(set(output_locations)):
@@ -146,14 +146,6 @@ class Streaming(
         unique_output_buckets = list(set(output_buckets))
         # checking_output_buckets_tasks: list = []
         for bucket in unique_output_buckets:
-            # checking_output_buckets_tasks.append(
-            #     tasks.check_output_bucket.s(
-            #         s3_output_bucket=bucket,
-            #         s3_create_bucket=self.__class__._has_create_flag(
-            #             bucket, request.outputs),
-            #         request_id=request_id
-            #     )
-            # )
             first_level_tasks.append(
                 tasks.check_output_bucket.s(
                     s3_output_bucket=bucket,
@@ -162,6 +154,14 @@ class Streaming(
                     request_id=request_id
                 )
             )
+            # checking_output_buckets_tasks.append(
+            #     tasks.check_output_bucket.s(
+            #         s3_output_bucket=bucket,
+            #         s3_create_bucket=self.__class__._has_create_flag(
+            #             bucket, request.outputs),
+            #         request_id=request_id
+            #     )
+            # )
 
         # # check upload risk after checking buckets are exist
         # first_level_tasks.append(

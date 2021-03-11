@@ -6,7 +6,7 @@ from celery import states
 from celery.utils.log import get_task_logger
 from video_streaming import settings
 from video_streaming.cache import RedisCache
-from video_streaming.core.constants.status import FailedReason
+from video_streaming.core.constants.status import StopReason
 from video_streaming.core.tasks import BaseTask
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.core.services import S3Service
@@ -28,7 +28,7 @@ class BaseStreamingTask(BaseTask, ABC):
     primary_status = PrimaryStatus
     input_status = InputStatus
     output_status = OutputStatus
-    failed_reason = FailedReason
+    stop_reason = StopReason
 
     TMP_DOWNLOADED_DIR: str = settings.TMP_DOWNLOADED_DIR or ""
     INPUTS_DIRECTORY_PREFIX: str = "inputs_"
@@ -130,7 +130,7 @@ class BaseStreamingTask(BaseTask, ABC):
         'directory'
     ]
 
-    def _initial_params(self, callback: callable = None):
+    def _initial_params(self):
         self.logger.info(
             'Executing task id {0.id},'
             ' args: {0.args!r} kwargs: {0.kwargs!r}'.
@@ -154,32 +154,18 @@ class BaseStreamingTask(BaseTask, ABC):
 
             setattr(self, name, value)
 
-        if not callable(callback):
-            callback = self.check_to_force_stop
-
-        callback()
+        # callback
+        if self.is_forced_to_stop():
+            raise self.raise_revoke()
 
     def save_primary_status(self, status_name):
         """
-            1. save as celery task status
-            2. add to celery logger
-            3. save primary status on cache when request_id and
-            JOB_DETAILS has been set and current status is not 'FAILED'
+            1. check request_id and JOB_DETAILS has been set
+            2. check current status is not 'FAILED' or 'REVOKED'
+            3. add to celery logger
+            4. save primary status on cache
         """
 
-        # save as celery task status
-        # self.update_state(
-        #     task_id=self.request.id,
-        #     state=status_name)
-
-        # add to celery logger
-        log_message = f"primary status: {status_name}"
-        if self.request_id:
-            log_message += f" ,request id: {self.request_id}"
-        self.logger.info(log_message)
-
-        # save primary status on cache when request_id
-        # and JOB_DETAILS has been set
         if self.request_id is None:
             # request_id has been not set
             return
@@ -191,11 +177,23 @@ class BaseStreamingTask(BaseTask, ABC):
 
         # to prevent set any status after it was set to 'FAILED' or 'REVOKED'
         if self.can_set_status():
+
+            # add to celery logger
+            log_message = f"primary status: {status_name}"
+            if self.request_id:
+                log_message += f" ,request id: {self.request_id}"
+            self.logger.info(log_message)
+
             self.cache.set(
                 CacheKeysTemplates.PRIMARY_STATUS.format(
                     request_id=self.request_id),
                 status_name
             )
+
+            # save as celery task status
+            # self.update_state(
+            #     task_id=self.request.id,
+            #     state=status_name)
 
     def can_set_status(self) -> None or bool:
         """to check current primary status of job is
@@ -240,7 +238,6 @@ class BaseStreamingTask(BaseTask, ABC):
                 onerror=self.on_error_delete_inputs)
 
     def on_error_delete_inputs(self, func, path, exc_info: tuple):
-        # TODO capture error and notify developer
         self.logger.error(f"error_delete_inputs : {path}")
         self.logger.error(exc_info)
 
@@ -256,7 +253,6 @@ class BaseStreamingTask(BaseTask, ABC):
                 onerror=self.on_error_delete_outputs)
 
     def on_error_delete_outputs(self, func, path, exc_info: tuple):
-        # TODO capture error and notify developer
         self.logger.error(f"error_delete_outputs : {path}")
         self.logger.error(exc_info)
 
@@ -304,15 +300,17 @@ class BaseStreamingTask(BaseTask, ABC):
             self.TMP_TRANSCODED_DIR,
             self.OUTPUTS_DIRECTORY_PREFIX + str(self.request_id))
 
-    def check_to_force_stop(
-            self, delete_inputs=True, delete_outputs=True):
-        if self.is_forced_to_stop():
-            if delete_inputs:
-                self.inputs_remover()
-            if delete_outputs:
-                self.outputs_remover()
-            self.save_primary_status(self.primary_status.REVOKED)
-            self.raise_revoked()
+    def raise_revoke(self, delete_inputs=True, delete_outputs=True):
+        if delete_inputs:
+            self.inputs_remover()
+        if delete_outputs:
+            self.outputs_remover()
+        self.save_primary_status(self.primary_status.REVOKED)
+        self.save_job_stop_reason(self.stop_reason.FORCE_REVOKED)
+        raise self.raise_ignore(
+            message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
+            state=states.REVOKED
+        )
 
     def is_forced_to_stop(self) -> None or bool:
         if self.request_id is None:
@@ -322,18 +320,9 @@ class BaseStreamingTask(BaseTask, ABC):
                 request_id=self.request_id))
         return force_stop
 
-    def raise_revoked(self):
-        raise self.raise_ignore(
-            message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
-            state=states.REVOKED
-        )
-
-    def save_job_failed_reason(self, reason):
+    def save_job_stop_reason(self, reason):
         if not reason:
             return
-
-        # add to celery logger
-        self.logger.info(f"failed reason: {reason}")
 
         # save primary status on cache when request_id
         # and JOB_DETAILS has been set
@@ -346,20 +335,24 @@ class BaseStreamingTask(BaseTask, ABC):
             # JOB_DETAILS has been not set
             return None
 
-        # check already has failed reason, to prevent rewrite reason
-        if not self.has_already_failed_reason():
+        # check already has stop reason, to prevent rewrite reason
+        if not self.has_already_stop_reason():
+
+            # add to celery logger
+            self.logger.info(f"stop reason: {reason}")
+
             self.cache.set(
-                CacheKeysTemplates.FAILED_REASON.format(
+                CacheKeysTemplates.STOP_REASON.format(
                     request_id=self.request_id),
                 reason
             )
 
-    def has_already_failed_reason(self) -> None or bool:
-        """to check already has failed reason
-        """
+    def has_already_stop_reason(self) -> None or bool:
+        """to check already has stop reason"""
         if self.request_id is None:
             return None
         reason = self.cache.get(
-            CacheKeysTemplates.FAILED_REASON.format(
+            CacheKeysTemplates.STOP_REASON.format(
                 request_id=self.request_id), decode=False)
         return reason is not None
+

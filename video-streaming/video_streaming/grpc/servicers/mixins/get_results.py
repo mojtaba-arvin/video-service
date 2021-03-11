@@ -1,5 +1,6 @@
 from video_streaming.cache import RedisCache
-from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.core.constants import CacheKeysTemplates, \
+    PrimaryStatus
 from video_streaming.grpc.protos import streaming_pb2
 
 
@@ -69,6 +70,12 @@ class GetResultsMixin(object):
             ready_outputs: int = self.cache.get(
                 CacheKeysTemplates.READY_OUTPUTS.format(
                     request_id=request_id)) or 0
+            revoked_outputs: int = self.cache.get(
+                CacheKeysTemplates.REVOKED_OUTPUTS.format(
+                    request_id=request_id)) or 0
+            failed_outputs: int = self.cache.get(
+                CacheKeysTemplates.FAILED_OUTPUTS.format(
+                    request_id=request_id)) or 0
             checks = self.pb2.Checks(
                 total=total_checks,
                 passed=self.cache.get(
@@ -79,9 +86,23 @@ class GetResultsMixin(object):
                 reference_id=reference_id,
                 status=status,
                 total_outputs=total_outputs,
+                revoked_outputs=revoked_outputs,
                 ready_outputs=ready_outputs,
+                failed_outputs=failed_outputs,
                 checks=checks,
                 inputs=self._inputs(request_id, total_inputs),
                 outputs=self._outputs(request_id, total_outputs)
             )
+
+            # get stop reason if primary status is FAILED or REVOKED
+            if status in [
+                    PrimaryStatus.FAILED,
+                    PrimaryStatus.REVOKED]:
+                stop_reason: str = self.cache.get(
+                    CacheKeysTemplates.STOP_REASON.format(
+                        request_id=request_id), decode=False)
+                if stop_reason:
+                    result_details['reason'] = self.pb2.StopReason.Value(
+                        stop_reason)
+
             return self.pb2.ResultDetails(**result_details)

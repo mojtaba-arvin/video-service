@@ -25,10 +25,10 @@ class CreatePlaylistMixin(BaseOutputMixin):
     custom_qualities: list[dict]
     request_id: str
 
-    failed_reason: BaseStreamingTask.failed_reason
+    stop_reason: BaseStreamingTask.stop_reason
     error_messages: BaseStreamingTask.error_messages
     get_outputs_root_directory_by_request_id: BaseStreamingTask.get_outputs_root_directory_by_request_id
-    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
+    save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
     raise_ignore: BaseTask.raise_ignore
 
@@ -42,9 +42,8 @@ class CreatePlaylistMixin(BaseOutputMixin):
         if self.input_path is None:
             # TODO notify developer
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
@@ -53,18 +52,16 @@ class CreatePlaylistMixin(BaseOutputMixin):
             if os.stat(self.input_path).st_size == 0:
                 self.save_output_status(
                     self.output_status.OUTPUT_FAILED)
-                self.incr_failed_outputs()
-                self.save_job_failed_reason(
-                    self.failed_reason.INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO)
+                self.save_job_stop_reason(
+                    self.stop_reason.INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO)
                 raise self.raise_ignore(
                     message=self.error_messages.INPUT_SIZE_CAN_NOT_BE_ZERO)
         except FileNotFoundError:
             # TODO notify developer
             self.save_output_status(
                 self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_FILE_IS_NOT_FOUND)
 
@@ -128,9 +125,8 @@ class CreatePlaylistMixin(BaseOutputMixin):
             if not size or not bitrate:
                 self.save_output_status(
                     self.output_status.OUTPUT_FAILED)
-                self.incr_failed_outputs()
-                self.save_job_failed_reason(
-                    self.failed_reason.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
+                self.save_job_stop_reason(
+                    self.stop_reason.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
                 raise self.raise_ignore(
                     message=self.error_messages.REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE)
 
@@ -156,9 +152,8 @@ class CreatePlaylistMixin(BaseOutputMixin):
         if self.output_path is None and self.s3_output_key is None:
             # TODO notify developer
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.OUTPUT_PATH_OR_S3_OUTPUT_KEY_IS_REQUIRED)
 

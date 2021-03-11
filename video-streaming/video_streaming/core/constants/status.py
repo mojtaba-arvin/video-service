@@ -4,7 +4,7 @@ __all__ = [
     'PrimaryStatus',
     'InputStatus',
     'OutputStatus',
-    'FailedReason'
+    'StopReason'
 ]
 
 
@@ -52,7 +52,7 @@ class InputStatus:
     ANALYZING_FINISHED = "ANALYZING_FINISHED"
 
     INPUT_REVOKED = "INPUT_REVOKED"
-    INPUT_FAILED = "OUTPUT_FAILED"
+    INPUT_FAILED = "INPUT_FAILED"
 
 
 class OutputStatus:
@@ -72,8 +72,9 @@ class OutputStatus:
     OUTPUT_FAILED = "OUTPUT_FAILED"
 
 
-class FailedReason:
+class StopReason:
 
+    FORCE_REVOKED = "FORCE_REVOKED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
     # CheckInputKeyTask and DownloadInputTask

@@ -21,6 +21,5 @@ class BaseTask(Task, ABC):
                     update_kwargs['meta'] = dict(
                         exc_type='Exception',
                         exc_message=message)
-                self.update_state(
-                    **update_kwargs)
+                self.update_state(**update_kwargs)
             raise Ignore()

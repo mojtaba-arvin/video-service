@@ -16,11 +16,11 @@ class DownloadInputMixin(object):
     input_path: str
     object_details: str
 
-    failed_reason: BaseStreamingTask.failed_reason
+    stop_reason: BaseStreamingTask.stop_reason
     error_messages: BaseStreamingTask.error_messages
     s3_service: BaseStreamingTask.s3_service
     get_inputs_root_directory_by_request_id: BaseStreamingTask.get_inputs_root_directory_by_request_id
-    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
+    save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
     raise_ignore: BaseTask.raise_ignore
 
@@ -28,14 +28,14 @@ class DownloadInputMixin(object):
         """set self.input_path"""
 
         if self.request_id is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
@@ -58,32 +58,32 @@ class DownloadInputMixin(object):
         """
 
         if self.input_path is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_PATH_IS_REQUIRED)
 
         if self.object_details is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.OBJECT_DETAILS_IS_REQUIRED)
 
         if self.request_id is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED)
 
         if self.s3_input_key is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         if self.s3_input_bucket is None:
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED)
 

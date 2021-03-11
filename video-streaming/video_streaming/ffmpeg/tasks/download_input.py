@@ -1,5 +1,6 @@
 import os
 from abc import ABC
+from celery import states
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChordCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
@@ -15,18 +16,25 @@ class DownloadInputTask(
         ABC
         ):
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
+    def save_failed(self):
         self.save_primary_status(self.primary_status.FAILED)
         self.save_input_status(self.input_status.INPUT_FAILED)
-
-        # notice : failed reason will only be set if there is no reason
-        #  before.
-
+        # stop reason will only be set if there is no reason before.
         # set common reason for the task, it's can be connection error
         # after many retries or etc.
-        self.save_job_failed_reason(
-            self.failed_reason.DOWNLOADING_FAILED)
-        return super().on_failure(exc, task_id, args, kwargs, einfo)
+        self.save_job_stop_reason(
+            self.stop_reason.DOWNLOADING_FAILED)
+
+    def on_failure(self, *args, **kwargs):
+        self.save_failed()
+        return super().on_failure(*args, **kwargs)
+
+    def raise_ignore(self, message=None, state=states.FAILURE):
+        if state == states.FAILURE:
+            self.save_failed()
+        elif state == states.REVOKED:
+            self.save_input_status(self.input_status.INPUT_REVOKED)
+        super().raise_ignore(message=message, state=state)
 
 
 @celery_app.task(name="download_input",
@@ -68,9 +76,9 @@ def download_input(self,
             self.save_primary_status(self.primary_status.FAILED)
             # set input status
             self.save_input_status(self.input_status.INPUT_FAILED)
-            # set failed reason
-            self.save_job_failed_reason(
-                self.failed_reason.INPUT_VIDEO_ON_S3_IS_404_OR_403)
+            # set stop reason
+            self.save_job_stop_reason(
+                self.stop_reason.INPUT_VIDEO_ON_S3_IS_404_OR_403)
             # ignore task
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_VIDEO_404_OR_403)

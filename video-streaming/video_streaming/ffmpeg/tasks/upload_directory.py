@@ -1,4 +1,5 @@
 from abc import ABC
+from celery import states
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
@@ -13,22 +14,23 @@ class UploadDirectoryTask(
         ABC
         ):
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-
+    def save_failed(self):
         self.save_output_status(self.output_status.OUTPUT_FAILED)
-
-        # incr failed_outputs and check all outputs are finished and
-        # set primary_status to 'FAILED' and delete local outputs files
-        # when delete_outputs flag is True
-        self.incr_failed_outputs()
-
-        # notice : failed reason will only be set if there is no reason
-        #  before.
-
+        # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
-        self.save_job_failed_reason(
-            self.failed_reason.FAILED_UPLOAD_DIRECTORY)
-        return super().on_failure(exc, task_id, args, kwargs, einfo)
+        self.save_job_stop_reason(
+            self.stop_reason.FAILED_UPLOAD_DIRECTORY)
+
+    def on_failure(self, *args, **kwargs):
+        self.save_failed()
+        return super().on_failure(*args, **kwargs)
+
+    def raise_ignore(self, message=None, state=states.FAILURE):
+        if state == states.FAILURE:
+            self.save_failed()
+        elif state == states.REVOKED:
+            self.save_output_status(self.output_status.OUTPUT_REVOKED)
+        super().raise_ignore(message=message, state=state)
 
 
 @celery_app.task(name="upload_directory",
@@ -57,7 +59,3 @@ def upload_directory(self,
     self.upload_directory()
 
     self.save_output_status(self.output_status.UPLOADING_FINISHED)
-
-    # It will be used to safely delete local outputs
-    # after all outputs have been uploaded
-    self.incr_ready_outputs()

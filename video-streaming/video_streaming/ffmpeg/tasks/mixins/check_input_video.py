@@ -7,10 +7,10 @@ class CheckInputMixin(object):
     s3_input_bucket: str
 
     primary_status: BaseStreamingTask.primary_status
-    failed_reason: BaseStreamingTask.failed_reason
+    stop_reason: BaseStreamingTask.stop_reason
     error_messages: BaseStreamingTask.error_messages
     s3_service: BaseStreamingTask.s3_service
-    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
+    save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
     save_primary_status: BaseStreamingTask.save_primary_status
 
     raise_ignore: BaseTask.raise_ignore
@@ -30,15 +30,15 @@ class CheckInputMixin(object):
         if self.s3_input_key is None:
             # TODO notify developer
             self.save_primary_status(self.primary_status.FAILED)
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_KEY_IS_REQUIRED)
 
         if self.s3_input_bucket is None:
             self.save_primary_status(self.primary_status.FAILED)
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED)
 

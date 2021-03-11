@@ -13,10 +13,10 @@ class UploadDirectoryMixin(BaseOutputMixin):
     s3_output_key: str
     s3_output_bucket: str
 
-    failed_reason: BaseStreamingTask.failed_reason
+    stop_reason: BaseStreamingTask.stop_reason
     error_messages: BaseStreamingTask.error_messages
     s3_service: BaseStreamingTask.s3_service
-    save_job_failed_reason: BaseStreamingTask.save_job_failed_reason
+    save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
     raise_ignore: BaseTask.raise_ignore
 
@@ -27,27 +27,24 @@ class UploadDirectoryMixin(BaseOutputMixin):
         if self.directory is None:
             # TODO notify developer
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.DIRECTORY_IS_REQUIRED)
 
         if self.s3_output_key is None:
             # TODO notify developer
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED)
 
         if self.s3_output_bucket is None:
             # TODO notify developer
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED)
 
@@ -66,8 +63,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
             # TODO notify developer
             self.logger.error(e)
             self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.incr_failed_outputs()
-            self.save_job_failed_reason(
-                self.failed_reason.INTERNAL_ERROR)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR)
             raise self.raise_ignore(
                 message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY)

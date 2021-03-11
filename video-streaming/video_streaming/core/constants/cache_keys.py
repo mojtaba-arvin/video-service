@@ -59,8 +59,8 @@ class CacheKeysTemplates:
     PRIMARY_STATUS = _PREFIX + "status_{request_id}"
 
     # string
-    # to save failed reason
-    FAILED_REASON = _PREFIX + "failed_reason_{request_id}"
+    # to save stop reason
+    STOP_REASON = _PREFIX + "stop_reason_{request_id}"
 
     # string
     # to save input status name
@@ -79,5 +79,3 @@ class CacheKeysTemplates:
     # dict
     # to save progress of processing or uploading for every output
     OUTPUT_PROGRESS = _PREFIX + "o_progress_{request_id}_{output_number}"
-
-

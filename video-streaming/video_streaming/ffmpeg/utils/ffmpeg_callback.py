@@ -1,5 +1,5 @@
 import sys
-from celery import Task
+from celery import Task, states
 
 
 class FfmpegCallback(object):
@@ -26,7 +26,10 @@ class FfmpegCallback(object):
             process.kill()
             # raise inside callback, is just to finish processing,
             # so, will write 'ffmpeg executed command successfully' log
-            self.task.raise_revoked()
+            self.task.raise_ignore(
+                message=self.task.error_messages.TASK_WAS_FORCIBLY_STOPPED,
+                state=states.REVOKED
+            )
 
         if self.first_chunk:
             # save output status using output_number and request_id
