@@ -132,39 +132,78 @@ message ResultResponse {
   repeated ResultDetails results = 1;
 }
 enum PrimaryStatus {
-    QUEUING_CHECKS = 0;
-    CHECKING = 1;
-    CHECKS_FINISHED = 2;
 
-    QUEUING_INPUTS_DOWNLOADING = 3;
-    INPUTS_DOWNLOADING = 4;
-    ALL_INPUTS_DOWNLOADED = 5;
+  QUEUING_CHECKS = 0;
+  CHECKING = 1;
+  CHECKS_FINISHED = 2;
 
-    QUEUING_OUTPUTS = 6;
-    OUTPUTS_PROGRESSING = 7;
-    ALL_OUTPUTS_ARE_READY = 8;
+  QUEUING_INPUTS_DOWNLOADING = 3;
+  INPUTS_DOWNLOADING = 4;
+  ALL_INPUTS_DOWNLOADED = 5;
+
+  QUEUING_OUTPUTS = 6;
+  OUTPUTS_PROGRESSING = 7;
+  FINISHED = 8;
+
+  REVOKED = 9;
+  FAILED = 10;
+
+}
+enum StopReason{
+  NO_REASON = 0;
+
+  FORCE_REVOKED = 1;
+  INTERNAL_ERROR = 2;
+
+  INPUT_VIDEO_ON_S3_IS_404_OR_403 = 3;
+
+  FAILED_INPUT_KEY_CHECKING = 4;
+
+  FAILED_OUTPUT_BUCKET_CHECKING = 5;
+  OUTPUT_BUCKET_ON_S3_IS_404_OR_403 = 6;
+
+  FAILED_OUTPUT_KEY_CHECKING = 7;
+  OUTPUT_KEY_IS_ALREADY_EXIST = 8;
+
+  DOWNLOADING_FAILED = 9;
+
+  FAILED_ANALYZE_INPUT = 10;
+
+  FAILED_CREATE_PLAYLIST = 11;
+  INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO = 12;
+  REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE = 13;
+
+  FAILED_UPLOAD_DIRECTORY = 14;
+
 }
 message ResultDetails {
   string request_id = 1;
   string reference_id = 2;
   PrimaryStatus status = 3;
-  int32 total_outputs = 4;
-  int32 ready_outputs = 5;
-  Checks checks = 6;
-  repeated InputProgress inputs = 7;
-  repeated OutputProgress outputs = 8;
+  StopReason reason = 4;
+  int32 total_outputs = 5;
+  int32 revoked_outputs = 6; // when job force stopped, is equal to total_outputs
+  int32 ready_outputs = 7; // number of outputs that successfully finished
+  int32 failed_outputs = 8; // number of outputs that failed
+  Checks checks = 9;
+  repeated InputProgress inputs = 10;
+  repeated OutputProgress outputs = 11;
 }
 message Checks {
     int64 total = 3;
     int64 passed = 4;
 }
 enum OutputStatus {
-    PREPARATION_PROCESSING = 0;
-    PROCESSING = 1;
-    PROCESSING_FINISHED = 2;
-    QUEUING_UPLOADING = 3;
-    PLAYLIST_UPLOADING = 4;
-    UPLOADING_FINISHED = 5;
+  PREPARATION_PROCESSING = 0;
+  PROCESSING = 1;
+  PROCESSING_FINISHED = 2;
+
+  QUEUING_UPLOADING = 3;
+  PLAYLIST_UPLOADING = 4;
+  UPLOADING_FINISHED = 5;
+
+  OUTPUT_REVOKED = 6;
+  OUTPUT_FAILED = 7;
 }
 message OutputProgress {
     int32 id = 1;
@@ -176,6 +215,13 @@ enum InputStatus {
     PREPARATION_DOWNLOAD = 0;
     DOWNLOADING = 1;
     DOWNLOADING_FINISHED = 2;
+
+    QUEUING_TO_ANALYZE = 3;
+    ANALYZING = 4;
+    ANALYZING_FINISHED = 5;
+
+    INPUT_REVOKED = 6;
+    INPUT_FAILED = 7;
 }
 message InputProgress {
     int32 id = 1;
@@ -191,10 +237,14 @@ message JobsRevokeRequest {
 message JobsRevokeResponse{
   repeated RevokeDetails results = 1;
 }
+enum RevokeSignalStatus {
+  REQUEST_NOT_FOUND = 0;
+  REVOKE_SIGNAL_SENT = 1;
+}
 message RevokeDetails{
     string request_id = 1;
-    string reference_id = 2;
-    PrimaryStatus status = 3;
+    string reference_id = 3;
+    RevokeSignalStatus has_been_sent = 2;
 }
 
 

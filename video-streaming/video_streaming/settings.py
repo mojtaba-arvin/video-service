@@ -40,6 +40,10 @@ TASK_RETRY_BACKOFF_MAX = env_config.get(
     "TASK_RETRY_BACKOFF_MAX",
     default=10,
     cast=int)
+TASK_RETRY_FFMPEG_COMMAND_MAX = env_config.get(
+    "TASK_RETRY_BACKOFF_MAX",
+    default=1,
+    cast=int)
 
 ##################################################
 #    S3 Object Storage                           #

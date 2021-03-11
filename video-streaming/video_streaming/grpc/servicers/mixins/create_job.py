@@ -1,4 +1,3 @@
-import json
 from celery import result as celery_result, chain, group
 from google.protobuf import reflection
 from video_streaming.cache import RedisCache
@@ -181,10 +180,11 @@ class CreateJobMixin(object):
         # apply tasks
         result = job.apply_async()
 
-        # check last level has one task or more to detect result type
-        if len(ordered_levels[-1]) > 1:
-            result: celery_result.GroupResult
-            result.save()
+        # # check last level has one task or more to detect result type
+        # # is GroupResult or AsyncResult
+        # if len(ordered_levels[-1]) > 1:
+        #     result: celery_result.GroupResult
+        #     result.save()
 
         # saving celery result id of the request
         self.cache.set(

@@ -3,7 +3,8 @@
 __all__ = [
     'PrimaryStatus',
     'InputStatus',
-    'OutputStatus'
+    'OutputStatus',
+    'StopReason'
 ]
 
 
@@ -28,8 +29,15 @@ class PrimaryStatus:
     QUEUING_OUTPUTS = "QUEUING_OUTPUTS"
     # when one of level3 chains has been started
     OUTPUTS_PROGRESSING = "OUTPUTS_PROGRESSING"
-    # when all outputs uploaded successfully
-    ALL_OUTPUTS_ARE_READY = "ALL_OUTPUTS_ARE_READY"
+    # when all outputs are finished
+    # means total_outputs == (ready_outputs + revoked_outputs + failed_outputs)
+    FINISHED = "FINISHED"
+
+    # when all outputs revoked
+    REVOKED = "REVOKED"
+    # when one of checks has been failed, one of inputs has been failed,
+    # or all outputs has been failed
+    FAILED = "FAILED"
 
 
 class InputStatus:
@@ -38,6 +46,13 @@ class InputStatus:
     PREPARATION_DOWNLOAD = "PREPARATION_DOWNLOAD"
     DOWNLOADING = "DOWNLOADING"
     DOWNLOADING_FINISHED = "DOWNLOADING_FINISHED"
+
+    QUEUING_TO_ANALYZE = "QUEUING_TO_ANALYZE"
+    ANALYZING = "ANALYZING"
+    ANALYZING_FINISHED = "ANALYZING_FINISHED"
+
+    INPUT_REVOKED = "INPUT_REVOKED"
+    INPUT_FAILED = "INPUT_FAILED"
 
 
 class OutputStatus:
@@ -53,3 +68,39 @@ class OutputStatus:
     PLAYLIST_UPLOADING = "PLAYLIST_UPLOADING"
     UPLOADING_FINISHED = "UPLOADING_FINISHED"
 
+    OUTPUT_REVOKED = "OUTPUT_REVOKED"
+    OUTPUT_FAILED = "OUTPUT_FAILED"
+
+
+class StopReason:
+
+    FORCE_REVOKED = "FORCE_REVOKED"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+    # CheckInputKeyTask and DownloadInputTask
+    INPUT_VIDEO_ON_S3_IS_404_OR_403 = "INPUT_VIDEO_ON_S3_IS_404_OR_403"
+
+    # CheckInputKeyTask
+    FAILED_INPUT_KEY_CHECKING = "FAILED_INPUT_KEY_CHECKING"
+
+    # CheckOutputBucketTask
+    FAILED_OUTPUT_BUCKET_CHECKING = "FAILED_OUTPUT_BUCKET_CHECKING"
+    OUTPUT_BUCKET_ON_S3_IS_404_OR_403 = "OUTPUT_BUCKET_ON_S3_IS_404_OR_403"
+
+    # CheckOutputKeyTask
+    FAILED_OUTPUT_KEY_CHECKING = "FAILED_OUTPUT_KEY_CHECKING"
+    OUTPUT_KEY_IS_ALREADY_EXIST = "OUTPUT_KEY_IS_ALREADY_EXIST"
+
+    # DownloadInputTask
+    DOWNLOADING_FAILED = "DOWNLOADING_FAILED"
+
+    # AnalyzeInputTask
+    FAILED_ANALYZE_INPUT = "FAILED_ANALYZE_INPUT"
+
+    # CreatePlaylistTask
+    FAILED_CREATE_PLAYLIST = "FAILED_CREATE_PLAYLIST"
+    INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO = "INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO"
+    REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE = "REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE"
+
+    # UploadDirectoryTask
+    FAILED_UPLOAD_DIRECTORY = "FAILED_UPLOAD_DIRECTORY"

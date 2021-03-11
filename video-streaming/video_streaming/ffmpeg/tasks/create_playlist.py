@@ -1,21 +1,38 @@
 from abc import ABC
+from celery import states
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
-from .mixins import CreatePlaylistMixin, BaseOutputMixin
+from .mixins import CreatePlaylistMixin
 
 
 class CreatePlaylistTask(
         ChainCallbackMixin,
         CreatePlaylistMixin,
-        BaseOutputMixin,
         BaseStreamingTask,
         ABC
         ):
-    pass
+
+    def save_failed(self):
+        self.save_output_status(self.output_status.OUTPUT_FAILED)
+        # stop reason will only be set if there is no reason before.
+        # set common reason for the task after many retries or etc.
+        self.save_job_stop_reason(
+            self.stop_reason.FAILED_CREATE_PLAYLIST)
+
+    def on_failure(self, *args, **kwargs):
+        self.save_failed()
+        return super().on_failure(*args, **kwargs)
+
+    def raise_ignore(self, message=None, state=states.FAILURE):
+        if state == states.FAILURE:
+            self.save_failed()
+        elif state == states.REVOKED:
+            self.save_output_status(self.output_status.OUTPUT_REVOKED)
+        super().raise_ignore(message=message, state=state)
 
 
 @celery_app.task(name="create_playlist",
@@ -44,7 +61,7 @@ def create_playlist(self,
          - output_path or s3_output_key
          - encode_format
     """
-
+    
     self._initial_params()
 
     # save primary status using request_id
@@ -70,12 +87,16 @@ def create_playlist(self,
             async_run=self.async_run)
     except Exception as e:
         # TODO handle possible Runtime Errors
-        raise e
+        # notice : video processing has cost to retry
+        raise self.retry(
+            exc=e,
+            max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
+
+    # it's possible process killed in FfmpegCallback
+    # so, checking the force stop before continuing
+    if self.is_forced_to_stop():
+        self.raise_revoke()
 
     self.save_output_status(self.output_status.PROCESSING_FINISHED)
-
-    # It will be used to safely delete local inputs
-    # after all outputs have been processed
-    self.incr_processed_outputs()
 
     return dict(directory=self.directory)

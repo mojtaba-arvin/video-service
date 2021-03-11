@@ -29,6 +29,8 @@ class ErrorMessages:
                            ", HTTP response status: '{status}'" \
                            ", reason: '{reason}'" \
                            ", request_id: '{request_id}'"
+    TASK_WAS_FORCIBLY_STOPPED = "task was forcibly stopped."
+    CAN_NOT_UPLOAD_DIRECTORY = "can not upload directory"
 
     # gRPC
     S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty."
@@ -38,7 +40,8 @@ class ErrorMessages:
 
 
 class ErrorCodes:
-    # gRPC
+
+    # gRPC base exception error codes
     S3_KEY_CAN_NOT_BE_EMPTY = 1001
     S3_BUCKET_NAME_IS_NOT_VALID = 1002
     DUPLICATE_OUTPUT_LOCATIONS = 1003

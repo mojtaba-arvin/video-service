@@ -10,17 +10,16 @@ __all__ = [
 
 class BaseTask(Task, ABC):
 
-    def raise_ignore(self, message=None):
+    def raise_ignore(self, message=None, state=states.FAILURE):
         try:
             # to trigger the task_failure signal
             raise Exception
         except Exception:
             if not self.request.called_directly:
-                update_kwargs = dict(state=states.FAILURE)
+                update_kwargs = dict(state=state)
                 if message is not None:
                     update_kwargs['meta'] = dict(
                         exc_type='Exception',
                         exc_message=message)
-                self.update_state(
-                    **update_kwargs)
+                self.update_state(**update_kwargs)
             raise Ignore()

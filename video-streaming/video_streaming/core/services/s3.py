@@ -45,6 +45,8 @@ class S3Service:
         # TODO add more
     )
 
+    client: boto3.client
+
     def __init__(
             self,
             service_name: str = None,
