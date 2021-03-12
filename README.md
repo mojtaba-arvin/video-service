@@ -1,11 +1,33 @@
 # Python Video Streaming Microservice
-Dockerized video processing service that using **[Circus](https://circus.readthedocs.io/en/latest/)** to run **[gRPC](https://grpc.io/)** server and **[Celery](https://docs.celeryproject.org/en/stable/)**
- task queue. 
 
-The `video-streaming` multi-stage dockerfile uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type that similar to `MPEG-DASH` and have some advantages over `MPEG-TS`.
+![video-service](https://user-images.githubusercontent.com/6056661/110987240-0d7ab780-8384-11eb-8e20-05a0a9144d35.png)
 
-For video processing, **[python-ffmpeg-video-streaming](https://pypi.org/project/python-ffmpeg-video-streaming/)**
- package has been installed, and you can get or put your files to a cloud such as `Amazon S3` compatible storages, `Google Cloud Storage` and `Microsoft Azure Storage`
+Python video streaming microservice, allows you to change the number of qualities or formats,
+to reduce processing and storage space costs.
+
+For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
+
+The multi-stage dockerfile of project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
+
+
+Features:
+* Supports multi outputs with custom encode formats, codecs and qualities
+* Supports HLS, MPEG-DASH and HLS with fmp4 segments (CMAF)
+* Supports any S3-compatible object storage like Minio object storage
+* Supports **[gRPC](https://grpc.io/)** protocol for low latency and high throughput communication
+* No use of web frameworks to avoid unnecessary abstractions and dependencies
+* Supports tracking of outputs status and returns progress details of each input or output, including total **passed checking, processing and uploading progress**
+* Supports force stop outputs, to kill processes and delete all local files
+* All tasks are separate to manage and retry each part again in some exceptions
+* Supports webhook callback when all outputs uploaded
+
+TODO
+* return input video file details to client, before video processing starting. ( client can use this information to show the end user)
+* revoke one output of a job
+* adding watermark
+* call webhook url when every output was done
+* adding gRPC client sample and test cases
+* update document
 
 ### 1. Setup Redis and RabbitMQ
 for local developments you can use Redis and Rabbit services in this repository,
@@ -14,7 +36,7 @@ but you should configure them before building.
 #### Redis Service
 
 to set `Redis` password ,just put password value at
-`.docker-compose/redis/` directory as `.redis_pass_file` file, or for local development you can use the sample:
+`.docker-compose/redis/` directory as `.redis_pass_file` file, or use the sample:
 ```
 cp .docker-compose/redis/.redis_pass_file.local .docker-compose/redis/.redis_pass_file
 ```

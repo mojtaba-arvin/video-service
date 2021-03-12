@@ -16,7 +16,7 @@ class ErrorMessages:
     S3_INPUT_BUCKET_IS_REQUIRED = "s3_input_bucket is required."
     S3_OUTPUT_BUCKET_IS_REQUIRED = "s3_output_bucket is required."
     S3_OUTPUT_KEY_IS_REQUIRED = "s3_output_key is required."
-    OBJECT_DETAILS_IS_REQUIRED = "object_details is required and it must a dict with 'ContentLength' key."
+    OBJECT_DETAILS_IS_REQUIRED = "object_details is required."
     OBJECT_DETAILS_IS_INVALID = "object_details must be a dict with 'ContentLength' key."
     REQUEST_ID_IS_REQUIRED = "request_id is required."
     OUTPUT_NUMBER_IS_REQUIRED = "request_id is required."
