@@ -1,38 +1,29 @@
 from abc import ABC
 from celery import states
 from video_streaming.celery import celery_app
+from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
-from .mixins import AnalyzeInputMixin, BaseInputMixin
+from .mixins import AnalyzeInputMixin
 
 
 class AnalyzeInputTask(
         ChainCallbackMixin,
         AnalyzeInputMixin,
-        BaseInputMixin,
         BaseStreamingTask,
         ABC
         ):
 
-    def save_failed(self):
-        self.save_primary_status(self.primary_status.FAILED)
-        self.save_input_status(self.input_status.INPUT_FAILED)
+    # rewrite BaseInputMixin.save_failed
+    def save_failed(self, request_id, input_number):
+        super().save_failed(request_id, input_number)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
-            self.stop_reason.FAILED_ANALYZE_INPUT)
-
-    def on_failure(self, *args, **kwargs):
-        self.save_failed()
-        return super().on_failure(*args, **kwargs)
-
-    def raise_ignore(self, message=None, state=states.FAILURE):
-        if state == states.FAILURE:
-            self.save_failed()
-        elif state == states.REVOKED:
-            self.save_input_status(self.input_status.INPUT_REVOKED)
-        super().raise_ignore(message=message, state=state)
+            self.stop_reason.DOWNLOADING_FAILED,
+            request_id
+        )
 
 
 @celery_app.task(name="analyze_input",
@@ -46,29 +37,49 @@ def analyze_input(self,
                   ) -> dict:
     """analyze input with ffprobe
 
+        to save video information on cache
+
        required parameters:
-         - input_path
          - request_id
+         - input_number
+         - input_path
+    """
+    self.check_analyze_requirements(
+        request_id=request_id,
+        input_number=input_number,
+        input_path=input_path)
+
+    if self.is_forced_to_stop(request_id):
+        raise self.raise_revoke(request_id)
+
+    # save input status using input_number and request_id
+    self.save_input_status(
+        self.input_status.ANALYZING,
+        input_number,
+        request_id
+    )
+
+    ffprobe = self.analyze_input(input_path)
+
+    """
+    examples :
+        ffprobe.format()
+        ffprobe.all()
+        ffprobe.streams().audio().get('bit_rate', 0)
     """
 
-    self._initial_params()
+    self.cache.set(
+        CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
+            request_id=request_id,
+            input_number=input_number
+        ),
+        ffprobe.out)
 
     # save input status using input_number and request_id
-    self.save_input_status(self.input_status.ANALYZING)
+    self.save_input_status(
+        self.input_status.ANALYZING_FINISHED,
+        input_number,
+        request_id
+    )
 
-    try:
-        self.analyze_input()
-    except RuntimeError as e:
-        # TODO capture error and notify developer
-        print(e)
-        raise self.retry(exc=e)
-    except Exception as e:
-        # FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'
-        # TODO capture error and notify developer
-        print(e)
-        raise self.retry(exc=e)
-
-    # save input status using input_number and request_id
-    self.save_input_status(self.input_status.ANALYZING_FINISHED)
-
-    return dict(input_path=self.input_path)
+    return dict(input_path=input_path)

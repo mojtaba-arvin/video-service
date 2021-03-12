@@ -10,7 +10,11 @@ __all__ = [
 
 class BaseTask(Task, ABC):
 
-    def raise_ignore(self, message=None, state=states.FAILURE):
+    def raise_ignore(self,
+                     message=None,
+                     state=states.FAILURE,
+                     request_kwargs: dict = None):
+
         try:
             # to trigger the task_failure signal
             raise Exception

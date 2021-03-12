@@ -161,7 +161,11 @@ class S3Service:
 
     @staticmethod
     def get_object_size(object_details):
-        return int(object_details.get('ContentLength', 0))
+        try:
+            return int(object_details['ContentLength'])
+        except Exception as e:
+            print(0)
+            return None
 
     def download(
             self,
