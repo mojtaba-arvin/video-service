@@ -2,12 +2,12 @@
 
 ![video-service](https://user-images.githubusercontent.com/6056661/110987240-0d7ab780-8384-11eb-8e20-05a0a9144d35.png)
 
-Python video streaming microservice, allows you to reduce the number of qualities or formats,
-to reduce processing costs and storage space costs.
+Python video streaming microservice, allows you to change the number of qualities or formats,
+to reduce processing and storage space costs.
 
-For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH` , which reduces costs by 50%. 
+For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
 
-The multi-stage dockerfile of project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type and have some advantages over `MPEG-TS`.
+The multi-stage dockerfile of project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
 
 
 Features:
