@@ -46,6 +46,42 @@ TASK_RETRY_FFMPEG_COMMAND_MAX = env_config.get(
     cast=int)
 
 ##################################################
+#    Tasks Default Parameters                    #
+##################################################
+
+# HLS or MPEG-Dash
+DEFAULT_PLAYLIST_IS_HLS = env_config.get(
+    "DEBUG_PLAYLIST_IS_HLS",
+    default=True,
+    cast=bool)
+
+# to use fmp4 segment type in HLS playlist
+DEFAULT_SEGMENT_TYPE_IS_FMP4 = env_config.get(
+    "DEFAULT_SEGMENT_TYPE_IS_FMP4",
+    default=True,
+    cast=bool)
+
+# Check if s3_output_key is already exist, ignore the task
+DONT_REPLACE_OUTPUT = env_config.get(
+    "DONT_REPLACE_OUTPUT",
+    default=True,
+    cast=bool)
+
+# Create the output bucket If not exist
+CREATE_OUTPUT_BUCKET = env_config.get(
+    "CREATE_OUTPUT_BUCKET",
+    default=True,
+    cast=bool)
+
+# The encode format of playlist,
+# e.g "h264", "hevc" or "vp9"
+DEFAULT_ENCODE_FORMAT = env_config.get(
+    "DEFAULT_ENCODE_FORMAT",
+    default="h264",
+    cast=str)
+
+
+##################################################
 #    S3 Object Storage                           #
 ##################################################
 

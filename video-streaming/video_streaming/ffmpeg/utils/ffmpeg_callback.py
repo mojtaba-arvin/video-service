@@ -8,7 +8,9 @@ class FfmpegCallback(object):
             self,
             task: Task = None,
             task_id: str = None,
-            is_hls: bool = None
+            is_hls: bool = None,
+            output_number: int = None,
+            request_id: str = None
             ):
         self.task = task
 
@@ -19,33 +21,40 @@ class FfmpegCallback(object):
         self.is_hls = is_hls
 
         self.first_chunk = True
+        self.output_number = output_number
+        self.request_id = request_id
 
     def progress(self, ffmpeg, duration, time_, time_left, process):
 
-        if self.task.is_forced_to_stop():
+        if self.task.is_forced_to_stop(self.request_id):
             process.kill()
             # raise inside callback, is just to finish processing,
             # so, will write 'ffmpeg executed command successfully' log
             self.task.raise_ignore(
                 message=self.task.error_messages.TASK_WAS_FORCIBLY_STOPPED,
-                state=states.REVOKED
+                state=states.REVOKED,
+                request_kwargs=self.task.request.kwargs
             )
 
         if self.first_chunk:
             # save output status using output_number and request_id
             self.task.save_output_status(
-                self.task.output_status.PROCESSING)
+                self.task.output_status.PROCESSING,
+                self.output_number,
+                self.request_id)
             self.first_chunk = False
 
         self.task.save_output_progress(
             total=duration,
-            current=time_
+            current=time_,
+            request_id=self.request_id,
+            output_number=self.output_number
         )
 
         if self.task.request.called_directly:
             percent = round(time_ / duration * 100)
             sys.stdout.write(
-                f"\rProcessing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
+                f"\r{self.request_id} | {self.output_number} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
             )
             sys.stdout.flush()
 

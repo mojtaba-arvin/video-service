@@ -16,8 +16,12 @@ class ErrorMessages:
     S3_INPUT_BUCKET_IS_REQUIRED = "s3_input_bucket is required."
     S3_OUTPUT_BUCKET_IS_REQUIRED = "s3_output_bucket is required."
     S3_OUTPUT_KEY_IS_REQUIRED = "s3_output_key is required."
-    OBJECT_DETAILS_IS_REQUIRED = "object_details is required."
+    OBJECT_DETAILS_IS_REQUIRED = "object_details is required and it must a dict with 'ContentLength' key."
+    OBJECT_DETAILS_IS_INVALID = "object_details must be a dict with 'ContentLength' key."
     REQUEST_ID_IS_REQUIRED = "request_id is required."
+    OUTPUT_NUMBER_IS_REQUIRED = "request_id is required."
+    INPUT_NUMBER_IS_REQUIRED = "input_number is required."
+    WEBHOOK_URL_IS_REQUIRED = "webhook_url is required and can not be empty."
     INPUT_PATH_IS_REQUIRED = "input_path is required."
     OUTPUT_PATH_IS_REQUIRED = "output_path is required."
     DIRECTORY_IS_REQUIRED = "directory is required."
@@ -26,6 +30,10 @@ class ErrorMessages:
     INPUT_FILE_IS_NOT_FOUND = "input file is not found."
     WEBHOOK_URL_MUST_NOT_BE_REDIRECTED = "webhook url must not be redirected."
     WEBHOOK_HTTP_FAILED = "webhook task failed" \
+                           ", HTTP response status: '{status}'" \
+                           ", reason: '{reason}'" \
+                           ", request_id: '{request_id}'"
+    HTTP_STATUS_CODE_NOT_SUPPORT = "response HTTP status code is not support" \
                            ", HTTP response status: '{status}'" \
                            ", reason: '{reason}'" \
                            ", request_id: '{request_id}'"

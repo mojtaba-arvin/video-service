@@ -1,15 +1,14 @@
+from celery import Task
 from ffmpeg_streaming import FFProbe
 from video_streaming import settings
 from video_streaming.core.tasks import BaseTask
-from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
+from .input import BaseInputMixin
 
 
-class AnalyzeInputMixin(object):
-    input_path: str
-    request_id: str  # grpc request tracking id
-    input_number: str
+class AnalyzeInputMixin(BaseInputMixin):
 
+    input_status: BaseStreamingTask.input_status
     stop_reason: BaseStreamingTask.stop_reason
     cache: BaseStreamingTask.cache
     error_messages: BaseStreamingTask.error_messages
@@ -17,34 +16,52 @@ class AnalyzeInputMixin(object):
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
     raise_ignore: BaseTask.raise_ignore
+    request = Task.request
+    retry: Task.retry
 
-    def analyze_input(self):
-        if self.input_path is None:
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
+    def check_analyze_requirements(
+            self,
+            request_id=None,
+            input_number=None,
+            input_path=None):
+
+        if request_id is None:
+            # TODO notify developer
             raise self.raise_ignore(
-                message=self.error_messages.INPUT_PATH_IS_REQUIRED)
+                message=self.error_messages.REQUEST_ID_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
 
-        if self.request_id is None:
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
+        if input_number is None:
+            # TODO notify developer
             raise self.raise_ignore(
-                message=self.error_messages.REQUEST_ID_IS_REQUIRED)
+                message=self.error_messages.INPUT_NUMBER_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
 
-        ffprobe = FFProbe(
-            self.input_path,
-            cmd=settings.FFPROBE_BIN_PATH)
-        """
-        examples :
-            ffprobe.format()
-            ffprobe.all()
-            ffprobe.streams().audio().get('bit_rate', 0)
-        """
+        if input_path is None:
+            self.save_input_status(
+                self.input_status.INPUT_FAILED,
+                input_number,
+                request_id)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.INPUT_PATH_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
 
-        self.cache.set(
-            CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
-                request_id=self.request_id,
-                input_number=self.input_number
-            ),
-            ffprobe.out)
-        return ffprobe
+    def analyze_input(self, input_path) -> FFProbe:
+
+        try:
+            return FFProbe(
+                input_path,
+                cmd=settings.FFPROBE_BIN_PATH)
+        except RuntimeError as e:
+            # TODO capture error and notify developer
+            print(e)
+            raise self.retry(exc=e)
+        except Exception as e:
+            # FileNotFoundError:
+            # [Errno 2] No such file or directory: 'ffprobe'
+            # TODO capture error and notify developer
+            print(e)
+            raise self.retry(exc=e)

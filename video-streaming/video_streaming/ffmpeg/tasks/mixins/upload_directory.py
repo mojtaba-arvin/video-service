@@ -7,11 +7,6 @@ from .output import BaseOutputMixin
 
 
 class UploadDirectoryMixin(BaseOutputMixin):
-    request: Task.request
-
-    directory: str
-    s3_output_key: str
-    s3_output_bucket: str
 
     stop_reason: BaseStreamingTask.stop_reason
     error_messages: BaseStreamingTask.error_messages
@@ -19,51 +14,99 @@ class UploadDirectoryMixin(BaseOutputMixin):
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
     raise_ignore: BaseTask.raise_ignore
+    request: Task.request
 
-    def upload_directory(self):
+    def check_upload_directory_requirements(
+            self,
+            request_id=None,
+            output_number=None,
+            directory=None,
+            s3_output_key=None,
+            s3_output_bucket=None):
+
+        if request_id is None:
+            # TODO notify developer
+            raise self.raise_ignore(
+                message=self.error_messages.REQUEST_ID_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+        if output_number is None:
+            # TODO notify developer
+            raise self.raise_ignore(
+                message=self.error_messages.OUTPUT_NUMBER_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+        if directory is None:
+            # TODO notify developer
+            self.save_output_status(
+                self.output_status.OUTPUT_FAILED,
+                output_number,
+                request_id)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.DIRECTORY_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+        if s3_output_key is None:
+            # TODO notify developer
+            self.save_output_status(
+                self.output_status.OUTPUT_FAILED,
+                output_number,
+                request_id)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+        if s3_output_bucket is None:
+            # TODO notify developer
+            self.save_output_status(
+                self.output_status.OUTPUT_FAILED,
+                output_number,
+                request_id)
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.
+                S3_OUTPUT_BUCKET_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+    def upload_directory(self,
+                         directory,
+                         s3_output_key,
+                         s3_output_bucket,
+                         output_number,
+                         request_id):
         """upload the directory of the output files
-         to S3 object storage
-         """
-        if self.directory is None:
-            # TODO notify developer
-            self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
-            raise self.raise_ignore(
-                message=self.error_messages.DIRECTORY_IS_REQUIRED)
-
-        if self.s3_output_key is None:
-            # TODO notify developer
-            self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
-            raise self.raise_ignore(
-                message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED)
-
-        if self.s3_output_bucket is None:
-            # TODO notify developer
-            self.save_output_status(self.output_status.OUTPUT_FAILED)
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
-            raise self.raise_ignore(
-                message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED)
-
+         to S3 object storage"""
         try:
             self.s3_service.upload_directory(
-                self.s3_output_key,
-                self.directory,
-                bucket_name=self.s3_output_bucket,
+                s3_output_key,
+                directory,
+                bucket_name=s3_output_bucket,
                 directory_callback=S3UploadDirectoryCallback(
                     task=self,
-                    task_id=self.request.id.__str__()
+                    task_id=self.request.id.__str__(),
+                    output_number=output_number,
+                    request_id=request_id,
                 ).progress
             )
         except urllib3.exceptions.HeaderParsingError as e:
             # MissingHeaderBodySeparatorDefect
             # TODO notify developer
             self.logger.error(e)
-            self.save_output_status(self.output_status.OUTPUT_FAILED)
+            self.save_output_status(
+                self.output_status.OUTPUT_FAILED,
+                output_number,
+                request_id)
             self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR)
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
-                message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY)
+                message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
+                request_kwargs=self.request.kwargs)

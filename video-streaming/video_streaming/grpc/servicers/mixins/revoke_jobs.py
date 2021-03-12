@@ -47,7 +47,7 @@ class RevokeJobsMixin(object):
         revoke_details = dict(
             request_id=request_id,
             reference_id=reference_id,
-            revoke_signal_status=self.pb2.RevokeSignalStatus.REVOKE_SIGNAL_SENT
+            has_been_sent=self.pb2.RevokeSignalStatus.REVOKE_SIGNAL_SENT
         )
         return self.pb2.RevokeDetails(**revoke_details)
 
