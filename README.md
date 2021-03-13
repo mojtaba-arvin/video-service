@@ -29,26 +29,39 @@ TODO
 * adding gRPC client sample and test cases
 * update document
 
-### 1. Setup Redis and RabbitMQ
-for local developments you can use Redis and Rabbit services in this repository,
-but you should configure them before building.
+## Setup
 
-#### Redis Service
+### 1. Requirements
 
-to set `Redis` password ,just put password value at
-`.docker-compose/redis/` directory as `.redis_pass_file` file, or use the sample:
-```
-cp .docker-compose/redis/.redis_pass_file.local .docker-compose/redis/.redis_pass_file
-```
-#### RabbitMQ Service
+ * a **[Redis](https://redis.io/)** service ( to cache result and as a backend for celery )
+ * a message broker ( e.g. **[RabbitMQ](https://www.rabbitmq.com/)** or Redis )
+ * an S3-compatible object storage ( e.g. **[Minio](https://min.io/)** )
 
-`RabbitMQ` environment ,must be at `.docker-compose/rabbitmq/` directory as `.env` file. you can copy the sample:
-```
-cp .docker-compose/rabbitmq/.env.local .docker-compose/rabbitmq/.env
-```
-### 2. Project environment
 
-This project needs a message broker and result backend for Celery.
+if you have not already, a Redis, a broker and an S3 object storage,
+you can `clone` these repositories:
+
+* Redis: **[Simple Redis service](https://github.com/mojtaba-arvin/redis)**
+  ```
+  git clone https://github.com/mojtaba-arvin/redis.git
+  ```
+* RabbitMQ: **[Simple RabbitMQ service](https://github.com/mojtaba-arvin/rabbitmq)**
+  ```
+  git clone https://github.com/mojtaba-arvin/rabbitmq.git
+  ```
+* Minio: **[Simple S3-compatible object storage service using Minio](https://github.com/mojtaba-arvin/minio)**
+  ```
+  git clone https://github.com/mojtaba-arvin/minio.git
+  ```
+
+
+#### up workflow
+
+![build-workflow](https://user-images.githubusercontent.com/6056661/111037785-f64ad100-843a-11eb-9450-3197e05fc696.png)
+
+
+### 2. Setup video service project environments
+
 You should create an `.env` file at `video-streaming/video_streaming`
 . There is a sample of required environments that you can use it:
 ```
@@ -56,18 +69,33 @@ cp video-streaming/video_streaming/.env.local video-streaming/video_streaming/.e
 ```
 The project uses `python-decouple` package, you can add other variables and cast them in `settings.py`. or anywhere in project using `RepositoryEnv` class
 
-|    | VARIABLE                     | DESCRIPTION                                                                 |
-|----|------------------------------|-----------------------------------------------------------------------------|
-| 1  | CELERY_BROKER_URL            | Celery needs a message broker url, e.g. RabbitMQ url                        |
-| 2  | CELERY_RESULT_BACKEND        | To keep track of Celery tasks results, e.g. Redis url                       |
-| 3  | S3_ENDPOINT_URL              |                                                                             |
-| 4  | S3_ACCESS_KEY_ID             |                                                                             |
-| 5  | S3_SECRET_ACCESS_KEY         |                                                                             |
-| 6  | S3_REGION_NAME               |                                                                             |
-| 7  | S3_IS_SECURE                 | Default is False but note that not all services support non-ssl connections.|
-| 8  | S3_DEFAULT_BUCKET            | Default bucket name                                                         |
-| 9  | S3_DEFAULT_INPUT_BUCKET_NAME | Default bucket name of S3 storage to download videos                        |
-| 10 | S3_DEFAULT_OUTPUT_BUCKET_NAME| Default bucket name of S3 storage to upload videos                          |
+|    | VARIABLE                         | DESCRIPTION                                                                 |
+|----|----------------------------------|-----------------------------------------------------------------------------|
+| 1  | CELERY_BROKER_URL                | Celery needs a message broker url, e.g. RabbitMQ url                        |
+| 2  | CELERY_RESULT_BACKEND            | To keep track of Celery tasks results, e.g. Redis url                       |
+| 3  | TASK_RETRY_BACKOFF_MAX           |                                                                             |
+| 4  | TASK_RETRY_FFMPEG_COMMAND_MAX    |                                                                             |
+| 5  | S3_ENDPOINT_URL                  |                                                                             |
+| 6  | S3_ACCESS_KEY_ID                 |                                                                             |
+| 7  | S3_SECRET_ACCESS_KEY             |                                                                             |
+| 8  | S3_REGION_NAME                   |                                                                             |
+| 9  | S3_IS_SECURE                     | Default is False but note that not all services support non-ssl connections.|
+| 10 | S3_DEFAULT_BUCKET                | Default bucket name                                                         |
+| 11 | S3_DEFAULT_INPUT_BUCKET_NAME     | Default bucket name of S3 storage to download videos                        |
+| 12 | S3_DEFAULT_OUTPUT_BUCKET_NAME    | Default bucket name of S3 storage to upload videos                          |
+| 13 | S3_TRANSFER_MULTIPART_THRESHOLD  |                                                                             |
+| 14 | S3_TRANSFER_MAX_CONCURRENCY      |                                                                             |
+| 15 | S3_TRANSFER_MULTIPART_CHUNKSIZE  |                                                                             |
+| 16 | S3_TRANSFER_NUM_DOWNLOAD_ATTEMPTS|                                                                             |
+| 17 | S3_TRANSFER_MAX_IO_QUEUE         |                                                                             |
+| 18 | S3_TRANSFER_IO_CHUNKSIZE         |                                                                             |
+| 19 | S3_TRANSFER_USE_THREADS          |                                                                             |
+| 20 | TMP_DOWNLOADED_DIR               | Directory for temporary downloaded videos (should be volume on compose file)|                                                                             |
+| 21 | TMP_TRANSCODED_DIR               | Directory for temporary transcoded videos (should be volume on compose file)|
+| 22 | FFPROBE_BIN_PATH                 |                                                                             |
+| 23 | FFMPEG_BIN_PATH                  |                                                                             |
+| 24 | REDIS_TIMEOUT_SECOND             |                                                                             |
+| 25 | REDIS_URL                        | Redis url                                                                   |
 
 
 ### 3. Generate Certificates to use by gRPC
@@ -93,26 +121,49 @@ there are some variables in the `[env]` section:
   
 after any change in `.circus.ini` you need to build image again.
 
-### 5. Building Docker composes
+### 5. Docker composes
 
-##### Building for local development
+in the first time, before up using `docker-compose.join.*` files, create external networks by build **[Redis](https://github.com/mojtaba-arvin/redis)**, **[RabbitMQ](https://github.com/mojtaba-arvin/rabbitmq)** and **[Minio](https://github.com/mojtaba-arvin/minio)** projects.
 
-there are some `sh` scripts in the root directory, that you can use them:
+|    | Compose file                     | Description                                                                 |
+|----|----------------------------------|-----------------------------------------------------------------------------|
+| 1  | docker-compose.yml               | includes `video-streaming` service that has `WAIT_FOR` environment variable |
+| 2  | docker-compose.local.yml         | for local development, maps exposed gRPC port to `8081` as your host port   |
+| 3  | docker-compose.join.redis.yml    | to join the Redis service network as an external network. see : **[Redis service](https://github.com/mojtaba-arvin/redis)**|
+| 4  | docker-compose.join.rabbitmq.yml | to join the RabbitMQ service network as an external network. see : **[RabbitMQ service](https://github.com/mojtaba-arvin/rabbitmq)**|
+| 5  | docker-compose.join.minio.yml    | to join the Minio service network as an external network. see : **[Minio service](https://github.com/mojtaba-arvin/minio)**|
 
-* `bash ./build.sh` : Services are built once
+there are some `sh` scripts in the root directory of this repository, that you can use them:
 
-* `bash ./up.sh` : Builds, (re)creates, starts, and attaches to containers for a service.
-
-* `bash ./ps.sh` : Shows services states
-
-* `bash ./logs.sh` : Displays log output from services.
-
-* `bash ./exec.video-streaming.sh` : To get an interactive prompt in `video-streaming` service
-
-* `bash ./down.sh` : Stops containers and removes containers, networks, volumes, and images created by `up`
-
-##### Building for production
-TODO
+* Services are built once
+  ```
+  bash ./build.sh
+  ```
+* Builds, (re)creates, starts, and attaches to containers for a service.
+  ```
+  bash ./up.sh
+  ```
+* like `up.sh` but for local development, if you are not using a reverse proxy, you can use `up.local.sh`
+  that maps exposed grpc port to `8081` as your host port
+  ```
+  bash ./up.local.sh
+  ```
+* Shows services states
+  ```
+  bash ./ps.sh
+  ```
+* Displays log output from services.
+  ```
+  bash ./logs.sh
+  ```
+* To get an interactive prompt in `video-streaming` service
+  ```
+  bash ./exec.sh
+  ```
+* Stops containers and removes containers, networks, volumes, and images created by `up`.
+  ```
+  bash ./down.sh
+  ```
 
 ### 6. Generate gRPC modules
 

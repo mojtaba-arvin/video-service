@@ -3,10 +3,10 @@ version: '3'
 services:
     video-streaming:
         networks:
-            - minio-object-storage-network
+            - rabbitmq-broker-network
 networks:
-    minio-object-storage-network:
+    rabbitmq-broker-network:
         external:
-            name: object-storage_minio-object-storage-network
+            name: rabbitmq_broker-network
 ##                  ^             ^
 ##          name: of project    network created inside that project

@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+    video-streaming:
+        networks:
+            - redis-store-network
+networks:
+    redis-store-network:
+        external:
+            name: redis_redis-network
+##                  ^             ^
+##          name: of project    network created inside that project

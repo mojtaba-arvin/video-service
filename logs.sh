@@ -1,4 +1,4 @@
 #!/bin/sh
 docker-compose \
-     -f docker-compose.video-streaming.local.yml \
+    -f docker-compose.yml \
      logs --follow --tail=50
