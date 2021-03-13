@@ -7,7 +7,7 @@ to reduce processing and storage space costs.
 
 For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
 
-The multi-stage dockerfile of project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
+The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
 
 
 Features:
@@ -16,7 +16,7 @@ Features:
 * Supports any S3-compatible object storage like Minio object storage
 * Supports **[gRPC](https://grpc.io/)** protocol for low latency and high throughput communication
 * No use of web frameworks to avoid unnecessary abstractions and dependencies
-* Supports tracking of outputs status and returns progress details of each input or output, including total **passed checking, processing and uploading progress**
+* Supports tracking of outputs status and returns progress details of each input or output, including **checking, processing and uploading progress**
 * Supports force stop outputs, to kill processes and delete all local files
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
