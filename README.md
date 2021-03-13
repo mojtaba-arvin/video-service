@@ -22,7 +22,7 @@ Features:
 * Supports webhook callback when all outputs uploaded
 
 TODO
-* return input video file details to client, before video processing starting. ( client can use this information to show the end user)
+* return input video file details to client, before video processing starting. ( client can use this information to show to the end user)
 * revoke one output of a job
 * adding watermark
 * call webhook url when every output was done
