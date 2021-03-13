@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+    video-streaming:
+        build:
+            context: ./.docker-compose/video-streaming
+            dockerfile: Dockerfile
+        image: video-streaming
+        expose:
+            ## using exposed ports on the nginx reverse proxy
+            - "9999" # same as GRPC_PORT on circus.ini
+            - "5555" # same as FLOWER_PORT on circus.ini
+        volumes:
+            - ./video-streaming:/opt/workdir/video-streaming
+            - ./tmp/downloaded_videos/:/tmp/downloaded_videos/
+            - ./tmp/transcoded_videos/:/tmp/transcoded_videos/
+        environment:
+            ## ping
+            - WAIT_FOR=redis:6379,rabbitmq:5672,minio0:9000

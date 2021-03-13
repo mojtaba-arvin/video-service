@@ -18,4 +18,10 @@ ADD requirements.txt /opt/workdir
 RUN pip3 install --no-cache-dir --default-timeout=100 -r /opt/workdir/requirements.txt
 
 ADD circus/circus.ini /etc/circus.ini
-ENTRYPOINT ["circusd", "/etc/circus.ini"]
+
+
+COPY ["./sh/*.sh", "/docker/bin/"]
+RUN chmod a+x /docker/bin/*.sh && sed -i -e 's/\r$//' /docker/bin/*.sh
+
+# wait for dependencies and run the circusd
+ENTRYPOINT ["/docker/bin/run.sh"]
