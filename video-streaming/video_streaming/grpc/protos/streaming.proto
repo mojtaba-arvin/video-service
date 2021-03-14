@@ -2,7 +2,7 @@ syntax = "proto3";
 
 service Streaming{
   rpc create_job(JobRequest) returns (JobResponse) {}
-  rpc get_results(ResultRequest) returns (ResultResponse) {}
+  rpc get_results(JobsResultsRequest) returns (JobsResultsResponse) {}
   rpc revoke_jobs(JobsRevokeRequest) returns (JobsRevokeResponse) {}
   rpc revoke_job_outputs(JobOutputsRevokeRequest) returns (JobOutputsRevokeResponse) {}
 }
@@ -125,10 +125,10 @@ message JobResponse {
 }
 
 
-message ResultRequest {
+message JobsResultsRequest {
   repeated string tracking_ids = 1;
 }
-message ResultResponse {
+message JobsResultsResponse {
   repeated ResultDetails results = 1;
 }
 enum PrimaryStatus {
@@ -188,6 +188,33 @@ message ResultDetails {
   Checks checks = 9;
   repeated InputProgress inputs = 10;
   repeated OutputProgress outputs = 11;
+  OriginalFileInfo file_info = 12;
+}
+message GeneralInfo{
+    float duration = 1; // 68.843000
+    int64 file_size = 2;
+    int64 bit_rate = 3;
+    // ffprobe gives a list of formats inside the format_name value
+    string file_formats = 4; // 'mov,mp4,m4a,3gp,3g2,mj2'
+
+}
+message VideoInfo{
+    string codec = 1;
+    int64 width = 2;
+    int64 height = 3;
+    string frame_rate = 4;  // '30/1'
+    int64 bit_rate = 5;
+}
+message AudioInfo{
+    string codec = 1;
+    int64 sample_rate = 2;
+    int64 bit_rate = 3;
+    string channel_layout = 4;  // 'stereo'
+}
+message OriginalFileInfo{
+    GeneralInfo general = 1;
+    VideoInfo video = 2;
+    AudioInfo audio = 3;
 }
 message Checks {
     int64 total = 3;

@@ -26,22 +26,22 @@ class AnalyzeInputMixin(BaseInputMixin):
             input_path=None):
 
         if request_id is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if input_number is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_NUMBER_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if input_path is None:
-            self.save_input_status(
-                self.input_status.INPUT_FAILED,
-                input_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -56,6 +56,7 @@ class AnalyzeInputMixin(BaseInputMixin):
                 input_path,
                 cmd=settings.FFPROBE_BIN_PATH)
         except RuntimeError as e:
+            # TODO ignore if RuntimeError('It could not determine the value of width/height')
             # TODO capture error and notify developer
             print(e)
             raise self.retry(exc=e)

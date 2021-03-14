@@ -23,31 +23,25 @@ class CheckOutputKeyMixin(BaseCheckMixin):
             s3_output_bucket=None
             ):
         if request_id is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if s3_output_key is None:
-            self.save_primary_status(
-                self.primary_status.FAILED,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
-                request_id
-            )
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.S3_OUTPUT_KEY_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if s3_output_bucket is None:
-            self.save_primary_status(
-                self.primary_status.FAILED,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
-                request_id
-            )
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.S3_OUTPUT_BUCKET_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)

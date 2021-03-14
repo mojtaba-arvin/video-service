@@ -39,6 +39,7 @@ class ErrorMessages:
                            ", request_id: '{request_id}'"
     TASK_WAS_FORCIBLY_STOPPED = "task was forcibly stopped."
     CAN_NOT_UPLOAD_DIRECTORY = "can not upload directory"
+    INPUT_CODEC_TYPE_IN_NOT_VIDEO = "input codec type is not video"
 
     # gRPC
     S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty."

@@ -20,9 +20,9 @@ Features:
 * Supports force stop outputs, to kill processes and delete all local files
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
+* Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 
 TODO
-* return input video file details to client, before video processing starting. ( client can use this information to show to the end user)
 * revoke one output of a job
 * get video thumbnail
 * adding watermark

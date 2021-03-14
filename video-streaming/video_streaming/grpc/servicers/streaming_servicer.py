@@ -237,7 +237,7 @@ class Streaming(
             result = self._get_result(request_id)
             if result:
                 results.append(result)
-        response = self.pb2.ResultResponse(results=results)
+        response = self.pb2.JobsResultsResponse(results=results)
         return response
 
     def revoke_jobs(self, request, context):
