@@ -60,13 +60,17 @@ def analyze_input(self,
     )
 
     ffprobe = self.analyze_input(input_path)
-
     """
     examples :
         ffprobe.format()
         ffprobe.all()
         ffprobe.streams().audio().get('bit_rate', 0)
     """
+
+    # if ffprobe.streams().video()['codec_type'] != 'video':
+    #     raise self.raise_ignore(
+    #         message=self.error_messages.INPUT_CODEC_TYPE_IN_NOT_VIDEO,
+    #         request_kwargs=self.request.kwargs)
 
     self.cache.set(
         CacheKeysTemplates.INPUT_FFPROBE_DATA.format(

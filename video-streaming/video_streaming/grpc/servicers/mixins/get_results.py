@@ -1,3 +1,4 @@
+from ffmpeg_streaming.ffprobe import Streams
 from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
@@ -95,7 +96,7 @@ class GetResultsMixin(object):
             )
 
             # get stop reason if primary status is FAILED or REVOKED
-            if status in [
+            if primary_status in [
                     PrimaryStatus.FAILED,
                     PrimaryStatus.REVOKED]:
                 stop_reason: str = self.cache.get(
@@ -104,5 +105,36 @@ class GetResultsMixin(object):
                 if stop_reason:
                     result_details['reason'] = self.pb2.StopReason.Value(
                         stop_reason)
+
+            ffprobe_data: dict = self.cache.get(
+                CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
+                    request_id=request_id,
+                    input_number=0
+                ))
+            if ffprobe_data:
+                format_: dict = ffprobe_data['format']
+                streams = Streams(ffprobe_data['streams'])
+                file_info = self.pb2.OriginalFileInfo(
+                    general=self.pb2.GeneralInfo(
+                        duration=float(format_['duration']),
+                        file_size=int(format_['size']),
+                        bit_rate=int(format_['bit_rate']),
+                        file_formats=format_['format_name'],
+                    ),
+                    video=self.pb2.VideoInfo(
+                        codec=streams.video()['codec_name'],
+                        width=int(streams.video().get('width', 0)),
+                        height=int(streams.video().get('height', 0)),
+                        frame_rate=streams.video()['r_frame_rate'],
+                        bit_rate=int(streams.video()['bit_rate'])
+                    ),
+                    audio=self.pb2.AudioInfo(
+                        codec=streams.audio()['codec_name'],
+                        sample_rate=int(streams.audio()['sample_rate']),
+                        bit_rate=int(streams.audio()['bit_rate']),
+                        channel_layout=streams.audio()['channel_layout']
+                    )
+                )
+                result_details['file_info'] = file_info
 
             return self.pb2.ResultDetails(**result_details)

@@ -32,23 +32,22 @@ class CreatePlaylistMixin(BaseOutputMixin):
             s3_output_key=None):
 
         if request_id is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if output_number is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.OUTPUT_NUMBER_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if input_path is None:
-            # TODO notify developer
-            self.save_output_status(
-                self.output_status.OUTPUT_FAILED,
-                output_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -57,11 +56,6 @@ class CreatePlaylistMixin(BaseOutputMixin):
                 request_kwargs=self.request.kwargs)
 
         if output_path is None and s3_output_key is None:
-            # TODO notify developer
-            self.save_output_status(
-                self.output_status.OUTPUT_FAILED,
-                output_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)

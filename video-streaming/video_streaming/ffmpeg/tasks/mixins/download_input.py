@@ -26,22 +26,22 @@ class DownloadInputMixin(BaseInputMixin):
                                     s3_input_bucket=None):
 
         if request_id is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if input_number is None:
-            # TODO notify developer
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
             raise self.raise_ignore(
                 message=self.error_messages.INPUT_NUMBER_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
         if s3_input_key is None:
-            self.save_input_status(
-                self.input_status.INPUT_FAILED,
-                input_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -50,10 +50,6 @@ class DownloadInputMixin(BaseInputMixin):
                 request_kwargs=self.request.kwargs)
 
         if s3_input_bucket is None:
-            self.save_input_status(
-                self.input_status.INPUT_FAILED,
-                input_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -62,10 +58,6 @@ class DownloadInputMixin(BaseInputMixin):
                 request_kwargs=self.request.kwargs)
 
         if object_details is None:
-            self.save_input_status(
-                self.input_status.INPUT_FAILED,
-                input_number,
-                request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
