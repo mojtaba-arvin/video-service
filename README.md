@@ -26,6 +26,7 @@ TODO
 * revoke one output of a job
 * return every output directory size to return
 * get video thumbnail
+* calculate, save and return CPU and memory usage when a video is processing to create a playlist for the financial purposes
 * adding watermark
 * adding optional argument to mapping playlist to different qualities as separated videos
 * call webhook url when every output was done
