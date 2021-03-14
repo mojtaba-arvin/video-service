@@ -17,14 +17,13 @@ Features:
 * Supports **[gRPC](https://grpc.io/)** protocol for low latency and high throughput communication
 * No use of web frameworks to avoid unnecessary abstractions and dependencies
 * Supports tracking of outputs status and returns progress details of each input or output, including **checking, processing and uploading progress**
-* Supports force stop outputs, to kill processes and delete all local files
+* Supports force stop a list of jobs, to kill processes and delete all local files of every job. or revoke one output of a job
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 
 TODO
-* revoke one output of a job
-* return every output directory size to return
+* return every output directory size
 * get video thumbnail
 * calculate, save and return CPU and memory usage for the financial purposes when a video is being processed to create a playlist 
 * adding watermark
