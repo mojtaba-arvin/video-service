@@ -24,8 +24,10 @@ Features:
 TODO
 * return input video file details to client, before video processing starting. ( client can use this information to show to the end user)
 * revoke one output of a job
+* return every output directory size to return
 * get video thumbnail
 * adding watermark
+* adding optional argument to mapping playlist to different qualities as separated videos
 * call webhook url when every output was done
 * adding gRPC client sample and test cases
 * update document
