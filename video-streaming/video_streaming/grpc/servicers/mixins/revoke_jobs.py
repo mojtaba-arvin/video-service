@@ -20,7 +20,7 @@ class RevokeJobsMixin(object):
                 request_id=request_id))
         if not job_details:
             revoke_details = dict(
-                request_id=request_id,
+                tracking_id=request_id,
                 has_been_sent=self.pb2.RevokeSignalStatus.REQUEST_NOT_FOUND
             )
             return self.pb2.RevokeDetails(**revoke_details)

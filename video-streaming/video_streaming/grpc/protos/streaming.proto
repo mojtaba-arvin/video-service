@@ -3,8 +3,8 @@ syntax = "proto3";
 service Streaming{
   rpc create_job(JobRequest) returns (JobResponse) {}
   rpc get_results(JobsResultsRequest) returns (JobsResultsResponse) {}
-  rpc revoke_jobs(JobsRevokeRequest) returns (JobsRevokeResponse) {}
-  rpc revoke_job_outputs(JobOutputsRevokeRequest) returns (JobOutputsRevokeResponse) {}
+  rpc revoke_jobs(RevokeJobsRequest) returns (RevokeJobsResponse) {}
+  rpc revoke_job_outputs(RevokeOutputsRequest) returns (RevokeOutputsResponse) {}
 }
 
 message JobRequest {
@@ -177,7 +177,7 @@ enum StopReason{
 
 }
 message ResultDetails {
-  string request_id = 1;
+  string tracking_id = 1;
   string reference_id = 2;
   PrimaryStatus status = 3;
   StopReason reason = 4;
@@ -257,11 +257,10 @@ message InputProgress {
     int64 current = 4;
 }
 
-
-message JobsRevokeRequest {
+message RevokeJobsRequest {
   repeated string tracking_ids = 1;
 }
-message JobsRevokeResponse{
+message RevokeJobsResponse{
   repeated RevokeDetails results = 1;
 }
 enum RevokeSignalStatus {
@@ -269,19 +268,32 @@ enum RevokeSignalStatus {
   REVOKE_SIGNAL_SENT = 1;
 }
 message RevokeDetails{
-    string request_id = 1;
-    string reference_id = 3;
-    RevokeSignalStatus has_been_sent = 2;
+    string tracking_id = 1;
+    string reference_id = 2;
+    RevokeSignalStatus has_been_sent = 3;
 }
 
 
-message JobOutputsRevokeRequest{
+message RevokeOutputsRequest{
   string tracking_id = 1;
   repeated int32 output_numbers = 2;
 }
-message JobOutputsRevokeResponse{
-    string request_id = 1;
+message RevokeOutputsResponse{
+    // returns gRPC error if tracking_id not found
+    string tracking_id = 1;
     string reference_id = 2;
-    PrimaryStatus status = 3;
-    repeated int32 revoked_outputs = 4;
+    repeated OutputsToRevoke outputs_to_revoke = 4;
+}
+message OutputsToRevoke{
+  int32 output_number = 1;
+  oneof signal_status {
+     bool signal_has_been_sent = 2;
+     signalFailedReason signal_failed_reason = 3;
+  }
+}
+enum signalFailedReason{
+  OUTPUT_NUMBER_IS_INVALID = 0; // when output number is not valid
+  OUTPUT_HAS_BEEN_FAILED = 1; // when output status is OUTPUT_FAILED
+  OUTPUT_HAS_BEEN_UPLOADED = 2; // when output status is UPLOADING_FINISHED
+  OUTPUT_UPLOADING_COULD_NOT_BE_STOPPED = 3; // sometimes when output status is PLAYLIST_UPLOADING
 }

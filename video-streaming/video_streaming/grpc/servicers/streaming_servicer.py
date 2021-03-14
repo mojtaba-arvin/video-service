@@ -1,19 +1,20 @@
 import json
 import uuid
-from celery import chain, group
+from celery import chain
 from video_streaming.cache import RedisCache
-from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.core.constants import CacheKeysTemplates, \
+    PrimaryStatus, OutputStatus
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg import tasks
 from video_streaming.grpc import exceptions
-from video_streaming.grpc.exceptions import \
-    DuplicateOutputLocationsException
 from video_streaming.grpc.protos import streaming_pb2_grpc, \
     streaming_pb2
-from .mixins import CreateJobMixin, GetResultsMixin, RevokeJobsMixin
+from .mixins import CreateJobMixin, GetResultsMixin, RevokeJobsMixin, \
+    RevokeOutputsMixin
 
 
 class Streaming(
+        RevokeOutputsMixin,
         RevokeJobsMixin,
         GetResultsMixin,
         CreateJobMixin,
@@ -28,7 +29,7 @@ class Streaming(
             server)
 
     def create_job(self, request, context):
-        """
+        """create a job, with multi outputs
 
         1. create empty tasks lists for the workflow
         2. generate unique uuid for the current request
@@ -139,7 +140,7 @@ class Streaming(
 
         # 8. check duplicate output locations in current request
         if len(output_locations) != len(set(output_locations)):
-            raise DuplicateOutputLocationsException
+            raise exceptions.DuplicateOutputLocationsException
 
         # 9. check unique output buckets are exist on the cloud or
         # create them if has one create flag ,as first level tasks
@@ -232,6 +233,7 @@ class Streaming(
         return self._job_response(request_id)
 
     def get_results(self, request, context):
+        """get results for a list of jobs"""
         results: list[Streaming.pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
             result = self._get_result(request_id)
@@ -241,12 +243,84 @@ class Streaming(
         return response
 
     def revoke_jobs(self, request, context):
+        """force stop a list of jobs
+        to kill job outputs processes and delete all local files
+        """
         results: list[Streaming.pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
             result = self._revoke_job(request_id)
             if result:
                 results.append(result)
-        response = self.pb2.JobsRevokeResponse(results=results)
+        response = self.pb2.RevokeJobsResponse(results=results)
         return response
 
-    # TODO revoke some outputs of a job
+    def revoke_job_outputs(self, request, context):
+        """force stop a list of outputs for one job"""
+
+        request_id: str = request.tracking_id
+        primary_status: str = self.cache.get(
+            CacheKeysTemplates.PRIMARY_STATUS.format(
+                request_id=request_id), decode=False)
+        job_details: dict = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=request_id))
+
+        # raise if job is already has been executed
+        self.__class__._raise_if_job_already_executed(
+            primary_status,
+            job_details)
+
+        outputs_to_revoke: list[Streaming.pb2.OutputsToRevoke] = []
+        for output_number in request.output_numbers:
+            # is output_number valid?
+            if output_number not in range(job_details['total_outputs']):
+                outputs_to_revoke.append(self.pb2.OutputsToRevoke(
+                        output_number=output_number,
+                        signal_failed_reason=self.pb2.
+                        signalFailedReason.OUTPUT_NUMBER_IS_INVALID))
+                continue
+            # check job has any output status to know if output is
+            # already executed and can not revoke it
+            if primary_status == PrimaryStatus.OUTPUTS_PROGRESSING:
+
+                output_status = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_STATUS.format(
+                        request_id=request_id,
+                        output_number=output_number),
+                    decode=False)
+                if output_status == OutputStatus.OUTPUT_FAILED:
+                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
+                        output_number=output_number,
+                        signal_failed_reason=self.pb2.
+                        signalFailedReason.OUTPUT_HAS_BEEN_FAILED
+                    ))
+                    continue
+                if output_status == OutputStatus.UPLOADING_FINISHED:
+                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
+                        output_number=output_number,
+                        signal_failed_reason=self.pb2.
+                        signalFailedReason.OUTPUT_HAS_BEEN_UPLOADED
+                    ))
+                    continue
+                if output_status == OutputStatus.PLAYLIST_UPLOADING:
+                    # when playlist is uploading, it's not safe to stop
+                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
+                        output_number=output_number,
+                        signal_failed_reason=self.
+                        pb2.signalFailedReason.
+                        OUTPUT_UPLOADING_COULD_NOT_BE_STOPPED
+                    ))
+                    continue
+
+            # ok, output can revoke
+            self._send_revoke_output_signal(request_id, output_number)
+            outputs_to_revoke.append(self.pb2.OutputsToRevoke(
+                    output_number=output_number,
+                    signal_has_been_sent=True))
+
+        response = self.pb2.RevokeOutputsResponse(
+            tracking_id=request_id,
+            reference_id=job_details['reference_id'],
+            outputs_to_revoke=outputs_to_revoke
+        )
+        return response

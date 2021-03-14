@@ -6,7 +6,11 @@ __all__ = [
     'S3KeyCanNotBeEmptyException',
     'BucketNameIsNotValidException',
     'DuplicateOutputLocationsException',
-    'OneOutputIsRequiredException'
+    'OneOutputIsRequiredException',
+    'JobNotFoundException',
+    'JobIsFailedException',
+    'JobIsRevokedException',
+    'JobIsFinishedException'
 ]
 
 
@@ -28,3 +32,23 @@ class DuplicateOutputLocationsException(GrpcBaseException):
 class OneOutputIsRequiredException(GrpcBaseException):
     status_code = ErrorCodes.ONE_OUTPUT_IS_REQUIRED
     message = ErrorMessages.ONE_OUTPUT_IS_REQUIRED
+
+
+class JobNotFoundException(GrpcBaseException):
+    status_code = ErrorCodes.JOB_NOT_FOUND_BY_TRACKING_ID
+    message = ErrorMessages.JOB_NOT_FOUND_BY_TRACKING_ID
+
+
+class JobIsFailedException(GrpcBaseException):
+    status_code = ErrorCodes.JOB_IS_FAILED
+    message = ErrorMessages.JOB_IS_FAILED
+
+
+class JobIsRevokedException(GrpcBaseException):
+    status_code = ErrorCodes.JOB_IS_REVOKED
+    message = ErrorMessages.JOB_IS_REVOKED
+
+
+class JobIsFinishedException(GrpcBaseException):
+    status_code = ErrorCodes.JOB_IS_FINISHED
+    message = ErrorMessages.JOB_IS_FINISHED

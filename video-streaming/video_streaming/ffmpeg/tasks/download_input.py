@@ -5,7 +5,7 @@ from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChordCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
-from .mixins import DownloadInputMixin, BaseInputMixin
+from .mixins import DownloadInputMixin
 
 
 class DownloadInputTask(
