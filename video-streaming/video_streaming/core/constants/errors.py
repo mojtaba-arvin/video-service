@@ -46,6 +46,10 @@ class ErrorMessages:
     S3_BUCKET_NAME_IS_NOT_VALID = "s3 bucket name is not valid."
     DUPLICATE_OUTPUT_LOCATIONS = "there are duplicate output locations."
     ONE_OUTPUT_IS_REQUIRED = "one output is required."
+    JOB_NOT_FOUND_BY_TRACKING_ID = "job not found by tracking_id"
+    JOB_IS_FAILED = "job is failed"
+    JOB_IS_REVOKED = "job is revoked"
+    JOB_IS_FINISHED = "job is finished"
 
 
 class ErrorCodes:
@@ -55,3 +59,7 @@ class ErrorCodes:
     S3_BUCKET_NAME_IS_NOT_VALID = 1002
     DUPLICATE_OUTPUT_LOCATIONS = 1003
     ONE_OUTPUT_IS_REQUIRED = 1004
+    JOB_NOT_FOUND_BY_TRACKING_ID = 1005  # revoke_job_outputs
+    JOB_IS_FAILED = 1006
+    JOB_IS_REVOKED = 1007
+    JOB_IS_FINISHED = 1008

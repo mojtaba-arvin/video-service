@@ -83,7 +83,7 @@ class GetResultsMixin(object):
                     CacheKeysTemplates.PASSED_CHECKS.format(
                         request_id=request_id)) or 0)
             result_details = dict(
-                request_id=request_id,
+                tracking_id=request_id,
                 reference_id=reference_id,
                 status=status,
                 total_outputs=total_outputs,

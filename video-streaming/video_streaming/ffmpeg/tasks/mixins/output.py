@@ -1,3 +1,4 @@
+from celery import states, Task
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 
@@ -6,6 +7,7 @@ class BaseOutputMixin(object):
     delete_inputs: bool
     delete_outputs: bool
 
+    error_messages: BaseStreamingTask.error_messages
     primary_status: BaseStreamingTask.primary_status
     output_status: BaseStreamingTask.output_status
     cache: BaseStreamingTask.cache
@@ -15,6 +17,52 @@ class BaseOutputMixin(object):
     save_primary_status: BaseStreamingTask.save_primary_status
     inputs_remover: BaseStreamingTask.inputs_remover
     outputs_remover: BaseStreamingTask.outputs_remover
+
+    request: Task.request
+
+    def save_failed(self, request_id, output_number):
+        """
+        please rewrite this method to add stop_reason
+        """
+        self.save_output_status(
+            self.output_status.OUTPUT_FAILED,
+            output_number,
+            request_id
+        )
+
+    def on_failure(self, *request_args, **request_kwargs):
+        request_id = request_kwargs.get('request_id', None)
+        output_number = request_kwargs.get('output_number', None)
+        if request_id is not None and output_number is not None:
+            self.save_failed(
+                request_id,
+                output_number
+            )
+        return super().on_failure(*request_args, **request_kwargs)
+
+    def raise_ignore(self,
+                     message=None,
+                     state=states.FAILURE,
+                     request_kwargs: dict = None):
+        if request_kwargs:
+            request_id = request_kwargs.get('request_id', None)
+            output_number = request_kwargs.get('output_number', None)
+            if request_id is not None and output_number is not None:
+                if state == states.FAILURE:
+                    self.save_failed(
+                        request_id,
+                        output_number
+                    )
+                elif state == states.REVOKED:
+                    self.save_output_status(
+                        self.output_status.OUTPUT_REVOKED,
+                        output_number,
+                        request_id
+                    )
+        super().raise_ignore(
+            message=message,
+            state=state,
+            request_kwargs=request_kwargs)
 
     def save_output_status(self, status_name, output_number, request_id):
 
@@ -171,3 +219,22 @@ class BaseOutputMixin(object):
                 if is_finished or is_all_outputs_failed or \
                         is_all_outputs_revoked:
                     self.outputs_remover(request_id=request_id)
+
+    def is_output_forced_to_stop(
+            self,
+            request_id,
+            output_number) -> None or bool:
+        force_stop = self.cache.get(
+            CacheKeysTemplates.FORCE_STOP_OUTPUT_REQUEST.format(
+                request_id=request_id,
+                output_number=output_number))
+        return force_stop
+
+    def raise_revoke_output(
+            self,
+            request_id,
+            output_number):
+        raise self.raise_ignore(
+            message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
+            state=states.REVOKED,
+            request_kwargs=self.request.kwargs)

@@ -249,26 +249,17 @@ class BaseStreamingTask(BaseTask, ABC):
             request_kwargs=self.request.kwargs)
 
     def is_forced_to_stop(self, request_id) -> None or bool:
-        if request_id is None:
-            return None
-        force_stop = self.cache.get(
+        force_stop: None or bool = self.cache.get(
             CacheKeysTemplates.FORCE_STOP_REQUEST.format(
                 request_id=request_id))
         return force_stop
 
     def save_job_stop_reason(self, reason, request_id):
-        if not reason:
-            return
-
         # save primary status on cache when request_id
         # and JOB_DETAILS has been set
-        if request_id is None:
-            # request_id has been not set
-            return
-
-        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
+        if request_id is None or not self.cache.get(
+                CacheKeysTemplates.JOB_DETAILS.format(
                 request_id=request_id)):
-            # JOB_DETAILS has been not set
             return None
 
         # check already has stop reason, to prevent rewrite reason
@@ -291,4 +282,3 @@ class BaseStreamingTask(BaseTask, ABC):
             CacheKeysTemplates.STOP_REASON.format(
                 request_id=request_id), decode=False)
         return reason is not None
-

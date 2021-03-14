@@ -25,13 +25,20 @@ class FfmpegCallback(object):
         self.request_id = request_id
 
     def progress(self, ffmpeg, duration, time_, time_left, process):
+        is_job_stop = self.request_id is not None and \
+                      self.task.is_forced_to_stop(self.request_id)
+        is_output_stop = self.request_id is not None and \
+            self.output_number is not None and \
+            self.task.is_output_forced_to_stop(self.request_id,
+                                               self.output_number)
 
-        if self.task.is_forced_to_stop(self.request_id):
+        if is_job_stop or is_output_stop:
             process.kill()
             # raise inside callback, is just to finish processing,
             # so, will write 'ffmpeg executed command successfully' log
             self.task.raise_ignore(
-                message=self.task.error_messages.TASK_WAS_FORCIBLY_STOPPED,
+                message=self.task.error_messages.
+                TASK_WAS_FORCIBLY_STOPPED,
                 state=states.REVOKED,
                 request_kwargs=self.task.request.kwargs
             )

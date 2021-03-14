@@ -1,5 +1,4 @@
 from abc import ABC
-from celery import states
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
@@ -15,52 +14,15 @@ class UploadDirectoryTask(
         ABC
         ):
 
+    # rewrite BaseOutputMixin.save_failed
     def save_failed(self, request_id, output_number):
-        self.save_output_status(
-            self.output_status.OUTPUT_FAILED,
-            output_number,
-            request_id
-        )
+        super().save_failed(request_id, output_number)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
             self.stop_reason.FAILED_UPLOAD_DIRECTORY,
             request_id
         )
-
-    def on_failure(self, *request_args, **request_kwargs):
-        request_id = request_kwargs.get('request_id', None)
-        output_number = request_kwargs.get('output_number', None)
-        if request_id is not None and output_number is not None:
-            self.save_failed(
-                request_id,
-                output_number
-            )
-        return super().on_failure(*request_args, **request_kwargs)
-
-    def raise_ignore(self,
-                     message=None,
-                     state=states.FAILURE,
-                     request_kwargs: dict = None):
-        if request_kwargs:
-            request_id = request_kwargs.get('request_id', None)
-            output_number = request_kwargs.get('output_number', None)
-            if request_id is not None and output_number is not None:
-                if state == states.FAILURE:
-                    self.save_failed(
-                        request_id,
-                        output_number
-                    )
-                elif state == states.REVOKED:
-                    self.save_output_status(
-                        self.output_status.OUTPUT_REVOKED,
-                        output_number,
-                        request_id
-                    )
-        super().raise_ignore(
-            message=message,
-            state=state,
-            request_kwargs=request_kwargs)
 
 
 @celery_app.task(name="upload_directory",
@@ -95,6 +57,9 @@ def upload_directory(self,
 
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
+
+    if self.is_output_forced_to_stop(request_id, output_number):
+        raise self.raise_revoke_output(request_id, output_number)
 
     # save output status using output_number and request_id
     self.save_output_status(
