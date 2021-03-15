@@ -1,4 +1,4 @@
-# Python Video Streaming Microservice
+# **[Python Video Streaming Microservice](https://github.com/mojtaba-arvin/video-service)**
 
 ![video-service](https://user-images.githubusercontent.com/6056661/110987240-0d7ab780-8384-11eb-8e20-05a0a9144d35.png)
 
@@ -21,10 +21,11 @@ Features:
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
+* Returns **CPU and memory usage** width spent time of every output for the financial purposes when a video is being processed to create a playlist 
+
 
 TODO
 * get video thumbnail
-* calculate, save and return CPU and memory usage for the financial purposes when a video is being processed to create a playlist 
 * adding watermark
 * adding optional argument to mapping playlist to different qualities as separated videos
 * call webhook url when every output was done

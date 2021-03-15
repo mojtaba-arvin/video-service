@@ -1,5 +1,9 @@
+import json
+import time
 import sys
+import psutil
 from celery import Task, states
+from video_streaming.core.constants import CacheKeysTemplates
 
 
 class FfmpegCallback(object):
@@ -43,13 +47,61 @@ class FfmpegCallback(object):
                 request_kwargs=self.task.request.kwargs
             )
 
+        psutil_process = psutil.Process(process.pid)
+
         if self.first_chunk:
             # save output status using output_number and request_id
             self.task.save_output_status(
                 self.task.output_status.PROCESSING,
                 self.output_number,
                 self.request_id)
+
+            try:
+                self.task.cache.set(
+                    CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                        request_id=self.request_id,
+                        output_number=self.output_number),
+                    time.time())
+                cpu_times = psutil_process.cpu_times()
+                self.task.cache.set(
+                    CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
+                        request_id=self.request_id,
+                        output_number=self.output_number),
+                    json.dumps(cpu_times))
+                self.task.cache.set(
+                    CacheKeysTemplates.OUTPUT_START_MEMORY_RSS.format(
+                        request_id=self.request_id,
+                        output_number=self.output_number),
+                    psutil_process.memory_info().rss)
+            except Exception as e:
+                # TODO notify developer
+                print(e)
+
             self.first_chunk = False
+
+        try:
+            self.task.cache.set(
+                CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                    request_id=self.request_id,
+                    output_number=self.output_number),
+                time.time())
+            cpu_times = psutil_process.cpu_times()
+            if cpu_times:
+                self.task.cache.set(
+                    CacheKeysTemplates.OUTPUT_END_CPU_TIMES.format(
+                        request_id=self.request_id,
+                        output_number=self.output_number),
+                    json.dumps(cpu_times))
+            memory_rss = psutil_process.memory_info().rss
+            if memory_rss:
+                self.task.cache.set(
+                    CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                        request_id=self.request_id,
+                        output_number=self.output_number),
+                    psutil_process.memory_info().rss)
+        except Exception as e:
+            # TODO notify developer
+            print(e)
 
         self.task.save_output_progress(
             total=duration,

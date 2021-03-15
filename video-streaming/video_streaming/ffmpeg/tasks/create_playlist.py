@@ -149,6 +149,10 @@ def create_playlist(
             exc=e,
             max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
 
+    # TODO check ffmpeg is really finished successfully,
+    #  Sometimes FfmpegCallback has an error but the Ffmpeg stops
+    #  without error and returns 'ffmpeg executed command successfully'
+
     # it's possible process killed in FfmpegCallback
     # so, checking the force stop before continuing
     if self.is_forced_to_stop(request_id):
