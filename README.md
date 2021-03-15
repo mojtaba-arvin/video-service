@@ -7,7 +7,7 @@ to reduce processing and storage space costs.
 
 For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
 
-The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
+The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` hls segment type.
 
 
 Features:
@@ -21,7 +21,7 @@ Features:
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
-* Returns **CPU and memory usage** width spent time of every output for the financial purposes when a video is being processed to create a playlist 
+* Returns **CPU and memory usage** with spent time of every output for the financial purposes when a video is being processed to create a playlist 
 
 
 TODO
