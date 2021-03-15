@@ -1,7 +1,6 @@
 from celery import Task
 from ffmpeg_streaming import FFProbe
 from video_streaming import settings
-from video_streaming.core.tasks import BaseTask
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from .input import BaseInputMixin
 
@@ -15,7 +14,6 @@ class AnalyzeInputMixin(BaseInputMixin):
     s3_service: BaseStreamingTask.s3_service
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
-    raise_ignore: BaseTask.raise_ignore
     request = Task.request
     retry: Task.retry
 

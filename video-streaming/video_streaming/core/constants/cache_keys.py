@@ -70,6 +70,10 @@ class CacheKeysTemplates:
     # to save output status name
     OUTPUT_STATUS = _PREFIX + "o_status_{request_id}_{output_number}"
 
+    # integer
+    # to save size of playlist directory
+    OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_number}"
+
     # progress
 
     # dict

@@ -11,7 +11,7 @@ class GetResultsMixin(object):
     pb2: streaming_pb2
 
     def _outputs(self, request_id, total_outputs):
-        outputs: list[streaming_pb2.OutputProgress] = []
+        outputs: list[streaming_pb2.OutputDetails] = []
         for output_number in range(total_outputs):
             output_status = self.cache.get(
                 CacheKeysTemplates.OUTPUT_STATUS.format(
@@ -19,20 +19,28 @@ class GetResultsMixin(object):
                     output_number=output_number),
                 decode=False)
             if output_status:
+                directory_size: int = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_SIZE.format(
+                        request_id=request_id,
+                        output_number=output_number)) or 0
+                output_details = dict(
+                    id=output_number,
+                    status=self.pb2.OutputStatus.Value(
+                        output_status),
+                    directory_size=directory_size
+                )
                 progress: dict = self.cache.get(
                     CacheKeysTemplates.OUTPUT_PROGRESS.format(
                         request_id=request_id,
                         output_number=output_number)) or {}
-                outputs.append(
-                    self.pb2.OutputProgress(
-                        id=output_number,
-                        status=self.pb2.OutputStatus.Value(
-                            output_status),
-                        **progress))
+                if progress:
+                    output_details['output_progress'] = self.pb2.\
+                        Progress(**progress)
+                outputs.append(self.pb2.OutputDetails(**output_details))
         return outputs
 
     def _inputs(self, request_id, total_inputs):
-        inputs: list[streaming_pb2.InputProgress] = []
+        inputs: list[streaming_pb2.InputDetails] = []
         for input_number in range(total_inputs):
             input_status: str = self.cache.get(
                 CacheKeysTemplates.INPUT_STATUS.format(
@@ -40,16 +48,20 @@ class GetResultsMixin(object):
                     input_number=input_number),
                 decode=False)
             if input_status:
+                input_details: dict = dict(
+                    id=input_number,
+                    status=self.pb2.InputStatus.Value(
+                        input_status),
+                    )
                 progress: dict = self.cache.get(
                     CacheKeysTemplates.INPUT_DOWNLOADING_PROGRESS.format(
                         request_id=request_id,
                         input_number=input_number)) or {}
+                if progress:
+                    input_details['input_progress'] = self.pb2.\
+                        Progress(**progress)
                 inputs.append(
-                    self.pb2.InputProgress(
-                        id=input_number,
-                        status=self.pb2.InputStatus.Value(
-                            input_status),
-                        **progress))
+                    self.pb2.InputDetails(**input_details))
         return inputs
 
     def _get_result(self,

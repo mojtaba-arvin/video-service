@@ -19,19 +19,19 @@ class CreateJobMixin(object):
         audio_codec = None
 
         if encode_format == VideoEncodingFormats.H264:
-            video_codec, audio_codec = self.__class__._codec_names(
+            video_codec, audio_codec = self._codec_names(
                 format_cls=self.pb2.H264,
                 video_codec_id=output.options.h264.video_codec,
                 audio_codec_id=output.options.h264.audio_codec
             )
         elif encode_format == VideoEncodingFormats.HEVC:
-            video_codec, audio_codec = self.__class__._codec_names(
+            video_codec, audio_codec = self._codec_names(
                 format_cls=self.pb2.Hevc,
                 video_codec_id=output.options.hevc.video_codec,
                 audio_codec_id=output.options.hevc.audio_codec
             )
         elif encode_format == VideoEncodingFormats.VP9:
-            video_codec, audio_codec = self.__class__._codec_names(
+            video_codec, audio_codec = self._codec_names(
                 format_cls=self.pb2.Vp9,
                 video_codec_id=output.options.vp9.video_codec,
                 audio_codec_id=output.options.vp9.audio_codec
@@ -129,7 +129,7 @@ class CreateJobMixin(object):
             quality_names: list[str] = self._parse_quality_names(
                 output.options.quality_names)
             custom_qualities: list[
-                dict] = self.__class__._parse_custom_qualities(
+                dict] = self._parse_custom_qualities(
                 output.options.custom_qualities)
 
             # append to third_level_tasks

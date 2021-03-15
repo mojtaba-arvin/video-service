@@ -2,7 +2,6 @@ import re
 import os
 import traceback
 import boto3
-from functools import partial
 from typing import Union
 from boto3.s3 import transfer
 from botocore import exceptions as botocore_exceptions
@@ -243,50 +242,6 @@ class S3Service:
         except Exception as e:
             return self._exception_handler(e)
 
-    @staticmethod
-    def get_directory_size(directory: str):
-        total_size = 0
-        files = []
-        for entry in os.scandir(directory):
-            if entry.is_file():
-                entry_size = entry.stat().st_size
-                files.append(
-                    (entry.path, entry.name, entry_size)
-                )
-                total_size += entry_size
 
-        return total_size, files
 
-    def upload_directory(
-            self,
-            key: str,
-            directory: str,
-            bucket_name: str = None,
-            extra_args: dict = None,
-            config: transfer.TransferConfig = None,
-            directory_callback: callable = None
-            ):
-        total_size, files = S3Service.get_directory_size(directory)
-        total_files = len(files)
-        for number, (file_path, file_name, file_size) in enumerate(files):
-            partial_callback = partial(
-                directory_callback,
-                total_size,
-                total_files,
-                number)
 
-            # s3_output_key as key can be something like : "folder1/folder2/example.m3u8"
-            # file names are something like "example_480p_0003.m4s" ,...
-            # this code will generate key for every file like : "folder1/folder2/example_480p_0003.m4s"
-            # to prevent upload all files with the same key
-            s3_folder = key.rpartition('/')[0] + "/"
-            s3_key = s3_folder + file_name
-
-            self.upload_file_by_path(
-                key=s3_key,
-                file_path=file_path,
-                bucket_name=bucket_name,
-                callback=partial_callback,
-                extra_args=extra_args,
-                config=config
-            )

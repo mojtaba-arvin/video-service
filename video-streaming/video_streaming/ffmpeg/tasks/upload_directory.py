@@ -1,7 +1,9 @@
+import urllib3
 from abc import ABC
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
+from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import UploadDirectoryMixin
@@ -68,12 +70,30 @@ def upload_directory(self,
         request_id
     )
 
-    self.upload_directory(
-        directory,
-        s3_output_key,
-        s3_output_bucket,
-        output_number,
-        request_id)
+    try:
+        directory_size = self.upload_directory(
+            directory,
+            s3_output_key,
+            s3_output_bucket,
+            output_number,
+            request_id)
+    except urllib3.exceptions.HeaderParsingError as e:
+        # MissingHeaderBodySeparatorDefect
+        # TODO notify developer
+        self.logger.error(e)
+        self.save_job_stop_reason(
+            self.stop_reason.INTERNAL_ERROR,
+            request_id)
+        raise self.raise_ignore(
+            message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
+            request_kwargs=self.request.kwargs)
+
+    # save output directory size
+    self.cache.set(
+        CacheKeysTemplates.OUTPUT_SIZE.format(
+            request_id=request_id,
+            output_number=output_number),
+        directory_size)
 
     self.save_output_status(
         self.output_status.UPLOADING_FINISHED,
