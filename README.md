@@ -23,7 +23,6 @@ Features:
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 
 TODO
-* return every output directory size
 * get video thumbnail
 * calculate, save and return CPU and memory usage for the financial purposes when a video is being processed to create a playlist 
 * adding watermark

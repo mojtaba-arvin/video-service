@@ -1,6 +1,5 @@
 import os
 from celery import Task
-from video_streaming.core.tasks import BaseTask
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3DownloadCallback
@@ -15,7 +14,6 @@ class DownloadInputMixin(BaseInputMixin):
     get_inputs_root_directory: BaseStreamingTask.get_inputs_root_directory
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
-    raise_ignore: BaseTask.raise_ignore
     request: Task.request
 
     def check_download_requirements(self,

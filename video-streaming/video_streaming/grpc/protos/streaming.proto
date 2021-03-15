@@ -186,8 +186,8 @@ message ResultDetails {
   int32 ready_outputs = 7; // number of outputs that successfully finished
   int32 failed_outputs = 8; // number of outputs that failed
   Checks checks = 9;
-  repeated InputProgress inputs = 10;
-  repeated OutputProgress outputs = 11;
+  repeated InputDetails inputs = 10;
+  repeated OutputDetails outputs = 11;
   OriginalFileInfo file_info = 12;
 }
 message GeneralInfo{
@@ -232,12 +232,20 @@ enum OutputStatus {
   OUTPUT_REVOKED = 6;
   OUTPUT_FAILED = 7;
 }
-message OutputProgress {
+message OutputDetails {
     int32 id = 1;
     OutputStatus status = 2;
-    int64 total = 3;
-    int64 current = 4;
+    Progress output_progress = 3;
+
+    // details :
+    int64 directory_size = 4;
 }
+
+message Progress{
+    int64 total = 1;
+    int64 current = 2;
+}
+
 enum InputStatus {
     PREPARATION_DOWNLOAD = 0;
     DOWNLOADING = 1;
@@ -250,11 +258,10 @@ enum InputStatus {
     INPUT_REVOKED = 6;
     INPUT_FAILED = 7;
 }
-message InputProgress {
+message InputDetails {
     int32 id = 1;
     InputStatus status = 2;
-    int64 total = 3;
-    int64 current = 4;
+    Progress input_progress = 3;
 }
 
 message RevokeJobsRequest {

@@ -1,6 +1,6 @@
-import urllib3
+import os
+from functools import partial
 from celery import Task
-from video_streaming.core.tasks import BaseTask
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3UploadDirectoryCallback
 from .output import BaseOutputMixin
@@ -13,7 +13,6 @@ class UploadDirectoryMixin(BaseOutputMixin):
     s3_service: BaseStreamingTask.s3_service
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
-    raise_ignore: BaseTask.raise_ignore
     request: Task.request
 
     def check_upload_directory_requirements(
@@ -65,37 +64,60 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 S3_OUTPUT_BUCKET_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
+    @staticmethod
+    def get_directory_size(
+            directory: str) -> tuple[int, list[tuple[str, str, int]]]:
+        total_size = 0
+        files = []
+        for entry in os.scandir(directory):
+            if entry.is_file():
+                entry_size = entry.stat().st_size
+                files.append(
+                    (entry.path, entry.name, entry_size)
+                )
+                total_size += entry_size
+
+        return total_size, files
+
     def upload_directory(self,
                          directory,
                          s3_output_key,
                          s3_output_bucket,
                          output_number,
-                         request_id):
-        """upload the directory of the output files
-         to S3 object storage"""
-        try:
-            self.s3_service.upload_directory(
-                s3_output_key,
-                directory,
+                         request_id) -> int:
+        """upload the directory of the output files to S3 object storage
+         Returns directory size
+         """
+
+        directory_callback = S3UploadDirectoryCallback(
+                task=self,
+                task_id=self.request.id.__str__(),
+                output_number=output_number,
+                request_id=request_id,
+            ).progress
+
+        total_size, files = self.get_directory_size(directory)
+        total_files = len(files)
+        for number, (file_path, file_name, file_size) in \
+                enumerate(files):
+            partial_callback = partial(
+                directory_callback,
+                total_size,
+                total_files,
+                number)
+
+            # s3_output_key as key can be something like : "folder1/folder2/example.m3u8"
+            # file names are something like "example_480p_0003.m4s" ,...
+            # this code will generate key for every file like : "folder1/folder2/example_480p_0003.m4s"
+            # to prevent upload all files with the same key
+            s3_folder = s3_output_key.rpartition('/')[0] + "/"
+
+            self.s3_service.upload_file_by_path(
+                key=s3_folder + file_name,
+                file_path=file_path,
                 bucket_name=s3_output_bucket,
-                directory_callback=S3UploadDirectoryCallback(
-                    task=self,
-                    task_id=self.request.id.__str__(),
-                    output_number=output_number,
-                    request_id=request_id,
-                ).progress
+                callback=partial_callback
             )
-        except urllib3.exceptions.HeaderParsingError as e:
-            # MissingHeaderBodySeparatorDefect
-            # TODO notify developer
-            self.logger.error(e)
-            self.save_output_status(
-                self.output_status.OUTPUT_FAILED,
-                output_number,
-                request_id)
-            self.save_job_stop_reason(
-                self.stop_reason.INTERNAL_ERROR,
-                request_id)
-            raise self.raise_ignore(
-                message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
-                request_kwargs=self.request.kwargs)
+
+        # return the directory size
+        return total_size

@@ -25,7 +25,7 @@ class Streaming(
 
     def _add_to_server(self, server):
         streaming_pb2_grpc.add_StreamingServicer_to_server(
-            self.__class__(),
+            self,
             server)
 
     def create_job(self, request, context):
@@ -150,7 +150,7 @@ class Streaming(
             first_level_tasks.append(
                 tasks.check_output_bucket.s(
                     s3_output_bucket=bucket,
-                    s3_create_bucket=self.__class__._has_create_flag(
+                    s3_create_bucket=self._has_create_flag(
                         bucket, request.outputs),
                     request_id=request_id
                 )
@@ -158,7 +158,7 @@ class Streaming(
             # checking_output_buckets_tasks.append(
             #     tasks.check_output_bucket.s(
             #         s3_output_bucket=bucket,
-            #         s3_create_bucket=self.__class__._has_create_flag(
+            #         s3_create_bucket=self._has_create_flag(
             #             bucket, request.outputs),
             #         request_id=request_id
             #     )
@@ -266,7 +266,7 @@ class Streaming(
                 request_id=request_id))
 
         # raise if job is already has been executed
-        self.__class__._raise_if_job_already_executed(
+        self._raise_if_job_already_executed(
             primary_status,
             job_details)
 

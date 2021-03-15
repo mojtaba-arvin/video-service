@@ -18,8 +18,6 @@ class CreatePlaylistMixin(BaseOutputMixin):
         get_outputs_root_directory
     save_job_stop_reason: BaseStreamingTask.save_job_stop_reason
 
-    raise_ignore: BaseTask.raise_ignore
-
     request = Task.request
     retry: Task.retry
 

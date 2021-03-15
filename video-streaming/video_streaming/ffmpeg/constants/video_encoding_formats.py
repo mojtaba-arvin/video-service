@@ -18,9 +18,9 @@ class VideoEncodingFormats(Formats):
             codec_options['audio'] = audio
 
         formats_dict = {
-            self.H264: self.__class__.h264(**codec_options),
-            self.HEVC: self.__class__.hevc(**codec_options),
-            self.VP9: self.__class__.vp9(**codec_options)
+            self.H264: self.h264(**codec_options),
+            self.HEVC: self.hevc(**codec_options),
+            self.VP9: self.vp9(**codec_options)
         }
         if name is None:
             name = VideoEncodingFormats.H264
