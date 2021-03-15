@@ -10,6 +10,31 @@ class GetResultsMixin(object):
     cache: RedisCache
     pb2: streaming_pb2
 
+    @staticmethod
+    def get_cpu_usage(start: list, end: list):
+
+        # iowait: (Linux) time spent waiting for blocking I/O to
+        # complete. This value is excluded from user and system times
+        # count (because the CPU is not doing any work).
+        start_iowait = start.pop()
+        end_iowait = end.pop()
+
+        # total CPU time at start (including idle time)
+        start_total = sum(start)
+        # calculates the busy CPU time at start
+        start_busy = start_total - start_iowait
+
+        # total CPU time at end (including idle time)
+        end_total = sum(end)
+        # calculates the busy CPU time at end
+        end_busy = end_total - end_iowait
+
+        if end_busy <= start_busy:
+            return 0.0
+
+        busy_delta = end_busy - start_busy
+        return busy_delta
+
     def _outputs(self, request_id, total_outputs):
         outputs: list[streaming_pb2.OutputDetails] = []
         for output_number in range(total_outputs):
@@ -23,19 +48,55 @@ class GetResultsMixin(object):
                     CacheKeysTemplates.OUTPUT_SIZE.format(
                         request_id=request_id,
                         output_number=output_number)) or 0
+
                 output_details = dict(
                     id=output_number,
                     status=self.pb2.OutputStatus.Value(
                         output_status),
-                    directory_size=directory_size
+                    directory_size=directory_size,
                 )
                 progress: dict = self.cache.get(
                     CacheKeysTemplates.OUTPUT_PROGRESS.format(
                         request_id=request_id,
-                        output_number=output_number)) or {}
+                        output_number=output_number))
                 if progress:
                     output_details['output_progress'] = self.pb2.\
                         Progress(**progress)
+
+                start_progressing_times: float = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                        request_id=request_id,
+                        output_number=output_number))
+                end_progressing_times: float = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                        request_id=request_id,
+                        output_number=output_number))
+                if start_progressing_times and end_progressing_times:
+                    output_details['spent_time'] = end_progressing_times - start_progressing_times
+                    start_cpu_times: list = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
+                            request_id=request_id,
+                            output_number=output_number))
+                    end_cpu_times: list = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_END_CPU_TIMES.format(
+                            request_id=request_id,
+                            output_number=output_number))
+                    if start_cpu_times and end_cpu_times:
+                        output_details['cpu_usage'] = self.get_cpu_usage(
+                            list(start_cpu_times),
+                            list(end_cpu_times)
+                        )
+                    start_memory_rss: int = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_START_MEMORY_RSS.format(
+                            request_id=request_id,
+                            output_number=output_number))
+                    end_memory_rss: int = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                            request_id=request_id,
+                            output_number=output_number))
+                    if start_memory_rss and end_memory_rss:
+                        output_details['memory_usage'] = end_memory_rss - start_memory_rss
+
                 outputs.append(self.pb2.OutputDetails(**output_details))
         return outputs
 

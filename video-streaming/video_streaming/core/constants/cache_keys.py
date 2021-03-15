@@ -70,10 +70,6 @@ class CacheKeysTemplates:
     # to save output status name
     OUTPUT_STATUS = _PREFIX + "o_status_{request_id}_{output_number}"
 
-    # integer
-    # to save size of playlist directory
-    OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_number}"
-
     # progress
 
     # dict
@@ -83,3 +79,26 @@ class CacheKeysTemplates:
     # dict
     # to save progress of processing or uploading for every output
     OUTPUT_PROGRESS = _PREFIX + "o_progress_{request_id}_{output_number}"
+
+    # details
+
+    # integer
+    # to save size of playlist directory
+    OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_number}"
+
+    # usage
+
+    # integer
+    # save video proceeding time
+    OUTPUT_START_PROCESSING_TIME = _PREFIX + "o_start_processing_time_{request_id}_{output_number}"
+    OUTPUT_END_PROCESSING_TIME = _PREFIX + "o_end_processing_time_{request_id}_{output_number}"
+
+    # list
+    # save cpu usage of output psutil cpu_times
+    OUTPUT_START_CPU_TIMES = _PREFIX + "o_start_cpu_times_{request_id}_{output_number}"
+    OUTPUT_END_CPU_TIMES = _PREFIX + "o_end_cpu_times_{request_id}_{output_number}"
+
+    # integer
+    # save memory usage of output using psutil memory rss
+    OUTPUT_START_MEMORY_RSS = _PREFIX + "o_start_memory_rss_{request_id}_{output_number}"
+    OUTPUT_END_MEMORY_RSS = _PREFIX + "o_end_memory_rss_{request_id}_{output_number}"

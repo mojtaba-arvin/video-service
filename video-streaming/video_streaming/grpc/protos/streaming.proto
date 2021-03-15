@@ -236,16 +236,28 @@ message OutputDetails {
     int32 id = 1;
     OutputStatus status = 2;
     Progress output_progress = 3;
+    ProcessMonitor process_monitor = 4;
+    float spent_time = 5;
+    float cpu_usage = 6;
+    int64 memory_usage = 7;
 
     // details :
-    int64 directory_size = 4;
-}
+    int64 directory_size =8;
 
+}
+message ResourceUsage{
+  float seconds= 1;
+  float used = 2;
+}
 message Progress{
     int64 total = 1;
     int64 current = 2;
 }
-
+message ProcessMonitor{
+    float epoch_time = 1;
+    int64 ram = 2;
+    float cpu = 3;
+}
 enum InputStatus {
     PREPARATION_DOWNLOAD = 0;
     DOWNLOADING = 1;

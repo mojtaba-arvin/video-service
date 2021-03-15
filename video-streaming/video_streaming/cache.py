@@ -23,6 +23,9 @@ class RedisCache:
     def incr(self, key, amount: int = 1):
         self.redis.incr(key, amount=amount)
 
+    def incr_by_float(self, key, amount: float = 1.0):
+        self.redis.incrbyfloat(key, amount=amount)
+
     def get(self, key, decode=True):
         """
         set decode to False when value stored as a string
