@@ -1,3 +1,4 @@
+import json
 from celery import result as celery_result, chain, group
 from google.protobuf import reflection
 from video_streaming.cache import RedisCache
@@ -115,24 +116,22 @@ class CreateJobMixin(object):
         # sample : [dict(size=[256, 144], bitrate=[97280, 65536])]
         return custom_qualities
 
-    def _append_tasks(self,
+    def _append_playlists_tasks(self,
                       request_id: str,
-                      outputs: streaming_pb2.StreamingOutput,
+                      playlists: streaming_pb2.PlaylistOutput,
                       append_to: list[chain]
                       ):
-        """initial processing tasks by output formats
+        """initial processing tasks by playlists formats
         and chains them with upload task
         """
-        for output_number, output in enumerate(outputs):
+        for output_number, output in enumerate(playlists):
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
             quality_names: list[str] = self._parse_quality_names(
                 output.options.quality_names)
-            custom_qualities: list[
-                dict] = self._parse_custom_qualities(
+            custom_qualities: list[dict] = self._parse_custom_qualities(
                 output.options.custom_qualities)
 
-            # append to third_level_tasks
             append_to.append(
                 # chain of create playlist and upload_directory
                 chain(
@@ -161,6 +160,41 @@ class CreateJobMixin(object):
             )
         return append_to
 
+    def _append_thumbnails_tasks(
+            self,
+            request_id: str,
+            thumbnails: streaming_pb2.ThumbnailOutput,
+            append_to: list[chain],
+            start_number: int = 0
+            ):
+        """initial processing tasks by thumbnails options
+        and chains them with upload task
+        """
+        for output_number, output in enumerate(thumbnails, start_number):
+
+            append_to.append(
+                # chain of create generate_thumbnail and upload_file
+                chain(
+                    # input_path will come from second level
+                    tasks.generate_thumbnail.s(
+                        s3_output_key=output.s3.key,
+                        request_id=request_id,
+                        output_number=output_number,
+                        thumbnail_time=output.thumbnail_time,
+                        scale_width=output.options.scale_width,
+                        scale_height=output.options.scale_height
+                    ),
+                    # file_path will come from generate_thumbnail task
+                    tasks.upload_file.s(
+                        s3_output_key=output.s3.key,
+                        s3_output_bucket=output.s3.bucket,
+                        request_id=request_id,
+                        output_number=output_number
+                    )
+                )
+            )
+        return append_to
+
     def _apply_job(
             self,
             request_id,
@@ -168,7 +202,12 @@ class CreateJobMixin(object):
 
         # TODO delete local files on failure callback
 
-        job = chain(*[group(*level_tasks) for level_tasks in ordered_levels])
+        chain_items = []
+        for level_tasks in ordered_levels:
+            if level_tasks:
+                chain_items.append(group(*level_tasks))
+
+        job = chain(*chain_items)
 
         # set first primary status as QUEUING_CHECKS
         self.cache.set(

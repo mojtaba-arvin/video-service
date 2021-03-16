@@ -40,6 +40,8 @@ class ErrorMessages:
     TASK_WAS_FORCIBLY_STOPPED = "task was forcibly stopped."
     CAN_NOT_UPLOAD_DIRECTORY = "can not upload directory"
     INPUT_CODEC_TYPE_IN_NOT_VIDEO = "input codec type is not video"
+    CAN_NOT_UPLOAD_EMPTY_FILE = "cab not upload empty file"
+    CAN_NOT_UPLOAD_FILE = "can not upload file"
 
     # gRPC
     S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty."

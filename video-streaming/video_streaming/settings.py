@@ -197,9 +197,9 @@ TMP_DOWNLOADED_DIR = env_config.get(
     "TMP_DOWNLOADED_DIR",
     default="",
     cast=str)
-# temporary directory of transcoded videos
-TMP_TRANSCODED_DIR = env_config.get(
-    "TMP_TRANSCODED_DIR",
+# temporary directory of processed videos
+TMP_PROCESSED_DIR = env_config.get(
+    "TMP_PROCESSED_DIR",
     default="",
     cast=str)
 

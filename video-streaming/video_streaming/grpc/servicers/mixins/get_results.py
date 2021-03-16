@@ -48,7 +48,6 @@ class GetResultsMixin(object):
                     CacheKeysTemplates.OUTPUT_SIZE.format(
                         request_id=request_id,
                         output_number=output_number)) or 0
-
                 output_details = dict(
                     id=output_number,
                     status=self.pb2.OutputStatus.Value(

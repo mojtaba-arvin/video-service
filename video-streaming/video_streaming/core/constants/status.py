@@ -58,18 +58,26 @@ class InputStatus:
 class OutputStatus:
     # for every output
 
+    """
+    common output status
+    """
+
+    OUTPUT_REVOKED = "OUTPUT_REVOKED"
+    OUTPUT_FAILED = "OUTPUT_FAILED"
+
     PREPARATION_PROCESSING = "PREPARATION_PROCESSING"
     PROCESSING = "PROCESSING"
     PROCESSING_FINISHED = "PROCESSING_FINISHED"
 
-    # It will be set outside of tasks,
-    # when PROCESSING_FINISHED and not PLAYLIST_UPLOADING
-    QUEUING_UPLOADING = "QUEUING_UPLOADING_PLAYLIST"
-    PLAYLIST_UPLOADING = "PLAYLIST_UPLOADING"
-    UPLOADING_FINISHED = "UPLOADING_FINISHED"
+    """
+    Playlist output status
+    """
 
-    OUTPUT_REVOKED = "OUTPUT_REVOKED"
-    OUTPUT_FAILED = "OUTPUT_FAILED"
+    # It will be set outside of tasks,
+    # when PROCESSING_FINISHED and not UPLOADING
+    QUEUING_UPLOADING = "QUEUING_UPLOADING"
+    UPLOADING = "UPLOADING"
+    UPLOADING_FINISHED = "UPLOADING_FINISHED"
 
 
 class StopReason:
@@ -104,3 +112,9 @@ class StopReason:
 
     # UploadDirectoryTask
     FAILED_UPLOAD_DIRECTORY = "FAILED_UPLOAD_DIRECTORY"
+
+    # GenerateThumbnailTask
+    FAILED_GENERATE_THUMBNAIL = "FAILED_GENERATE_THUMBNAIL"
+
+    # UploadFileTask
+    FAILED_UPLOAD_FILE = "FAILED_UPLOAD_FILE"

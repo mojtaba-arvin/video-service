@@ -7,7 +7,7 @@ to reduce processing and storage space costs.
 
 For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
 
-The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that support `fmp4` hls segment type.
+The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` HLS segment type.
 
 
 Features:
@@ -21,11 +21,11 @@ Features:
 * All tasks are separate to manage and retry each part again in some exceptions
 * Supports webhook callback when all outputs uploaded
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
-* Returns **CPU and memory usage** width spent time of every output for the financial purposes when a video is being processed to create a playlist 
+* Returns **CPU and memory usage** with spent time of every output for the financial purposes when a video is being processed to create a playlist 
+* Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as player poster or other purpose such as screenshots for demo 
 
 
 TODO
-* get video thumbnail
 * adding watermark
 * adding optional argument to mapping playlist to different qualities as separated videos
 * call webhook url when every output was done
@@ -118,7 +118,7 @@ there are some variables in the `[env]` section:
 
 * `WORKING_DIR`: The path on the container that main module is located.
 * `MODULE_NAME`: The name of main module of project.
-* `CELERY_APP` : The name of celery instance in the main module.
+* `CELERY_APP`: The name of celery instance in the main module.
 * `BIN_PATH`: Python installed at `/usr/local/bin/` in the Python Docker Official Image.
 * `GRPC_PORT`: The gRPC port, if you change it, make sure it's exposed on your network.
   
