@@ -25,14 +25,14 @@ class RevokeOutputsMixin(object):
         if primary_status == PrimaryStatus.FINISHED:
             raise exceptions.JobIsFinishedException
 
-    def _send_revoke_output_signal(self, request_id, output_number):
+    def _send_revoke_output_signal(self, request_id, output_id):
         signal_sent: bool = self.cache.get(
             CacheKeysTemplates.FORCE_STOP_OUTPUT_REQUEST.format(
                 request_id=request_id,
-                output_number=output_number))
+                output_id=output_id))
         if not signal_sent:
             self.cache.set(
                 CacheKeysTemplates.FORCE_STOP_OUTPUT_REQUEST.format(
                     request_id=request_id,
-                    output_number=output_number),
+                    output_id=output_id),
                 json.dumps(True))

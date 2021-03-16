@@ -187,8 +187,7 @@ class Streaming(
         fourth_level = self._append_thumbnails_tasks(
             request_id=request_id,
             thumbnails=request.thumbnails,
-            append_to=fourth_level,
-            start_number=len(fourth_level)
+            append_to=fourth_level
         )
 
         reference_id: str = request.reference_id
@@ -197,7 +196,9 @@ class Streaming(
             webhook_url=webhook_url,
             total_checks=len(first_level)+len(second_level),
             total_inputs=len(third_level),
-            total_outputs=len(fourth_level)
+            total_outputs=len(fourth_level),
+            total_playlists=len(request.playlists),
+            total_thumbnails=len(request.thumbnails)
         )
 
         # saving job details

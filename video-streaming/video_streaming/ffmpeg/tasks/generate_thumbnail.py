@@ -17,8 +17,8 @@ class GenerateThumbnailTask(
         ):
 
     # rewrite BaseOutputMixin.save_failed
-    def save_failed(self, request_id, output_number):
-        super().save_failed(request_id, output_number)
+    def save_failed(self, request_id, output_id):
+        super().save_failed(request_id, output_id)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
@@ -37,12 +37,12 @@ def generate_thumbnail(
         output_path: str = None,
         s3_output_key: str = None,
         request_id: str = None,
-        output_number: int = None,
+        output_id: str = None,
         thumbnail_time: str = "0",
         scale_width: int = -1,
         scale_height: int = -1
         ) -> dict:
-    """generate multi thumbnails from the input video
+    """generate a thumbnails from the input video
     
     Args:
         self:
@@ -51,7 +51,7 @@ def generate_thumbnail(
         output_path:
         s3_output_key:
         request_id:
-        output_number:
+        output_id:
         thumbnail_time:
             Specific time of video as string.
             Defaults to is '0'.
@@ -70,31 +70,31 @@ def generate_thumbnail(
 
     self.check_generate_thumbnail_requirements(
         request_id=request_id,
-        output_number=output_number,
+        output_id=output_id,
         input_path=input_path,
         output_path=output_path,
         s3_output_key=s3_output_key)
 
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
-    if self.is_output_forced_to_stop(request_id, output_number):
-        raise self.raise_revoke_output(request_id, output_number)
+    if self.is_output_forced_to_stop(request_id, output_id):
+        raise self.raise_revoke_output(request_id, output_id)
 
     # save primary status using request_id
     self.save_primary_status(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
 
-    # save output status using output_number and request_id
+    # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
-        output_number,
+        output_id,
         request_id)
 
     # get output directory and set output_path if is None
     output_path, directory = self.ensure_set_output_location(
        request_id,
-       output_number,
+       output_id,
        output_path=output_path,
        s3_output_key=s3_output_key)
 
@@ -130,7 +130,7 @@ def generate_thumbnail(
     # callback: callable = FfmpegCallback(
     #             task=self,
     #             task_id=self.request.id.__str__(),
-    #             output_number=output_number,
+    #             output_id=output_id,
     #             request_id=request_id
     #         ).ffmpeg_progress
     # try:
@@ -143,7 +143,7 @@ def generate_thumbnail(
 
     self.save_output_status(
         self.output_status.PROCESSING,
-        output_number,
+        output_id,
         request_id)
 
     try:
@@ -172,7 +172,7 @@ def generate_thumbnail(
 
     self.save_output_status(
         self.output_status.PROCESSING_FINISHED,
-        output_number,
+        output_id,
         request_id)
 
     return dict(file_path=output_path)

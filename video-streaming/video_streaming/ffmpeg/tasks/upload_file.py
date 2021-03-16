@@ -20,8 +20,8 @@ class UploadFileTask(
         ):
 
     # rewrite BaseOutputMixin.save_failed
-    def save_failed(self, request_id, output_number):
-        super().save_failed(request_id, output_number)
+    def save_failed(self, request_id, output_id):
+        super().save_failed(request_id, output_id)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
@@ -39,7 +39,7 @@ def upload_file(self,
                 s3_output_key: str = None,
                 s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
                 request_id: str = None,
-                output_number: int = None):
+                output_id: str = None):
     """upload the output file to the S3 object storage
 
     Args:
@@ -49,7 +49,7 @@ def upload_file(self,
         s3_output_key ():
         s3_output_bucket ():
         request_id ():
-        output_number ():
+        output_id ():
 
     Returns:
 
@@ -57,7 +57,7 @@ def upload_file(self,
 
     self.check_upload_file_requirements(
         request_id=request_id,
-        output_number=output_number,
+        output_id=output_id,
         file_path=file_path,
         s3_output_key=s3_output_key,
         s3_output_bucket=s3_output_bucket)
@@ -65,8 +65,8 @@ def upload_file(self,
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
 
-    if self.is_output_forced_to_stop(request_id, output_number):
-        raise self.raise_revoke_output(request_id, output_number)
+    if self.is_output_forced_to_stop(request_id, output_id):
+        raise self.raise_revoke_output(request_id, output_id)
 
     # try
     file_size = os.stat(file_path).st_size
@@ -78,17 +78,17 @@ def upload_file(self,
             message=self.error_messages.CAN_NOT_UPLOAD_EMPTY_FILE,
             request_kwargs=self.request.kwargs)
 
-    # save output status using output_number and request_id
+    # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.UPLOADING,
-        output_number,
+        output_id,
         request_id
     )
 
     file_progress_callback = S3UploadCallback(
             task=self,
             task_id=self.request.id.__str__(),
-            output_number=output_number,
+            output_id=output_id,
             request_id=request_id,
         ).file_progress
 
@@ -115,10 +115,10 @@ def upload_file(self,
     self.cache.set(
         CacheKeysTemplates.OUTPUT_SIZE.format(
             request_id=request_id,
-            output_number=output_number),
+            output_id=output_id),
         file_size)
 
     self.save_output_status(
         self.output_status.UPLOADING_FINISHED,
-        output_number,
+        output_id,
         request_id)

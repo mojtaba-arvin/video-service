@@ -17,8 +17,8 @@ class UploadDirectoryTask(
         ):
 
     # rewrite BaseOutputMixin.save_failed
-    def save_failed(self, request_id, output_number):
-        super().save_failed(request_id, output_number)
+    def save_failed(self, request_id, output_id):
+        super().save_failed(request_id, output_id)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
@@ -36,7 +36,7 @@ def upload_directory(self,
                      s3_output_key: str = None,
                      s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
                      request_id: str = None,
-                     output_number: int = None):
+                     output_id: str = None):
     """upload the directory of the output files to S3 object storage
 
         Kwargs:
@@ -45,14 +45,14 @@ def upload_directory(self,
 
        required parameters:
          - request_id
-         - output_number
+         - output_id
          - directory
          - s3_input_key
     """
 
     self.check_upload_directory_requirements(
         request_id=request_id,
-        output_number=output_number,
+        output_id=output_id,
         directory=directory,
         s3_output_key=s3_output_key,
         s3_output_bucket=s3_output_bucket)
@@ -60,13 +60,13 @@ def upload_directory(self,
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
 
-    if self.is_output_forced_to_stop(request_id, output_number):
-        raise self.raise_revoke_output(request_id, output_number)
+    if self.is_output_forced_to_stop(request_id, output_id):
+        raise self.raise_revoke_output(request_id, output_id)
 
-    # save output status using output_number and request_id
+    # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.UPLOADING,
-        output_number,
+        output_id,
         request_id
     )
 
@@ -75,7 +75,7 @@ def upload_directory(self,
             directory,
             s3_output_key,
             s3_output_bucket,
-            output_number,
+            output_id,
             request_id)
     except urllib3.exceptions.HeaderParsingError as e:
         # MissingHeaderBodySeparatorDefect
@@ -92,10 +92,10 @@ def upload_directory(self,
     self.cache.set(
         CacheKeysTemplates.OUTPUT_SIZE.format(
             request_id=request_id,
-            output_number=output_number),
+            output_id=output_id),
         directory_size)
 
     self.save_output_status(
         self.output_status.UPLOADING_FINISHED,
-        output_number,
+        output_id,
         request_id)

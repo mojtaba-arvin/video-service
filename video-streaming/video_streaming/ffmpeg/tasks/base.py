@@ -201,15 +201,15 @@ class BaseStreamingTask(BaseTask, ABC):
                              total,
                              current,
                              request_id,
-                             output_number):
+                             output_id):
         if request_id is not None and \
-                output_number is not None:
+                output_id is not None:
             # save progress of processing or uploading
-            # by output_number and request_id
+            # by output_id and request_id
             self.cache.set(
                 CacheKeysTemplates.OUTPUT_PROGRESS.format(
                     request_id=request_id,
-                    output_number=output_number
+                    output_id=output_id
                 ),
                 json.dumps(dict(
                     total=total,
