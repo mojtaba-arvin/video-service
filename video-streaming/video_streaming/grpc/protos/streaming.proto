@@ -48,6 +48,10 @@ message S3Output{
   bool create_bucket = 3;
   bool dont_replace = 4;
 }
+message UploadedTo{
+  string key = 1;
+  string bucket = 2;
+}
 message H264{
   enum VideoCodec {
     LIBX264 = 0;
@@ -198,16 +202,16 @@ message ResultDetails {
   int32 failed_outputs = 8; // number of outputs that failed
   Checks checks = 9;
   repeated InputDetails inputs = 10;
-  repeated OutputDetails outputs = 11;
-  OriginalFileInfo file_info = 12;
+  Playlists playlists = 11;
+  Thumbnails thumbnails = 12;
 }
+
 message GeneralInfo{
     float duration = 1; // 68.843000
     int64 file_size = 2;
     int64 bit_rate = 3;
     // ffprobe gives a list of formats inside the format_name value
     string file_formats = 4; // 'mov,mp4,m4a,3gp,3g2,mj2'
-
 }
 message VideoInfo{
     string codec = 1;
@@ -243,18 +247,35 @@ enum OutputStatus {
   OUTPUT_REVOKED = 6;
   OUTPUT_FAILED = 7;
 }
-message OutputDetails {
-    int32 id = 1;
+message Playlists{
+  repeated PlaylistDetails outputs = 1;
+}
+message Thumbnails{
+  repeated ThumbnailDetails outputs = 1;
+}
+message PlaylistDetails {
+    string id = 1;
     OutputStatus status = 2;
     Progress output_progress = 3;
-    ProcessMonitor process_monitor = 4;
+
+    // cost :
     float spent_time = 5;
     float cpu_usage = 6;
     int64 memory_usage = 7;
 
     // details :
-    int64 directory_size =8;
+    int64 directory_size = 8;
+    UploadedTo uploaded_to = 9;
+}
+message ThumbnailDetails{
+    string id = 1;
+    OutputStatus status = 2;
 
+    // details :
+    int64 file_size = 3;
+    // int32 width = 4; TODO
+    // int64 height = 5; TODO
+    UploadedTo uploaded_to = 6;
 }
 message ResourceUsage{
   float seconds= 1;
@@ -263,11 +284,6 @@ message ResourceUsage{
 message Progress{
     int64 total = 1;
     int64 current = 2;
-}
-message ProcessMonitor{
-    float epoch_time = 1;
-    int64 ram = 2;
-    float cpu = 3;
 }
 enum InputStatus {
     PREPARATION_DOWNLOAD = 0;
@@ -285,6 +301,7 @@ message InputDetails {
     int32 id = 1;
     InputStatus status = 2;
     Progress input_progress = 3;
+    OriginalFileInfo file_info = 4;
 }
 
 message RevokeJobsRequest {
@@ -306,13 +323,15 @@ message RevokeDetails{
 
 message RevokeOutputsRequest{
   string tracking_id = 1;
-  repeated int32 output_numbers = 2;
+  repeated int32 playlists_numbers = 2;
+  repeated int32 thumbnails_numbers = 3;
 }
 message RevokeOutputsResponse{
     // returns gRPC error if tracking_id not found
     string tracking_id = 1;
     string reference_id = 2;
-    repeated OutputsToRevoke outputs_to_revoke = 4;
+    repeated OutputsToRevoke playlists_to_revoke = 3;
+    repeated OutputsToRevoke thumbnails_to_revoke = 4;
 }
 message OutputsToRevoke{
   int32 output_number = 1;
@@ -321,6 +340,7 @@ message OutputsToRevoke{
      signalFailedReason signal_failed_reason = 3;
   }
 }
+
 enum signalFailedReason{
   OUTPUT_NUMBER_IS_INVALID = 0; // when output number is not valid
   OUTPUT_HAS_BEEN_FAILED = 1; // when output status is OUTPUT_FAILED

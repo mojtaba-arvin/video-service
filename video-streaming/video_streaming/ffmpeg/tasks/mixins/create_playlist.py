@@ -21,7 +21,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
     def check_create_playlist_requirements(
             self,
             request_id=None,
-            output_number=None,
+            output_id=None,
             input_path=None,
             output_path=None,
             s3_output_key=None):
@@ -34,7 +34,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if output_number is None:
+        if output_id is None:
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -62,7 +62,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
     def initial_protocol(
             self,
             input_path: str,
-            output_number: int,
+            output_id: str,
             request_id: str,
             encode_format: str,
             video_codec: str = None,
@@ -80,7 +80,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
             if os.stat(input_path).st_size == 0:
                 self.save_output_status(
                     self.output_status.OUTPUT_FAILED,
-                    output_number,
+                    output_id,
                     request_id)
                 self.save_job_stop_reason(
                     self.stop_reason.INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO,
@@ -93,7 +93,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
             # TODO notify developer
             self.save_output_status(
                 self.output_status.OUTPUT_FAILED,
-                output_number,
+                output_id,
                 request_id)
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
@@ -159,7 +159,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
             if not size or not bitrate:
                 self.save_output_status(
                     self.output_status.OUTPUT_FAILED,
-                    output_number,
+                    output_id,
                     request_id
                 )
                 self.save_job_stop_reason(

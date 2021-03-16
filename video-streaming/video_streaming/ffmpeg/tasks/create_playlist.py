@@ -16,8 +16,8 @@ class CreatePlaylistTask(
         ):
 
     # rewrite BaseOutputMixin.save_failed
-    def save_failed(self, request_id, output_number):
-        super().save_failed(request_id, output_number)
+    def save_failed(self, request_id, output_id):
+        super().save_failed(request_id, output_id)
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
@@ -43,7 +43,7 @@ def create_playlist(
         custom_qualities: list[dict] = None,
         async_run: bool = False,
         request_id: str = None,
-        output_number: int = None,
+        output_id: str = None,
         is_hls: bool = settings.DEFAULT_PLAYLIST_IS_HLS
         ) -> dict:
     """create an playlist ( HLS or DASH )
@@ -76,14 +76,14 @@ def create_playlist(
             default of async_run is False to don't call async method
             inside the task, it can raise RuntimeError: asyncio.run()
             cannot be called from a running event loop
-        output_number:
-            output_number is using in redis key, to save progress of
+        output_id:
+            output_id is using in redis key, to save progress of
             every output, also it's using to create different path
             for outputs
 
     Required parameters:
         - request_id
-        - output_number
+        - output_id
         - input_path
         - output_path or s3_output_key
 
@@ -94,37 +94,37 @@ def create_playlist(
 
     self.check_create_playlist_requirements(
         request_id=request_id,
-        output_number=output_number,
+        output_id=output_id,
         input_path=input_path,
         output_path=output_path,
         s3_output_key=s3_output_key)
 
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
-    if self.is_output_forced_to_stop(request_id, output_number):
-        raise self.raise_revoke_output(request_id, output_number)
+    if self.is_output_forced_to_stop(request_id, output_id):
+        raise self.raise_revoke_output(request_id, output_id)
 
     # save primary status using request_id
     self.save_primary_status(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
 
-    # save output status using output_number and request_id
+    # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
-        output_number,
+        output_id,
         request_id)
 
     # get output directory and set output_path if is None
     output_path, directory = self.ensure_set_output_location(
        request_id,
-       output_number,
+       output_id,
        output_path=output_path,
        s3_output_key=s3_output_key)
 
     playlist = self.initial_protocol(
         input_path,
-        output_number,
+        output_id,
         request_id,
         encode_format,
         video_codec=video_codec,
@@ -141,7 +141,7 @@ def create_playlist(
             monitor=FfmpegCallback(
                 task=self,
                 task_id=self.request.id.__str__(),
-                output_number=output_number,
+                output_id=output_id,
                 request_id=request_id
             ).playlist_progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
@@ -150,8 +150,8 @@ def create_playlist(
 
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
-        if self.is_output_forced_to_stop(request_id, output_number):
-            raise self.raise_revoke_output(request_id, output_number)
+        if self.is_output_forced_to_stop(request_id, output_id):
+            raise self.raise_revoke_output(request_id, output_id)
 
         # TODO handle possible Runtime Errors
         # notice : video processing has cost to retry
@@ -167,12 +167,12 @@ def create_playlist(
     # so, checking the force stop before continuing
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
-    if self.is_output_forced_to_stop(request_id, output_number):
-        raise self.raise_revoke_output(request_id, output_number)
+    if self.is_output_forced_to_stop(request_id, output_id):
+        raise self.raise_revoke_output(request_id, output_id)
 
     self.save_output_status(
         self.output_status.PROCESSING_FINISHED,
-        output_number,
+        output_id,
         request_id)
 
     return dict(directory=directory)

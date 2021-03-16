@@ -8,6 +8,9 @@ __all__ = [
 class CacheKeysTemplates:
     _PREFIX = "req_"
 
+    PLAYLIST_ID_PREFIX = "p"
+    THUMBNAIL_ID_PREFIX = "t"
+
     # dict
     # to save job details
     JOB_DETAILS = _PREFIX + "job_{request_id}"
@@ -22,7 +25,7 @@ class CacheKeysTemplates:
 
     # boolean
     # force stop one output pip and inc the ready outputs to delete inputs and outputs
-    FORCE_STOP_OUTPUT_REQUEST = _PREFIX + "o_stop_{request_id}_{output_number}"
+    FORCE_STOP_OUTPUT_REQUEST = _PREFIX + "o_stop_{request_id}_{output_id}"
 
     # dict
     # to save ffprobe data of input video
@@ -68,7 +71,7 @@ class CacheKeysTemplates:
 
     # string
     # to save output status name
-    OUTPUT_STATUS = _PREFIX + "o_status_{request_id}_{output_number}"
+    OUTPUT_STATUS = _PREFIX + "o_status_{request_id}_{output_id}"
 
     # progress
 
@@ -78,27 +81,27 @@ class CacheKeysTemplates:
 
     # dict
     # to save progress of processing or uploading for every output
-    OUTPUT_PROGRESS = _PREFIX + "o_progress_{request_id}_{output_number}"
+    OUTPUT_PROGRESS = _PREFIX + "o_progress_{request_id}_{output_id}"
 
     # details
 
     # integer
     # to save size of playlist directory
-    OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_number}"
+    OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_id}"
 
     # usage
 
     # integer
     # save video proceeding time
-    OUTPUT_START_PROCESSING_TIME = _PREFIX + "o_start_processing_time_{request_id}_{output_number}"
-    OUTPUT_END_PROCESSING_TIME = _PREFIX + "o_end_processing_time_{request_id}_{output_number}"
+    OUTPUT_START_PROCESSING_TIME = _PREFIX + "o_start_processing_time_{request_id}_{output_id}"
+    OUTPUT_END_PROCESSING_TIME = _PREFIX + "o_end_processing_time_{request_id}_{output_id}"
 
     # list
     # save cpu usage of output psutil cpu_times
-    OUTPUT_START_CPU_TIMES = _PREFIX + "o_start_cpu_times_{request_id}_{output_number}"
-    OUTPUT_END_CPU_TIMES = _PREFIX + "o_end_cpu_times_{request_id}_{output_number}"
+    OUTPUT_START_CPU_TIMES = _PREFIX + "o_start_cpu_times_{request_id}_{output_id}"
+    OUTPUT_END_CPU_TIMES = _PREFIX + "o_end_cpu_times_{request_id}_{output_id}"
 
     # integer
     # save memory usage of output using psutil memory rss
-    OUTPUT_START_MEMORY_RSS = _PREFIX + "o_start_memory_rss_{request_id}_{output_number}"
-    OUTPUT_END_MEMORY_RSS = _PREFIX + "o_end_memory_rss_{request_id}_{output_number}"
+    OUTPUT_START_MEMORY_RSS = _PREFIX + "o_start_memory_rss_{request_id}_{output_id}"
+    OUTPUT_END_MEMORY_RSS = _PREFIX + "o_end_memory_rss_{request_id}_{output_id}"

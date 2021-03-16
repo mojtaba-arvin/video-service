@@ -23,23 +23,23 @@ class BaseOutputMixin(object):
 
     request: Task.request
 
-    def save_failed(self, request_id, output_number):
+    def save_failed(self, request_id, output_id):
         """
         please rewrite this method to add stop_reason
         """
         self.save_output_status(
             self.output_status.OUTPUT_FAILED,
-            output_number,
+            output_id,
             request_id
         )
 
     def on_failure(self, *request_args, **request_kwargs):
         request_id = request_kwargs.get('request_id', None)
-        output_number = request_kwargs.get('output_number', None)
-        if request_id is not None and output_number is not None:
+        output_id = request_kwargs.get('output_id', None)
+        if request_id is not None and output_id is not None:
             self.save_failed(
                 request_id,
-                output_number
+                output_id
             )
         return super().on_failure(*request_args, **request_kwargs)
 
@@ -49,17 +49,17 @@ class BaseOutputMixin(object):
                      request_kwargs: dict = None):
         if request_kwargs:
             request_id = request_kwargs.get('request_id', None)
-            output_number = request_kwargs.get('output_number', None)
-            if request_id is not None and output_number is not None:
+            output_id = request_kwargs.get('output_id', None)
+            if request_id is not None and output_id is not None:
                 if state == states.FAILURE:
                     self.save_failed(
                         request_id,
-                        output_number
+                        output_id
                     )
                 elif state == states.REVOKED:
                     self.save_output_status(
                         self.output_status.OUTPUT_REVOKED,
-                        output_number,
+                        output_id,
                         request_id
                     )
         super().raise_ignore(
@@ -67,7 +67,7 @@ class BaseOutputMixin(object):
             state=state,
             request_kwargs=request_kwargs)
 
-    def save_output_status(self, status_name, output_number, request_id):
+    def save_output_status(self, status_name, output_id, request_id):
 
         # check request_id, input_number and JOB_DETAILS has been set
 
@@ -75,7 +75,7 @@ class BaseOutputMixin(object):
             # request_id has been not set
             return
 
-        if output_number is None:
+        if output_id is None:
             # input_number has been not set
             return None
 
@@ -86,20 +86,20 @@ class BaseOutputMixin(object):
 
         # to prevent set output status after it was set to
         # in 'OUTPUT_FAILED' and 'OUTPUT_REVOKED'
-        if self.can_set_output_status(output_number, request_id):
+        if self.can_set_output_status(output_id, request_id):
 
             # add output status name as message to logger
             log_message = f"output status: {status_name}"
             if request_id:
                 log_message += f" ,request id: {request_id}"
-            if output_number:
-                log_message += f" ,output number: {output_number}"
+            if output_id:
+                log_message += f" ,output id: {output_id}"
             self.logger.info(log_message)
 
             self.cache.set(
                 CacheKeysTemplates.OUTPUT_STATUS.format(
                     request_id=request_id,
-                    output_number=output_number),
+                    output_id=output_id),
                 status_name
             )
 
@@ -126,24 +126,24 @@ class BaseOutputMixin(object):
                 self.cache.delete(
                     CacheKeysTemplates.OUTPUT_PROGRESS.format(
                         request_id=request_id,
-                        output_number=output_number
+                        output_id=output_id
                     ))
 
     def can_set_output_status(self,
-                              output_number,
+                              output_id,
                               request_id) -> None or bool:
         """to check output current status of job is not in
          'OUTPUT_FAILED', 'OUTPUT_REVOKED'
         """
         if request_id is None:
             return None
-        if output_number is None:
+        if output_id is None:
             return None
 
         output_current_status = self.cache.get(
             CacheKeysTemplates.OUTPUT_STATUS.format(
                 request_id=request_id,
-                output_number=output_number), decode=False)
+                output_id=output_id), decode=False)
         return output_current_status not in [
             self.output_status.OUTPUT_REVOKED,
             self.output_status.OUTPUT_FAILED]
@@ -226,17 +226,17 @@ class BaseOutputMixin(object):
     def is_output_forced_to_stop(
             self,
             request_id,
-            output_number) -> None or bool:
+            output_id) -> None or bool:
         force_stop = self.cache.get(
             CacheKeysTemplates.FORCE_STOP_OUTPUT_REQUEST.format(
                 request_id=request_id,
-                output_number=output_number))
+                output_id=output_id))
         return force_stop
 
     def raise_revoke_output(
             self,
             request_id,
-            output_number):
+            output_id):
         raise self.raise_ignore(
             message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
             state=states.REVOKED,
@@ -244,7 +244,7 @@ class BaseOutputMixin(object):
 
     def ensure_set_output_location(self,
                                    request_id: str,
-                                   output_number: int,
+                                   output_id: str,
                                    output_path: str = None,
                                    s3_output_key: str = None
                                    ) -> tuple[str, str]:
@@ -271,7 +271,7 @@ class BaseOutputMixin(object):
 
         directory = os.path.join(
             self.get_outputs_root_directory(request_id),
-            str(output_number))
+            str(output_id))
 
         output_path = os.path.join(directory, output_filename)
         return output_path, directory

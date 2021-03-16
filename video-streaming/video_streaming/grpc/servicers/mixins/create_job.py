@@ -1,4 +1,3 @@
-import json
 from celery import result as celery_result, chain, group
 from google.protobuf import reflection
 from video_streaming.cache import RedisCache
@@ -116,15 +115,17 @@ class CreateJobMixin(object):
         # sample : [dict(size=[256, 144], bitrate=[97280, 65536])]
         return custom_qualities
 
-    def _append_playlists_tasks(self,
-                      request_id: str,
-                      playlists: streaming_pb2.PlaylistOutput,
-                      append_to: list[chain]
-                      ):
+    def _append_playlists_tasks(
+            self,
+            request_id: str,
+            playlists: streaming_pb2.PlaylistOutput,
+            append_to: list[chain]
+            ):
         """initial processing tasks by playlists formats
         and chains them with upload task
         """
-        for output_number, output in enumerate(playlists):
+        for number, output in enumerate(playlists):
+            output_id: str = CacheKeysTemplates.PLAYLIST_ID_PREFIX + str(number)
             encode_format, video_codec, audio_codec = self._get_format(
                 output)
             quality_names: list[str] = self._parse_quality_names(
@@ -146,7 +147,7 @@ class CreateJobMixin(object):
                         quality_names=quality_names,
                         custom_qualities=custom_qualities,
                         request_id=request_id,
-                        output_number=output_number,
+                        output_id=output_id,
                         is_hls=output.protocol == self.pb2.Protocol.HLS
                     ),
                     # directory will come from create playlist task
@@ -154,7 +155,7 @@ class CreateJobMixin(object):
                         s3_output_key=output.s3.key,
                         s3_output_bucket=output.s3.bucket,
                         request_id=request_id,
-                        output_number=output_number
+                        output_id=output_id
                     )
                 )
             )
@@ -164,14 +165,13 @@ class CreateJobMixin(object):
             self,
             request_id: str,
             thumbnails: streaming_pb2.ThumbnailOutput,
-            append_to: list[chain],
-            start_number: int = 0
+            append_to: list[chain]
             ):
         """initial processing tasks by thumbnails options
         and chains them with upload task
         """
-        for output_number, output in enumerate(thumbnails, start_number):
-
+        for number, output in enumerate(thumbnails):
+            output_id: str = CacheKeysTemplates.THUMBNAIL_ID_PREFIX + str(number)
             append_to.append(
                 # chain of create generate_thumbnail and upload_file
                 chain(
@@ -179,7 +179,7 @@ class CreateJobMixin(object):
                     tasks.generate_thumbnail.s(
                         s3_output_key=output.s3.key,
                         request_id=request_id,
-                        output_number=output_number,
+                        output_id=output_id,
                         thumbnail_time=output.thumbnail_time,
                         scale_width=output.options.scale_width,
                         scale_height=output.options.scale_height
@@ -189,7 +189,7 @@ class CreateJobMixin(object):
                         s3_output_key=output.s3.key,
                         s3_output_bucket=output.s3.bucket,
                         request_id=request_id,
-                        output_number=output_number
+                        output_id=output_id
                     )
                 )
             )

@@ -15,7 +15,7 @@ class UploadFileMixin(BaseOutputMixin):
     def check_upload_file_requirements(
             self,
             request_id=None,
-            output_number=None,
+            output_id=None,
             file_path=None,
             s3_output_key=None,
             s3_output_bucket=None):
@@ -28,7 +28,7 @@ class UploadFileMixin(BaseOutputMixin):
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if output_number is None:
+        if output_id is None:
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)

@@ -18,7 +18,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
     def check_upload_directory_requirements(
             self,
             request_id=None,
-            output_number=None,
+            output_id=None,
             directory=None,
             s3_output_key=None,
             s3_output_bucket=None):
@@ -31,7 +31,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if output_number is None:
+        if output_id is None:
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
@@ -83,7 +83,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
                          directory,
                          s3_output_key,
                          s3_output_bucket,
-                         output_number,
+                         output_id,
                          request_id) -> int:
         """upload the directory of the output files to S3 object storage
          Returns directory size
@@ -92,7 +92,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
         directory_callback = S3UploadCallback(
                 task=self,
                 task_id=self.request.id.__str__(),
-                output_number=output_number,
+                output_id=output_id,
                 request_id=request_id,
             ).directory_progress
 

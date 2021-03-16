@@ -58,20 +58,12 @@ class InputStatus:
 class OutputStatus:
     # for every output
 
-    """
-    common output status
-    """
-
     OUTPUT_REVOKED = "OUTPUT_REVOKED"
     OUTPUT_FAILED = "OUTPUT_FAILED"
 
     PREPARATION_PROCESSING = "PREPARATION_PROCESSING"
     PROCESSING = "PROCESSING"
     PROCESSING_FINISHED = "PROCESSING_FINISHED"
-
-    """
-    Playlist output status
-    """
 
     # It will be set outside of tasks,
     # when PROCESSING_FINISHED and not UPLOADING

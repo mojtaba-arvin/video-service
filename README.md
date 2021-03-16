@@ -21,7 +21,7 @@ Features:
 * Supports webhook callback when all outputs uploaded
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 * Returns **CPU and memory usage** with spent time of every output for the financial purposes when a video is being processed to create a playlist 
-* Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as player poster or other purpose such as screenshots for demo 
+* Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as a player poster or other purpose such as screenshots for demo 
 
 TODO
 * adding watermark

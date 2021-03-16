@@ -35,21 +35,22 @@ class GetResultsMixin(object):
         busy_delta = end_busy - start_busy
         return busy_delta
 
-    def _outputs(self, request_id, total_outputs):
-        outputs: list[streaming_pb2.OutputDetails] = []
-        for output_number in range(total_outputs):
+    def _playlists(self, request_id, total_outputs):
+        outputs: list[streaming_pb2.PlaylistDetails] = []
+        for number in range(total_outputs):
+            output_id = CacheKeysTemplates.PLAYLIST_ID_PREFIX + str(number)
             output_status = self.cache.get(
                 CacheKeysTemplates.OUTPUT_STATUS.format(
                     request_id=request_id,
-                    output_number=output_number),
+                    output_id=output_id),
                 decode=False)
             if output_status:
                 directory_size: int = self.cache.get(
                     CacheKeysTemplates.OUTPUT_SIZE.format(
                         request_id=request_id,
-                        output_number=output_number)) or 0
+                        output_id=output_id)) or 0
                 output_details = dict(
-                    id=output_number,
+                    id=output_id,
                     status=self.pb2.OutputStatus.Value(
                         output_status),
                     directory_size=directory_size,
@@ -57,7 +58,7 @@ class GetResultsMixin(object):
                 progress: dict = self.cache.get(
                     CacheKeysTemplates.OUTPUT_PROGRESS.format(
                         request_id=request_id,
-                        output_number=output_number))
+                        output_id=output_id))
                 if progress:
                     output_details['output_progress'] = self.pb2.\
                         Progress(**progress)
@@ -65,21 +66,21 @@ class GetResultsMixin(object):
                 start_progressing_times: float = self.cache.get(
                     CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
                         request_id=request_id,
-                        output_number=output_number))
+                        output_id=output_id))
                 end_progressing_times: float = self.cache.get(
                     CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
                         request_id=request_id,
-                        output_number=output_number))
+                        output_id=output_id))
                 if start_progressing_times and end_progressing_times:
                     output_details['spent_time'] = end_progressing_times - start_progressing_times
                     start_cpu_times: list = self.cache.get(
                         CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
                             request_id=request_id,
-                            output_number=output_number))
+                            output_id=output_id))
                     end_cpu_times: list = self.cache.get(
                         CacheKeysTemplates.OUTPUT_END_CPU_TIMES.format(
                             request_id=request_id,
-                            output_number=output_number))
+                            output_id=output_id))
                     if start_cpu_times and end_cpu_times:
                         output_details['cpu_usage'] = self.get_cpu_usage(
                             list(start_cpu_times),
@@ -88,15 +89,38 @@ class GetResultsMixin(object):
                     start_memory_rss: int = self.cache.get(
                         CacheKeysTemplates.OUTPUT_START_MEMORY_RSS.format(
                             request_id=request_id,
-                            output_number=output_number))
+                            output_id=output_id))
                     end_memory_rss: int = self.cache.get(
                         CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
                             request_id=request_id,
-                            output_number=output_number))
+                            output_id=output_id))
                     if start_memory_rss and end_memory_rss:
                         output_details['memory_usage'] = end_memory_rss - start_memory_rss
 
-                outputs.append(self.pb2.OutputDetails(**output_details))
+                outputs.append(self.pb2.PlaylistDetails(**output_details))
+        return outputs
+
+    def _thumbnails(self, request_id, total_outputs):
+        outputs: list[streaming_pb2.ThumbnailDetails] = []
+        for number in range(total_outputs):
+            output_id = CacheKeysTemplates.THUMBNAIL_ID_PREFIX + str(number)
+            output_status = self.cache.get(
+                CacheKeysTemplates.OUTPUT_STATUS.format(
+                    request_id=request_id,
+                    output_id=output_id),
+                decode=False)
+            if output_status:
+                file_size: int = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_SIZE.format(
+                        request_id=request_id,
+                        output_id=output_id)) or 0
+                output_details = dict(
+                    id=output_id,
+                    status=self.pb2.OutputStatus.Value(
+                        output_status),
+                    file_size=file_size,
+                )
+                outputs.append(self.pb2.ThumbnailDetails(**output_details))
         return outputs
 
     def _inputs(self, request_id, total_inputs):
@@ -120,6 +144,39 @@ class GetResultsMixin(object):
                 if progress:
                     input_details['input_progress'] = self.pb2.\
                         Progress(**progress)
+                ffprobe_data: dict = self.cache.get(
+                    CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
+                        request_id=request_id,
+                        input_number=0
+                    ))
+                if ffprobe_data:
+                    format_: dict = ffprobe_data['format']
+                    streams = Streams(ffprobe_data['streams'])
+                    file_info = self.pb2.OriginalFileInfo(
+                        general=self.pb2.GeneralInfo(
+                            duration=float(format_['duration']),
+                            file_size=int(format_['size']),
+                            bit_rate=int(format_['bit_rate']),
+                            file_formats=format_['format_name'],
+                        ),
+                        video=self.pb2.VideoInfo(
+                            codec=streams.video()['codec_name'],
+                            width=int(streams.video().get('width', 0)),
+                            height=int(
+                                streams.video().get('height', 0)),
+                            frame_rate=streams.video()['r_frame_rate'],
+                            bit_rate=int(streams.video()['bit_rate'])
+                        ),
+                        audio=self.pb2.AudioInfo(
+                            codec=streams.audio()['codec_name'],
+                            sample_rate=int(
+                                streams.audio()['sample_rate']),
+                            bit_rate=int(streams.audio()['bit_rate']),
+                            channel_layout=streams.audio()[
+                                'channel_layout']
+                        )
+                    )
+                    input_details['file_info'] = file_info
                 inputs.append(
                     self.pb2.InputDetails(**input_details))
         return inputs
@@ -140,6 +197,8 @@ class GetResultsMixin(object):
             total_checks: int = job_details['total_checks']
             total_inputs: int = job_details['total_inputs']
             total_outputs: int = job_details['total_outputs']
+            total_playlists: int = job_details['total_playlists']
+            total_thumbnails: int = job_details['total_thumbnails']
             ready_outputs: int = self.cache.get(
                 CacheKeysTemplates.READY_OUTPUTS.format(
                     request_id=request_id)) or 0
@@ -164,9 +223,13 @@ class GetResultsMixin(object):
                 failed_outputs=failed_outputs,
                 checks=checks,
                 inputs=self._inputs(request_id, total_inputs),
-                outputs=self._outputs(request_id, total_outputs)
+                playlists=self.pb2.Playlists(
+                    outputs=self._playlists(request_id,
+                                            total_playlists)),
+                thumbnails=self.pb2.Thumbnails(
+                    outputs=self._thumbnails(request_id,
+                                             total_thumbnails))
             )
-
             # get stop reason if primary status is FAILED or REVOKED
             if primary_status in [
                     PrimaryStatus.FAILED,
@@ -178,35 +241,5 @@ class GetResultsMixin(object):
                     result_details['reason'] = self.pb2.StopReason.Value(
                         stop_reason)
 
-            ffprobe_data: dict = self.cache.get(
-                CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
-                    request_id=request_id,
-                    input_number=0
-                ))
-            if ffprobe_data:
-                format_: dict = ffprobe_data['format']
-                streams = Streams(ffprobe_data['streams'])
-                file_info = self.pb2.OriginalFileInfo(
-                    general=self.pb2.GeneralInfo(
-                        duration=float(format_['duration']),
-                        file_size=int(format_['size']),
-                        bit_rate=int(format_['bit_rate']),
-                        file_formats=format_['format_name'],
-                    ),
-                    video=self.pb2.VideoInfo(
-                        codec=streams.video()['codec_name'],
-                        width=int(streams.video().get('width', 0)),
-                        height=int(streams.video().get('height', 0)),
-                        frame_rate=streams.video()['r_frame_rate'],
-                        bit_rate=int(streams.video()['bit_rate'])
-                    ),
-                    audio=self.pb2.AudioInfo(
-                        codec=streams.audio()['codec_name'],
-                        sample_rate=int(streams.audio()['sample_rate']),
-                        bit_rate=int(streams.audio()['bit_rate']),
-                        channel_layout=streams.audio()['channel_layout']
-                    )
-                )
-                result_details['file_info'] = file_info
 
             return self.pb2.ResultDetails(**result_details)

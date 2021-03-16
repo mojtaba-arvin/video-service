@@ -17,7 +17,7 @@ class GenerateThumbnailMixin(BaseOutputMixin):
     def check_generate_thumbnail_requirements(
             self,
             request_id=None,
-            output_number=None,
+            output_id=None,
             input_path=None,
             output_path=None,
             s3_output_key=None):
@@ -30,7 +30,7 @@ class GenerateThumbnailMixin(BaseOutputMixin):
                 message=self.error_messages.REQUEST_ID_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if output_number is None:
+        if output_id is None:
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)
