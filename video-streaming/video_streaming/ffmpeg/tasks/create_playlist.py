@@ -38,7 +38,7 @@ def create_playlist(
         fragmented: bool = settings.DEFAULT_SEGMENT_TYPE_IS_FMP4,
         encode_format: str = settings.DEFAULT_ENCODE_FORMAT,
         video_codec: str = None,
-        audio_codec: str = None,  # The audio codec format, e.g "aac"
+        audio_codec: str = None,
         quality_names: list[str] = None,
         custom_qualities: list[dict] = None,
         async_run: bool = False,
@@ -48,38 +48,48 @@ def create_playlist(
         ) -> dict:
     """create an playlist ( HLS or DASH )
 
-       Kwargs:
+    Args:
+        self:
+        *args:
+        s3_output_key:
+        fragmented:
+        encode_format:
+        request_id:
+        is_hls:
+            type of playlist, True is HLS, False is MPEG-DASH
+        input_path:
+            The local input path
+        output_path:
+            The local output path
+        video_codec:
+            The video codec format, e.g "libx264", "libx265"
+            or "libvpx-vp9"
+        audio_codec:
+            The audio codec format, e.g "aac"
+        quality_names:
+            List of quality names to generate. e.g. ["360p","720p"]
+            or [Resolutions.R_360P, Resolutions.R_720P]
+        custom_qualities:
+            a list of dict includes size and bitrate
+            e.g. [dict(size=[256, 144], bitrate=[97280, 65536])]
+        async_run:
+            default of async_run is False to don't call async method
+            inside the task, it can raise RuntimeError: asyncio.run()
+            cannot be called from a running event loop
+        output_number:
+            output_number is using in redis key, to save progress of
+            every output, also it's using to create different path
+            for outputs
 
-         input_path:
-           The local input path
-         output_path:
-           The local output path
-         video_codec:
-           The video codec format, e.g "libx264", "libx265"
-           or "libvpx-vp9"
-         audio_codec:
-           The audio codec format, e.g "aac"
-         quality_names:
-           List of quality names to generate. e.g. ["360p","720p"]
-           or [Resolutions.R_360P, Resolutions.R_720P]
-         custom_qualities:
-           a list of dict includes size and bitrate
-           e.g. [dict(size=[256, 144], bitrate=[97280, 65536])]
-         async_run:
-           default of async_run is False to don't call async method
-           inside the task, it can raise RuntimeError: asyncio.run()
-           cannot be called from a running event loop
-         output_number:
-           output_number is using in redis key, to save progress of
-           every output, also it's using to create different path
-           for outputs
-        
+    Required parameters:
+        - request_id
+        - output_number
+        - input_path
+        - output_path or s3_output_key
 
-       required parameters:
-         - request_id
-         - output_number
-         - input_path
-         - output_path or s3_output_key
+    Returns:
+        a dict includes directory
+
     """
 
     self.check_create_playlist_requirements(
@@ -133,7 +143,7 @@ def create_playlist(
                 task_id=self.request.id.__str__(),
                 output_number=output_number,
                 request_id=request_id
-            ).progress,
+            ).playlist_progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run)
     except Exception as e:

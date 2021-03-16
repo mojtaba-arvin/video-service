@@ -10,6 +10,10 @@ __all__ = [
 
 class BaseTask(Task, ABC):
 
+    def __call__(self, *args, **kwargs):
+        print(f"task name: {self.name}, args: {args}, kwargs: {kwargs}")
+        return super().__call__(*args, **kwargs)
+
     def raise_ignore(self,
                      message=None,
                      state=states.FAILURE,

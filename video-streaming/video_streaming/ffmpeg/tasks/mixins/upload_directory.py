@@ -2,7 +2,7 @@ import os
 from functools import partial
 from celery import Task
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
-from video_streaming.ffmpeg.utils import S3UploadDirectoryCallback
+from video_streaming.ffmpeg.utils import S3UploadCallback
 from .output import BaseOutputMixin
 
 
@@ -89,12 +89,12 @@ class UploadDirectoryMixin(BaseOutputMixin):
          Returns directory size
          """
 
-        directory_callback = S3UploadDirectoryCallback(
+        directory_callback = S3UploadCallback(
                 task=self,
                 task_id=self.request.id.__str__(),
                 output_number=output_number,
                 request_id=request_id,
-            ).progress
+            ).directory_progress
 
         total_size, files = self.get_directory_size(directory)
         total_files = len(files)

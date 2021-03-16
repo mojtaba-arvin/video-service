@@ -31,7 +31,7 @@ class BaseStreamingTask(BaseTask, ABC):
 
     TMP_DOWNLOADED_DIR: str = settings.TMP_DOWNLOADED_DIR or ""
     INPUTS_DIRECTORY_PREFIX: str = "inputs_"
-    TMP_TRANSCODED_DIR: str = settings.TMP_TRANSCODED_DIR or ""
+    TMP_PROCESSED_DIR: str = settings.TMP_PROCESSED_DIR or ""
     OUTPUTS_DIRECTORY_PREFIX: str = "outputs_"
 
     # delete local inputs after all outputs have been processed
@@ -227,7 +227,7 @@ class BaseStreamingTask(BaseTask, ABC):
         if request_id is None:
             return None
         return os.path.join(
-            self.TMP_TRANSCODED_DIR,
+            self.TMP_PROCESSED_DIR,
             self.OUTPUTS_DIRECTORY_PREFIX + str(request_id))
 
     def raise_revoke(self, request_id: str = None):

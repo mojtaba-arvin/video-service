@@ -1,17 +1,20 @@
+import os
 import urllib3
+from functools import partial
 from abc import ABC
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.ffmpeg.utils import S3UploadCallback
 from .base import BaseStreamingTask
-from .mixins import UploadDirectoryMixin
+from .mixins import UploadFileMixin
 
 
-class UploadDirectoryTask(
+class UploadFileTask(
         ChainCallbackMixin,
-        UploadDirectoryMixin,
+        UploadFileMixin,
         BaseStreamingTask,
         ABC
         ):
@@ -22,38 +25,40 @@ class UploadDirectoryTask(
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
-            self.stop_reason.FAILED_UPLOAD_DIRECTORY,
+            self.stop_reason.FAILED_UPLOAD_FILE,
             request_id
         )
 
 
-@celery_app.task(name="upload_directory",
-                 base=UploadDirectoryTask,
+@celery_app.task(name="upload_file",
+                 base=UploadFileTask,
                  **TASK_DECORATOR_KWARGS)
-def upload_directory(self,
-                     *args,
-                     directory: str = None,
-                     s3_output_key: str = None,
-                     s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
-                     request_id: str = None,
-                     output_number: int = None):
-    """upload the directory of the output files to S3 object storage
+def upload_file(self,
+                *args,
+                file_path: str = None,
+                s3_output_key: str = None,
+                s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
+                request_id: str = None,
+                output_number: int = None):
+    """upload the output file to the S3 object storage
 
-        Kwargs:
-         directory:
-            The response of S3 head object request for input video
+    Args:
+        self ():
+        *args ():
+        file_path ():
+        s3_output_key ():
+        s3_output_bucket ():
+        request_id ():
+        output_number ():
 
-       required parameters:
-         - request_id
-         - output_number
-         - directory
-         - s3_input_key
+    Returns:
+
     """
 
-    self.check_upload_directory_requirements(
+    self.check_upload_file_requirements(
         request_id=request_id,
         output_number=output_number,
-        directory=directory,
+        file_path=file_path,
         s3_output_key=s3_output_key,
         s3_output_bucket=s3_output_bucket)
 
@@ -63,6 +68,16 @@ def upload_directory(self,
     if self.is_output_forced_to_stop(request_id, output_number):
         raise self.raise_revoke_output(request_id, output_number)
 
+    # try
+    file_size = os.stat(file_path).st_size
+    if file_size == 0:
+        self.save_job_stop_reason(
+            self.stop_reason.INTERNAL_ERROR,
+            request_id)
+        raise self.raise_ignore(
+            message=self.error_messages.CAN_NOT_UPLOAD_EMPTY_FILE,
+            request_kwargs=self.request.kwargs)
+
     # save output status using output_number and request_id
     self.save_output_status(
         self.output_status.UPLOADING,
@@ -70,30 +85,38 @@ def upload_directory(self,
         request_id
     )
 
+    file_progress_callback = S3UploadCallback(
+            task=self,
+            task_id=self.request.id.__str__(),
+            output_number=output_number,
+            request_id=request_id,
+        ).file_progress
+
     try:
-        directory_size = self.upload_directory(
-            directory,
-            s3_output_key,
-            s3_output_bucket,
-            output_number,
-            request_id)
+        self.s3_service.upload_file_by_path(
+            key=s3_output_key,
+            file_path=file_path,
+            bucket_name=s3_output_bucket,
+            callback=partial(
+                file_progress_callback,
+                file_size)
+        )
     except urllib3.exceptions.HeaderParsingError as e:
-        # MissingHeaderBodySeparatorDefect
         # TODO notify developer
         self.logger.error(e)
         self.save_job_stop_reason(
             self.stop_reason.INTERNAL_ERROR,
             request_id)
         raise self.raise_ignore(
-            message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
+            message=self.error_messages.CAN_NOT_UPLOAD_FILE,
             request_kwargs=self.request.kwargs)
 
-    # save output directory size
+    # save output file size
     self.cache.set(
         CacheKeysTemplates.OUTPUT_SIZE.format(
             request_id=request_id,
             output_number=output_number),
-        directory_size)
+        file_size)
 
     self.save_output_status(
         self.output_status.UPLOADING_FINISHED,

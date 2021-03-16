@@ -8,6 +8,8 @@ from .download_input import DownloadInputMixin
 from .analyze_input import AnalyzeInputMixin
 
 from .output import BaseOutputMixin
+from .generate_thumbnail import GenerateThumbnailMixin
+from .upload_file import UploadFileMixin
 from .create_playlist import CreatePlaylistMixin
 from .upload_directory import UploadDirectoryMixin
 from .call_webhook import CallWebhookMixin

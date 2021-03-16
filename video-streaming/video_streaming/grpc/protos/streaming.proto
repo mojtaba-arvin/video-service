@@ -17,16 +17,26 @@ message JobRequest {
   S3Input s3_input = 3;
 
   // every output includes destination s3 key, and convert details
-  repeated StreamingOutput outputs = 5;
+  repeated PlaylistOutput playlists = 5;
+  repeated ThumbnailOutput thumbnails = 6;
 }
 enum Protocol {
   HLS = 0;
   DASH = 1;
 }
-message StreamingOutput{
+message PlaylistOutput{
   Protocol protocol = 1;
   S3Output s3 = 2;
   ConvertOptions options = 3;
+}
+message ThumbnailOutput{
+  string thumbnail_time = 1;
+  S3Output s3 = 2;
+  ThumbnailOptions options = 3;
+}
+message ThumbnailOptions{
+  int32 scale_width = 1;
+  int32 scale_height = 2;
 }
 message S3Input{
   string key = 1;
@@ -124,7 +134,6 @@ message JobResponse {
   string tracking_id = 1;
 }
 
-
 message JobsResultsRequest {
   repeated string tracking_ids = 1;
 }
@@ -174,6 +183,8 @@ enum StopReason{
   REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE = 13;
 
   FAILED_UPLOAD_DIRECTORY = 14;
+
+  FAILED_GENERATE_THUMBNAIL=15;
 
 }
 message ResultDetails {
@@ -226,7 +237,7 @@ enum OutputStatus {
   PROCESSING_FINISHED = 2;
 
   QUEUING_UPLOADING = 3;
-  PLAYLIST_UPLOADING = 4;
+  UPLOADING = 4;
   UPLOADING_FINISHED = 5;
 
   OUTPUT_REVOKED = 6;

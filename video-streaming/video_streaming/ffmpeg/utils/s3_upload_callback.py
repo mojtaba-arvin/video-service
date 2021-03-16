@@ -2,7 +2,7 @@ import sys
 from celery import Task
 
 
-class S3UploadDirectoryCallback(object):
+class S3UploadCallback(object):
 
     def __init__(
             self,
@@ -21,11 +21,12 @@ class S3UploadDirectoryCallback(object):
         self.output_number = output_number
         self.request_id = request_id
 
-    def progress(self, total_size, total_files, number, chunk):
+    def directory_progress(self, total_size, total_files, number, chunk):
+
         if self.uploaded == 0:
             # save input status using input_number and request_id
             self.task.save_output_status(
-                self.task.output_status.PLAYLIST_UPLOADING,
+                self.task.output_status.UPLOADING,
                 self.output_number,
                 self.request_id
             )
@@ -46,3 +47,28 @@ class S3UploadDirectoryCallback(object):
             )
             sys.stdout.flush()
 
+    def file_progress(self, file_size, chunk):
+
+        if self.uploaded == 0:
+            # save input status using input_number and request_id
+            self.task.save_output_status(
+                self.task.output_status.UPLOADING,
+                self.output_number,
+                self.request_id
+            )
+
+        self.uploaded += chunk
+
+        self.task.save_output_progress(
+            total=file_size,
+            current=self.uploaded,
+            request_id=self.request_id,
+            output_number=self.output_number
+        )
+
+        if self.task.request.called_directly:
+            bytes_percent = round(self.uploaded / file_size * 100)
+            sys.stdout.write(
+                f"\r{self.request_id} | {self.output_number} Uploading files...({bytes_percent}%) {self.uploaded} [{'#' * bytes_percent}{'-' * (100 - bytes_percent)}]"
+            )
+            sys.stdout.flush()

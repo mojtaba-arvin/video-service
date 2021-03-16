@@ -36,29 +36,32 @@ class Streaming(
         3. check input video parameter is not empty
         4. check input video is exist on the cloud as a first level task
             on the workflow
-        5. check outputs list is empty
+        5. check to not empty both playlists and thumbnails outputs
         6. check output keys are not empty and bucket names are
             compatible with s3
         7. check if output keys are exist to prevent upload risk
         8. check duplicate output locations in current request
         9. check unique output buckets are exist on the cloud or create
             them if has one create flag ,as first level tasks
-        10. add second level tasks, e.g. download input
+        10. add third level tasks, e.g. download input
         11. initial processing tasks by output formats and chains them with upload task
         12. apply tasks
         """
 
         # 1. create empty tasks lists for the workflow
 
-        # some checks tasks before download anythings
-        first_level_tasks: list = []
-        # some download tasks, like target video, watermarks ...
-        second_level_tasks: list = []
-        # some chains of create playlist and upload directory
-        # for every output
-        third_level_tasks: list[chain] = []
+        # checks tasks before download anythings
+        first_level: list = []
+        second_level: list = []
+
+        # download tasks, like target video, watermarks ...
+        third_level: list = []
+
+        # chains of process and upload tasks for every output
+        fourth_level: list[chain] = []
+
         # delete local inputs and outputs files and call webhook
-        fourth_level_tasks: list = []
+        fifth_level: list = []
 
         # 2.generate unique uuid for the current request
         request_id: str = str(uuid.uuid4())
@@ -67,7 +70,7 @@ class Streaming(
         webhook_url: str = request.webhook_url
         if webhook_url:
             # TODO check webhook_url is valid and raise error
-            fourth_level_tasks.append(
+            fifth_level.append(
                 # webhook_url value will come from job_details cache
                 # by request id
                 tasks.call_webhook.s(request_id=request_id)
@@ -85,58 +88,50 @@ class Streaming(
 
         # 4. check input video is exist on the cloud
         # as a first level task
-        first_level_tasks.append(
+        first_level.append(
             tasks.check_input_key.s(
                 s3_input_key=s3_input_key,
                 s3_input_bucket=s3_input_bucket,
                 request_id=request_id
             ))
 
-        # 5. check outputs list is empty
-        if not request.outputs:
+        # 5. check to not empty both playlists and thumbnails outputs
+        if not request.playlists and not request.thumbnails:
             raise exceptions.OneOutputIsRequiredException
 
         # 6. check output keys are not empty and bucket names
-        # are compatible with s3
+        # are compatible with s3 and append check output key tasks to
+        # second level
         output_buckets: list[str] = []
         output_locations: list[tuple] = []
-        # checking_upload_risk_tasks: list = []
-        for output in request.outputs:
+        for outputs in [request.playlists, request.thumbnails]:
+            for output in outputs:
+                # check the output key is filled
+                if output.s3.key.isspace():
+                    raise exceptions.S3KeyCanNotBeEmptyException
 
-            # check the output key is filled
-            if output.s3.key.isspace():
-                raise exceptions.S3KeyCanNotBeEmptyException
+                # when output bucket is filled and has create flag,
+                # then check the output bucket is compatible with s3
+                if output.s3.bucket and output.s3.create_bucket and \
+                        not S3Service.validate_bucket_name(output.s3.bucket):
+                    raise exceptions.BucketNameIsNotValidException
 
-            # when output bucket is filled and has create flag,
-            # then check the output bucket is compatible with s3
-            if output.s3.bucket and output.s3.create_bucket and \
-                    not S3Service.validate_bucket_name(output.s3.bucket):
-                raise exceptions.BucketNameIsNotValidException
+                # to use for getting unique output buckets names
+                output_buckets.append(output.s3.bucket)
 
-            # to use for getting unique output buckets names
-            output_buckets.append(output.s3.bucket)
+                # to use for checking duplicate output locations
+                output_locations.append((output.s3.bucket, output.s3.key))
 
-            # to use for checking duplicate output locations
-            output_locations.append((output.s3.bucket, output.s3.key))
-
-            if output.s3.dont_replace:
-                # 7. check if output keys are exist can be replace
-                first_level_tasks.append(
-                    tasks.check_output_key.s(
-                        s3_output_key=output.s3.key,
-                        s3_output_bucket=output.s3.bucket,
-                        s3_dont_replace=output.s3.dont_replace,
-                        request_id=request_id
+                if output.s3.dont_replace:
+                    # 7. check if output keys are exist can be replace
+                    second_level.append(
+                        tasks.check_output_key.s(
+                            s3_output_key=output.s3.key,
+                            s3_output_bucket=output.s3.bucket,
+                            s3_dont_replace=output.s3.dont_replace,
+                            request_id=request_id
+                        )
                     )
-                )
-                # checking_upload_risk_tasks.append(
-                #     tasks.check_output_key.s(
-                #         s3_output_key=output.s3.key,
-                #         s3_output_bucket=output.s3.bucket,
-                #         s3_dont_replace=output.s3.dont_replace,
-                #         request_id=request_id
-                #     )
-                # )
 
         # 8. check duplicate output locations in current request
         if len(output_locations) != len(set(output_locations)):
@@ -147,36 +142,25 @@ class Streaming(
         unique_output_buckets = list(set(output_buckets))
         # checking_output_buckets_tasks: list = []
         for bucket in unique_output_buckets:
-            first_level_tasks.append(
+
+            # search bucket has one create flag
+            s3_create_bucket = self._has_create_flag(
+                bucket, request.playlists) or self._has_create_flag(
+                bucket, request.thumbnails)
+
+            first_level.append(
                 tasks.check_output_bucket.s(
                     s3_output_bucket=bucket,
-                    s3_create_bucket=self._has_create_flag(
-                        bucket, request.outputs),
+                    s3_create_bucket=s3_create_bucket,
                     request_id=request_id
                 )
             )
-            # checking_output_buckets_tasks.append(
-            #     tasks.check_output_bucket.s(
-            #         s3_output_bucket=bucket,
-            #         s3_create_bucket=self._has_create_flag(
-            #             bucket, request.outputs),
-            #         request_id=request_id
-            #     )
-            # )
 
-        # # check upload risk after checking buckets are exist
-        # first_level_tasks.append(
-        #     chain(
-        #         group(*checking_output_buckets_tasks),
-        #         group(*checking_upload_risk_tasks)
-        #     )
-        # )
-
-        # 10. add second level tasks, e.g. download input
-        second_level_tasks.append(
+        # 10. add third level tasks, e.g. download input
+        third_level.append(
             # chain of create playlist and upload_directory
             chain(
-                # input object_details will come from first level
+                # input object_details will come from second level
                 tasks.download_input.s(
                     # object_details=object_details,
                     request_id=request_id,
@@ -194,19 +178,26 @@ class Streaming(
 
         # 11. initial processing tasks by output formats
         # and chains them with upload task
-        third_level_tasks = self._append_tasks(
+        fourth_level = self._append_playlists_tasks(
             request_id=request_id,
-            outputs=request.outputs,
-            append_to=third_level_tasks
+            playlists=request.playlists,
+            append_to=fourth_level
+        )
+
+        fourth_level = self._append_thumbnails_tasks(
+            request_id=request_id,
+            thumbnails=request.thumbnails,
+            append_to=fourth_level,
+            start_number=len(fourth_level)
         )
 
         reference_id: str = request.reference_id
         job_details = dict(
             reference_id=reference_id,
             webhook_url=webhook_url,
-            total_checks=len(first_level_tasks),
-            total_inputs=len(second_level_tasks),
-            total_outputs=len(third_level_tasks)
+            total_checks=len(first_level)+len(second_level),
+            total_inputs=len(third_level),
+            total_outputs=len(fourth_level)
         )
 
         # saving job details
@@ -218,14 +209,16 @@ class Streaming(
 
         ordered_levels = [
             # chord 1
-            first_level_tasks,
+            first_level,
             # callback of chord 1
-            second_level_tasks,
+            second_level,
 
             # chord 2
-            third_level_tasks,
+            third_level,
             # callback of chard 2
-            fourth_level_tasks
+            fourth_level,
+
+            fifth_level
         ]
 
         # 12. apply tasks
@@ -302,7 +295,7 @@ class Streaming(
                         signalFailedReason.OUTPUT_HAS_BEEN_UPLOADED
                     ))
                     continue
-                if output_status == OutputStatus.PLAYLIST_UPLOADING:
+                if output_status == OutputStatus.UPLOADING:
                     # when playlist is uploading, it's not safe to stop
                     outputs_to_revoke.append(self.pb2.OutputsToRevoke(
                         output_number=output_number,

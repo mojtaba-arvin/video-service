@@ -1,3 +1,4 @@
+import os
 from celery import states, Task
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
@@ -17,6 +18,8 @@ class BaseOutputMixin(object):
     save_primary_status: BaseStreamingTask.save_primary_status
     inputs_remover: BaseStreamingTask.inputs_remover
     outputs_remover: BaseStreamingTask.outputs_remover
+    get_outputs_root_directory: BaseStreamingTask.\
+        get_outputs_root_directory
 
     request: Task.request
 
@@ -238,3 +241,37 @@ class BaseOutputMixin(object):
             message=self.error_messages.TASK_WAS_FORCIBLY_STOPPED,
             state=states.REVOKED,
             request_kwargs=self.request.kwargs)
+
+    def ensure_set_output_location(self,
+                                   request_id: str,
+                                   output_number: int,
+                                   output_path: str = None,
+                                   s3_output_key: str = None
+                                   ) -> tuple[str, str]:
+        """ensure set directory and output_path
+
+           1. check requirement : output_path or s3_output_key
+           2. using output_path to set directory
+           3. when output_path is None, using s3_output_key
+             to set directory and output_path
+
+            returns a tuple of output_path and directory
+        """
+
+        # using self.output_path to set self.directory
+        if output_path:
+            directory = output_path.rpartition('/')[0]
+            return output_path, directory
+
+        # when self.output_path is None, using self.s3_output_key
+        #  to set self.directory and self.output_path
+
+        # s3_output_key : "/foo/bar/example.mpd"
+        output_filename = s3_output_key.rpartition('/')[-1]
+
+        directory = os.path.join(
+            self.get_outputs_root_directory(request_id),
+            str(output_number))
+
+        output_path = os.path.join(directory, output_filename)
+        return output_path, directory
