@@ -323,13 +323,15 @@ message RevokeDetails{
 
 message RevokeOutputsRequest{
   string tracking_id = 1;
-  repeated int32 output_numbers = 2;
+  repeated int32 playlists_numbers = 2;
+  repeated int32 thumbnails_numbers = 3;
 }
 message RevokeOutputsResponse{
     // returns gRPC error if tracking_id not found
     string tracking_id = 1;
     string reference_id = 2;
-    repeated OutputsToRevoke outputs_to_revoke = 4;
+    repeated OutputsToRevoke playlists_to_revoke = 3;
+    repeated OutputsToRevoke thumbnails_to_revoke = 4;
 }
 message OutputsToRevoke{
   int32 output_number = 1;
@@ -338,6 +340,7 @@ message OutputsToRevoke{
      signalFailedReason signal_failed_reason = 3;
   }
 }
+
 enum signalFailedReason{
   OUTPUT_NUMBER_IS_INVALID = 0; // when output number is not valid
   OUTPUT_HAS_BEEN_FAILED = 1; // when output status is OUTPUT_FAILED

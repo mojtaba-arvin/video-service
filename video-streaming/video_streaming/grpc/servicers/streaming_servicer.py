@@ -264,57 +264,28 @@ class Streaming(
             primary_status,
             job_details)
 
-        outputs_to_revoke: list[Streaming.pb2.OutputsToRevoke] = []
-        for output_number in request.output_numbers:
-            # is output_number valid?
-            if output_number not in range(job_details['total_outputs']):
-                outputs_to_revoke.append(self.pb2.OutputsToRevoke(
-                        output_number=output_number,
-                        signal_failed_reason=self.pb2.
-                        signalFailedReason.OUTPUT_NUMBER_IS_INVALID))
-                continue
-            # check job has any output status to know if output is
-            # already executed and can not revoke it
-            if primary_status == PrimaryStatus.OUTPUTS_PROGRESSING:
+        playlists_to_revoke: list[Streaming.pb2.OutputsToRevoke] = \
+            self._outputs_to_revoke(
+            request.playlists_numbers,
+            primary_status,
+            request_id,
+            job_details['total_outputs'],
+            CacheKeysTemplates.PLAYLIST_ID_PREFIX
+        )
 
-                output_status = self.cache.get(
-                    CacheKeysTemplates.OUTPUT_STATUS.format(
-                        request_id=request_id,
-                        output_number=output_number),
-                    decode=False)
-                if output_status == OutputStatus.OUTPUT_FAILED:
-                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
-                        output_number=output_number,
-                        signal_failed_reason=self.pb2.
-                        signalFailedReason.OUTPUT_HAS_BEEN_FAILED
-                    ))
-                    continue
-                if output_status == OutputStatus.UPLOADING_FINISHED:
-                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
-                        output_number=output_number,
-                        signal_failed_reason=self.pb2.
-                        signalFailedReason.OUTPUT_HAS_BEEN_UPLOADED
-                    ))
-                    continue
-                if output_status == OutputStatus.UPLOADING:
-                    # when playlist is uploading, it's not safe to stop
-                    outputs_to_revoke.append(self.pb2.OutputsToRevoke(
-                        output_number=output_number,
-                        signal_failed_reason=self.
-                        pb2.signalFailedReason.
-                        OUTPUT_UPLOADING_COULD_NOT_BE_STOPPED
-                    ))
-                    continue
-
-            # ok, output can revoke
-            self._send_revoke_output_signal(request_id, output_number)
-            outputs_to_revoke.append(self.pb2.OutputsToRevoke(
-                    output_number=output_number,
-                    signal_has_been_sent=True))
+        thumbnails_to_revoke: list[Streaming.pb2.OutputsToRevoke] = \
+            self._outputs_to_revoke(
+            request.thumbnails_numbers,
+            primary_status,
+            request_id,
+            job_details['total_outputs'],
+            CacheKeysTemplates.THUMBNAIL_ID_PREFIX
+        )
 
         response = self.pb2.RevokeOutputsResponse(
             tracking_id=request_id,
             reference_id=job_details['reference_id'],
-            outputs_to_revoke=outputs_to_revoke
+            playlists_to_revoke=playlists_to_revoke,
+            thumbnails_to_revoke=thumbnails_to_revoke
         )
         return response
