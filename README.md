@@ -9,7 +9,6 @@ For example, instead of building both HLS and MPEG-DASH playlists, you can build
 
 The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` HLS segment type.
 
-
 Features:
 * Supports multi outputs with custom encode formats, codecs and qualities
 * Supports HLS, MPEG-DASH and HLS with fmp4 segments (CMAF)
@@ -23,7 +22,6 @@ Features:
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 * Returns **CPU and memory usage** with spent time of every output for the financial purposes when a video is being processed to create a playlist 
 * Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as player poster or other purpose such as screenshots for demo 
-
 
 TODO
 * adding watermark
