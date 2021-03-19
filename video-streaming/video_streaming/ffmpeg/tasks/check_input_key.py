@@ -1,7 +1,8 @@
 from abc import ABC
 from video_streaming import settings
 from video_streaming.celery import celery_app
-from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS, \
+    InputType
 from .base import BaseStreamingTask
 from .mixins import CheckInputMixin
 
@@ -31,21 +32,28 @@ def check_input_key(self,
                     *args,
                     s3_input_key: str = None,
                     s3_input_bucket: str = settings.S3_DEFAULT_INPUT_BUCKET_NAME,
-                    request_id: str = None) -> dict:
+                    request_id: str = None,
+                    input_type: str = InputType.VIDEO_INPUT
+                    ) -> dict:
     """check s3_input_key is exist on s3_input_bucket
 
-        Kwargs:
-         request_id:
+    Args:
+        self:
+        *args:
+        s3_input_key:
+            The S3 key of input video.
+            e.g. "/foo/bar/example.mp4"
+        s3_input_bucket:
+        request_id:
             job request id as unique id,
             several tasks can be points to one request_id.
             e.g. "3b06519e-1h5c-475b-p473-1c8ao63bbe58"
-        s3_input_key:
-            The S3 key of video for ffmpeg input.
-            e.g. "/foo/bar/example.mp4"
+        input_type:
+            to map object_details to the name that will use
+            in the download_input task
 
-       required parameters:
-         - request_id
-         - s3_input_key
+    Returns:
+
     """
 
     self.check_input_key_requirements(
@@ -79,4 +87,4 @@ def check_input_key(self,
 
     self.incr_passed_checks(request_id)
 
-    return dict(object_details=object_details)
+    return {input_type+"_details": object_details}

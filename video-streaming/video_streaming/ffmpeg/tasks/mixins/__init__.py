@@ -13,3 +13,5 @@ from .upload_file import UploadFileMixin
 from .create_playlist import CreatePlaylistMixin
 from .upload_directory import UploadDirectoryMixin
 from .call_webhook import CallWebhookMixin
+
+from .add_watermark import AddWatermarkMixin

@@ -14,7 +14,10 @@ message JobRequest {
   string reference_id = 2;
 
   // the target video on s3 to convert
-  S3Input s3_input = 3;
+  Video video = 3;
+
+  // watermark image
+  Watermark watermark = 4;
 
   // every output includes destination s3 key, and convert details
   repeated PlaylistOutput playlists = 5;
@@ -24,15 +27,41 @@ enum Protocol {
   HLS = 0;
   DASH = 1;
 }
+message InputFile{
+
+}
+message Video{
+  S3Input s3_input = 1;
+  //
+}
+message Watermark{
+  S3Input s3_input = 1;
+  // upload watermarked video to s3
+  S3Output upload_to = 2;
+  WatermarkPosition position = 3;
+}
+enum WatermarkPosition {
+    CENTER = 0;
+    FIX_TOP_LEFT = 1;
+//    FIX_TOP_RIGHT = 2;
+//    FIX_TOP_CENTER = 3;
+//    FIX_BOTTOM_LEFT = 4;
+//    FIX_BOTTOM_RIGHT = 5;
+//    FIX_BOTTOM_CENTER = 6;
+//    ANIMATE_LEFT_TO_RIGHT = 7;
+//    ANIMATE_TOP_TO_BOTTOM = 8;
+}
 message PlaylistOutput{
   Protocol protocol = 1;
-  S3Output s3 = 2;
+  S3Output upload_to = 2;
   ConvertOptions options = 3;
+  bool use_watermark = 4;
 }
 message ThumbnailOutput{
   string thumbnail_time = 1;
-  S3Output s3 = 2;
+  S3Output upload_to = 2;
   ThumbnailOptions options = 3;
+  bool use_watermark = 4;
 }
 message ThumbnailOptions{
   int32 scale_width = 1;
@@ -204,8 +233,8 @@ message ResultDetails {
   repeated InputDetails inputs = 10;
   Playlists playlists = 11;
   Thumbnails thumbnails = 12;
+  WatermarkedVideoDetails watermarked_video = 13;
 }
-
 message GeneralInfo{
     float duration = 1; // 68.843000
     int64 file_size = 2;
@@ -252,6 +281,21 @@ message Playlists{
 }
 message Thumbnails{
   repeated ThumbnailDetails outputs = 1;
+}
+message WatermarkedVideoDetails{
+    string id = 1;
+    OutputStatus status = 2;
+    Progress output_progress = 3;
+//    bool has_upload_flag = 4;
+
+    // cost :
+    float spent_time = 5;
+    float cpu_usage = 6;
+    int64 memory_usage = 7;
+
+    // details :
+    int64 file_size = 8;
+    UploadedTo uploaded_to = 9;
 }
 message PlaylistDetails {
     string id = 1;

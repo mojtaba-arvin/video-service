@@ -10,7 +10,8 @@ __all__ = [
     'JobNotFoundException',
     'JobIsFailedException',
     'JobIsRevokedException',
-    'JobIsFinishedException'
+    'JobIsFinishedException',
+    'NoWatermarkToUseException'
 ]
 
 
@@ -52,3 +53,8 @@ class JobIsRevokedException(GrpcBaseException):
 class JobIsFinishedException(GrpcBaseException):
     status_code = ErrorCodes.JOB_IS_FINISHED
     message = ErrorMessages.JOB_IS_FINISHED
+
+
+class NoWatermarkToUseException(GrpcBaseException):
+    status_code = ErrorCodes.NO_WATERMARK_TO_USE
+    message = ErrorMessages.NO_WATERMARK_TO_USE

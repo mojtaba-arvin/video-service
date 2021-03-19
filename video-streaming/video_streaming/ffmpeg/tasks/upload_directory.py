@@ -36,18 +36,23 @@ def upload_directory(self,
                      s3_output_key: str = None,
                      s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
                      request_id: str = None,
-                     output_id: str = None):
+                     output_id: str = None,
+                     **kwargs
+                     ):
     """upload the directory of the output files to S3 object storage
 
-        Kwargs:
-         directory:
-            The response of S3 head object request for input video
+    Args:
+        self ():
+        *args ():
+        directory (): The response of S3 head object request for input video
+        s3_output_key ():
+        s3_output_bucket ():
+        request_id ():
+        output_id ():
+        **kwargs ():
 
-       required parameters:
-         - request_id
-         - output_id
-         - directory
-         - s3_input_key
+    Returns:
+
     """
 
     self.check_upload_directory_requirements(
@@ -77,15 +82,24 @@ def upload_directory(self,
             s3_output_bucket,
             output_id,
             request_id)
-    except urllib3.exceptions.HeaderParsingError as e:
-        # MissingHeaderBodySeparatorDefect
-        # TODO notify developer
-        self.logger.error(e)
+    # except urllib3.exceptions.HeaderParsingError as e:
+    #     # MissingHeaderBodySeparatorDefect
+    #     # TODO notify developer
+    #     self.logger.error(e)
+    #     self.save_job_stop_reason(
+    #         self.stop_reason.INTERNAL_ERROR,
+    #         request_id)
+    #     raise self.raise_ignore(
+    #         message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
+    #         request_kwargs=self.request.kwargs)
+    except Exception as e:
+        # botocore_exceptions.ParamValidationError
+        print(e)
         self.save_job_stop_reason(
             self.stop_reason.INTERNAL_ERROR,
             request_id)
         raise self.raise_ignore(
-            message=self.error_messages.CAN_NOT_UPLOAD_DIRECTORY,
+            message=self.error_messages.CAN_NOT_UPLOAD_FILE,
             request_kwargs=self.request.kwargs)
 
     # save output directory size

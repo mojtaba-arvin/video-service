@@ -8,8 +8,11 @@ __all__ = [
 class CacheKeysTemplates:
     _PREFIX = "req_"
 
-    PLAYLIST_ID_PREFIX = "p"
-    THUMBNAIL_ID_PREFIX = "t"
+    PLAYLIST_OUTPUT_ID = "p{number}"
+    THUMBNAIL_OUTPUT_ID = "t{number}"
+    WATERMARKED_PLAYLIST_OUTPUT_ID = "wp{number}"
+    WATERMARKED_THUMBNAIL_OUTPUT_ID = "wt{number}"
+    WATERMARKED_VIDEO_OUTPUT_ID = "wv{number}"
 
     # dict
     # to save job details
@@ -105,3 +108,6 @@ class CacheKeysTemplates:
     # save memory usage of output using psutil memory rss
     OUTPUT_START_MEMORY_RSS = _PREFIX + "o_start_memory_rss_{request_id}_{output_id}"
     OUTPUT_END_MEMORY_RSS = _PREFIX + "o_end_memory_rss_{request_id}_{output_id}"
+
+
+

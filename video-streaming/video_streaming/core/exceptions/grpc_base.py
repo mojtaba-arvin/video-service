@@ -1,5 +1,5 @@
-from grpc import StatusCode, ServicerContext
-
+from grpc import ServicerContext
+from video_streaming.core.constants import ErrorCodes
 
 __all__ = [
     'GrpcBaseException',
@@ -7,8 +7,8 @@ __all__ = [
 
 
 class GrpcBaseException(Exception):
-    status_code: str = StatusCode.UNKNOWN
-    message: str = None
+    status_code: str = ErrorCodes.INTERNAL_ERROR
+    message: None
 
     def __init__(self,
                  message: str = None,

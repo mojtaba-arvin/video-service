@@ -12,6 +12,8 @@ from .upload_file import upload_file
 
 from .call_webhook import call_webhook
 
+from .add_watermark import add_watermark
+
 
 __all__ = [
     'check_input_key',
@@ -23,5 +25,6 @@ __all__ = [
     'create_playlist',
     'upload_directory',
     'upload_file',
-    'call_webhook'
+    'call_webhook',
+    'add_watermark'
 ]

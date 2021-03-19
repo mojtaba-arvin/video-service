@@ -32,7 +32,7 @@ class CreatePlaylistTask(
 def create_playlist(
         self,
         *args,
-        input_path: str = None,
+        video_path: str = None,
         output_path: str = None,
         s3_output_key: str = None,
         fragmented: bool = settings.DEFAULT_SEGMENT_TYPE_IS_FMP4,
@@ -44,7 +44,8 @@ def create_playlist(
         async_run: bool = False,
         request_id: str = None,
         output_id: str = None,
-        is_hls: bool = settings.DEFAULT_PLAYLIST_IS_HLS
+        is_hls: bool = settings.DEFAULT_PLAYLIST_IS_HLS,
+        **kwargs
         ) -> dict:
     """create an playlist ( HLS or DASH )
 
@@ -57,7 +58,7 @@ def create_playlist(
         request_id:
         is_hls:
             type of playlist, True is HLS, False is MPEG-DASH
-        input_path:
+        video_path:
             The local input path
         output_path:
             The local output path
@@ -80,6 +81,8 @@ def create_playlist(
             output_id is using in redis key, to save progress of
             every output, also it's using to create different path
             for outputs
+        **kwargs:
+            some unused parameters from previous tasks that set by __call__
 
     Required parameters:
         - request_id
@@ -95,7 +98,7 @@ def create_playlist(
     self.check_create_playlist_requirements(
         request_id=request_id,
         output_id=output_id,
-        input_path=input_path,
+        video_path=video_path,
         output_path=output_path,
         s3_output_key=s3_output_key)
 
@@ -123,7 +126,7 @@ def create_playlist(
        s3_output_key=s3_output_key)
 
     playlist = self.initial_protocol(
-        input_path,
+        video_path,
         output_id,
         request_id,
         encode_format,

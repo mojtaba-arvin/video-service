@@ -3,7 +3,8 @@ from celery import states
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
-from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS, \
+    InputType
 from .base import BaseStreamingTask
 from .mixins import AnalyzeInputMixin
 
@@ -21,7 +22,7 @@ class AnalyzeInputTask(
         # stop reason will only be set if there is no reason before.
         # set common reason for the task after many retries or etc.
         self.save_job_stop_reason(
-            self.stop_reason.DOWNLOADING_FAILED,
+            self.stop_reason.FAILED_ANALYZE_INPUT,
             request_id
         )
 
@@ -31,23 +32,36 @@ class AnalyzeInputTask(
                  **TASK_DECORATOR_KWARGS)
 def analyze_input(self,
                   *args,
-                  input_path: str = None,
+                  video_path: str = None,
+                  watermark_path: str = None,
                   request_id: str = None,
-                  input_number: int = None
+                  input_number: int = None,
+                  input_type: str = InputType.VIDEO_INPUT
                   ) -> dict:
-    """analyze input with ffprobe
+    """analyze input with ffprobe/.. to save input information on the cache
 
-        to save video information on cache
+    one of video_details or watermark_details is required according
+    to input_type
 
-       required parameters:
-         - request_id
-         - input_number
-         - input_path
+    Args:
+        self ():
+        *args ():
+        video_path (): the local path of downloaded video
+        watermark_path (): the local path of downloaded watermark
+        request_id ():
+        input_number ():
+        input_type ():
+
+    Returns:
+
     """
+
     self.check_analyze_requirements(
         request_id=request_id,
         input_number=input_number,
-        input_path=input_path)
+        video_path=video_path,
+        watermark_path=watermark_path,
+        input_type=input_type)
 
     if self.is_forced_to_stop(request_id):
         raise self.raise_revoke(request_id)
@@ -59,25 +73,34 @@ def analyze_input(self,
         request_id
     )
 
-    ffprobe = self.analyze_input(input_path)
-    """
-    examples :
-        ffprobe.format()
-        ffprobe.all()
-        ffprobe.streams().audio().get('bit_rate', 0)
-    """
+    if input_type == InputType.VIDEO_INPUT:
+        input_path = video_path
+        ffprobe = self.analyze_video(input_path)
+        """
+        examples :
+            ffprobe.format()
+            ffprobe.all()
+            ffprobe.streams().audio().get('bit_rate', 0)
+        """
 
-    # if ffprobe.streams().video()['codec_type'] != 'video':
-    #     raise self.raise_ignore(
-    #         message=self.error_messages.INPUT_CODEC_TYPE_IN_NOT_VIDEO,
-    #         request_kwargs=self.request.kwargs)
+        if ffprobe.streams().video()['codec_type'] != 'video':
+            self.save_job_stop_reason(
+                self.stop_reason.INPUT_VIDEO_CODEC_TYPE_IN_NOT_VIDEO,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.INPUT_CODEC_TYPE_IN_NOT_VIDEO,
+                request_kwargs=self.request.kwargs)
 
-    self.cache.set(
-        CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
-            request_id=request_id,
-            input_number=input_number
-        ),
-        ffprobe.out)
+        self.cache.set(
+            CacheKeysTemplates.INPUT_FFPROBE_DATA.format(
+                request_id=request_id,
+                input_number=input_number
+            ),
+            ffprobe.out)
+
+    else:
+        input_path = watermark_path
+        # TODO analyze watermark
 
     # save input status using input_number and request_id
     self.save_input_status(
@@ -86,4 +109,4 @@ def analyze_input(self,
         request_id
     )
 
-    return dict(input_path=input_path)
+    return {input_type + "_path": input_path}

@@ -43,11 +43,12 @@ class RevokeOutputsMixin(object):
             primary_status: str,
             request_id: str,
             total_outputs: int,
-            id_prefix: str
+            output_id_template: str
             ) -> list[streaming_pb2.OutputsToRevoke]:
         outputs_to_revoke: list[streaming_pb2.OutputsToRevoke] = []
         for number in playlists_numbers:
-            output_id = id_prefix + str(number)
+            output_id = output_id_template.format(
+                number=number)
             # is number valid?
             if number not in range(total_outputs):
                 outputs_to_revoke.append(self.pb2.OutputsToRevoke(
