@@ -45,7 +45,7 @@ class RevokeJobsMixin(object):
                     async_result.revoke()
 
         revoke_details = dict(
-            request_id=request_id,
+            tracking_id=request_id,
             reference_id=reference_id,
             has_been_sent=self.pb2.RevokeSignalStatus.REVOKE_SIGNAL_SENT
         )
@@ -62,4 +62,12 @@ class RevokeJobsMixin(object):
         #             # state is in PENDING, RECEIVED, STARTED, REJECTED, RETRY
         #             async_result.revoke()
 
+    def _revoke_jobs(self, request, context):
+        results: list[streaming_pb2.RevokeDetails] = []
+        for request_id in request.tracking_ids:
+            result = self._revoke_job(request_id)
+            if result:
+                results.append(result)
+        response = self.pb2.RevokeJobsResponse(results=results)
+        return response
 

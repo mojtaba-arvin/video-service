@@ -96,3 +96,44 @@ class RevokeOutputsMixin(object):
                     output_number=number,
                     signal_has_been_sent=True))
         return outputs_to_revoke
+
+    def _revoke_job_outputs(self, request, context):
+
+        request_id: str = request.tracking_id
+        primary_status: str = self.cache.get(
+            CacheKeysTemplates.PRIMARY_STATUS.format(
+                request_id=request_id), decode=False)
+        job_details: dict = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=request_id))
+
+        # raise if job is already has been executed
+        self._raise_if_job_already_executed(
+            primary_status,
+            job_details)
+
+        playlists_to_revoke: list[streaming_pb2.OutputsToRevoke] = \
+            self._outputs_to_revoke(
+                request.playlists_numbers,
+                primary_status,
+                request_id,
+                job_details['total_outputs'],
+                CacheKeysTemplates.PLAYLIST_OUTPUT_ID
+            )
+
+        thumbnails_to_revoke: list[streaming_pb2.OutputsToRevoke] = \
+            self._outputs_to_revoke(
+                request.thumbnails_numbers,
+                primary_status,
+                request_id,
+                job_details['total_outputs'],
+                CacheKeysTemplates.THUMBNAIL_OUTPUT_ID
+            )
+
+        response = self.pb2.RevokeOutputsResponse(
+            tracking_id=request_id,
+            reference_id=job_details['reference_id'],
+            playlists_to_revoke=playlists_to_revoke,
+            thumbnails_to_revoke=thumbnails_to_revoke
+        )
+        return response
