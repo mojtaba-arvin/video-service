@@ -2,6 +2,7 @@ import os
 import urllib3
 from functools import partial
 from abc import ABC
+from botocore import exceptions as botocore_exceptions
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
@@ -39,7 +40,9 @@ def upload_file(self,
                 s3_output_key: str = None,
                 s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
                 request_id: str = None,
-                output_id: str = None):
+                output_id: str = None,
+                **kwargs
+                ):
     """upload the output file to the S3 object storage
 
     Args:
@@ -50,6 +53,7 @@ def upload_file(self,
         s3_output_bucket ():
         request_id ():
         output_id ():
+        **kwargs ():
 
     Returns:
 
@@ -101,15 +105,25 @@ def upload_file(self,
                 file_progress_callback,
                 file_size)
         )
-    except urllib3.exceptions.HeaderParsingError as e:
-        # TODO notify developer
-        self.logger.error(e)
+    # except urllib3.exceptions.HeaderParsingError as e:
+    #     # TODO notify developer
+    #     self.logger.error(e)
+    #     self.save_job_stop_reason(
+    #         self.stop_reason.INTERNAL_ERROR,
+    #         request_id)
+    #     raise self.raise_ignore(
+    #         message=self.error_messages.CAN_NOT_UPLOAD_FILE,
+    #         request_kwargs=self.request.kwargs)
+    except Exception as e:
+        # botocore_exceptions.ParamValidationError
+        print(e)
         self.save_job_stop_reason(
             self.stop_reason.INTERNAL_ERROR,
             request_id)
         raise self.raise_ignore(
             message=self.error_messages.CAN_NOT_UPLOAD_FILE,
             request_kwargs=self.request.kwargs)
+
 
     # save output file size
     self.cache.set(

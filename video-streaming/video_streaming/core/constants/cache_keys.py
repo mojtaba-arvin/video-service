@@ -8,8 +8,11 @@ __all__ = [
 class CacheKeysTemplates:
     _PREFIX = "req_"
 
-    PLAYLIST_ID_PREFIX = "p"
-    THUMBNAIL_ID_PREFIX = "t"
+    PLAYLIST_OUTPUT_ID = "p{number}"
+    THUMBNAIL_OUTPUT_ID = "t{number}"
+    WATERMARKED_PLAYLIST_OUTPUT_ID = "wp{number}"
+    WATERMARKED_THUMBNAIL_OUTPUT_ID = "wt{number}"
+    WATERMARKED_VIDEO_OUTPUT_ID = "wv{number}"
 
     # dict
     # to save job details
@@ -30,6 +33,14 @@ class CacheKeysTemplates:
     # dict
     # to save ffprobe data of input video
     INPUT_FFPROBE_DATA = _PREFIX + "i_ffprobe_{request_id}_{input_number}"
+
+    # string
+    INPUT_VIDEO_PATH = _PREFIX + "video_path_{request_id}"
+    INPUT_WATERMARK_PATH = _PREFIX + "watermark_path_{request_id}"
+
+    # integer
+    # to save number of aggregated inputs in inputs_funnel
+    AGGREGATED_INPUTS = _PREFIX + "aggregated_{request_id}"
 
     # integer
     # to save number of passed checks
@@ -105,3 +116,6 @@ class CacheKeysTemplates:
     # save memory usage of output using psutil memory rss
     OUTPUT_START_MEMORY_RSS = _PREFIX + "o_start_memory_rss_{request_id}_{output_id}"
     OUTPUT_END_MEMORY_RSS = _PREFIX + "o_end_memory_rss_{request_id}_{output_id}"
+
+
+

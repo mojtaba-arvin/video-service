@@ -39,11 +39,15 @@ class ErrorMessages:
                            ", request_id: '{request_id}'"
     TASK_WAS_FORCIBLY_STOPPED = "task was forcibly stopped."
     CAN_NOT_UPLOAD_DIRECTORY = "can not upload directory"
-    INPUT_CODEC_TYPE_IN_NOT_VIDEO = "input codec type is not video"
+    INPUT_VIDEO_CODEC_TYPE_IN_NOT_VIDEO = "input video codec type is not video"
     CAN_NOT_UPLOAD_EMPTY_FILE = "cab not upload empty file"
-    CAN_NOT_UPLOAD_FILE = "can not upload file"
+    CAN_NOT_UPLOAD_FILE = "can not upload the file"
+    INPUT_TYPE_IS_REQUIRED = "input type is required."
+    JOB_DETAILS_NOT_FOUND = "job details not found."
+    WAITING_FOR_AGGREGATE_INPUTS = "waiting for aggregate inputs."
 
     # gRPC
+    INTERNAL_ERROR = "internal server error"
     S3_KEY_CAN_NOT_BE_EMPTY = "s3 key can not be empty."
     S3_BUCKET_NAME_IS_NOT_VALID = "s3 bucket name is not valid."
     DUPLICATE_OUTPUT_LOCATIONS = "there are duplicate output locations."
@@ -52,16 +56,19 @@ class ErrorMessages:
     JOB_IS_FAILED = "job is failed"
     JOB_IS_REVOKED = "job is revoked"
     JOB_IS_FINISHED = "job is finished"
+    NO_WATERMARK_TO_USE = "no watermark to use"
 
 
 class ErrorCodes:
 
     # gRPC base exception error codes
+    INTERNAL_ERROR = 1000
     S3_KEY_CAN_NOT_BE_EMPTY = 1001
     S3_BUCKET_NAME_IS_NOT_VALID = 1002
     DUPLICATE_OUTPUT_LOCATIONS = 1003
-    ONE_OUTPUT_IS_REQUIRED = 1004
+    ONE_OUTPUT_IS_REQUIRED = 1004  # TODO
     JOB_NOT_FOUND_BY_TRACKING_ID = 1005  # revoke_job_outputs
     JOB_IS_FAILED = 1006
     JOB_IS_REVOKED = 1007
     JOB_IS_FINISHED = 1008
+    NO_WATERMARK_TO_USE = 1009

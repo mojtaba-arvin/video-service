@@ -22,6 +22,7 @@ class FfmpegCallback(object):
         self.first_chunk = True
         self.output_id = output_id
         self.request_id = request_id
+        self.start_memory_rss = None
 
     def playlist_progress(self, ffmpeg_line, duration, time_, time_left, process):
         self._check_to_kill(process)
@@ -97,13 +98,25 @@ class FfmpegCallback(object):
                         request_id=self.request_id,
                         output_id=self.output_id),
                     json.dumps(cpu_times))
-            memory_rss = psutil_process.memory_info().rss
-            if memory_rss and memory_rss > 0:
-                self.task.cache.set(
-                    CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
-                        request_id=self.request_id,
-                        output_id=self.output_id),
-                    memory_rss)
+
+            current_memory_rss = psutil_process.memory_info().rss
+            if not current_memory_rss:
+                return
+            if self.start_memory_rss is None:
+                return
+            if current_memory_rss < self.start_memory_rss:
+                return
+            last_memory_rss = self.task.cache.get(
+                CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                    request_id=self.request_id,
+                    output_id=self.output_id)) or 0
+            if current_memory_rss < last_memory_rss:
+                return
+            self.task.cache.set(
+                CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                    request_id=self.request_id,
+                    output_id=self.output_id),
+                current_memory_rss)
         except Exception as e:
             # TODO notify developer
             print(e)
@@ -127,6 +140,7 @@ class FfmpegCallback(object):
                     request_id=self.request_id,
                     output_id=self.output_id),
                 memory_rss)
+            self.start_memory_rss = memory_rss
         except Exception as e:
             # TODO notify developer
             print(e)

@@ -12,3 +12,8 @@ TASK_DECORATOR_KWARGS = dict(
     retry_jitter=True,
     track_started=True
 )
+
+
+class InputType:
+    VIDEO_INPUT = "video"
+    WATERMARK_INPUT = "watermark"

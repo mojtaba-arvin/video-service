@@ -3,7 +3,8 @@ from abc import ABC
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChordCallbackMixin
-from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS, \
+    InputType
 from .base import BaseStreamingTask
 from .mixins import DownloadInputMixin
 
@@ -31,32 +32,42 @@ class DownloadInputTask(
                  **TASK_DECORATOR_KWARGS)
 def download_input(self,
                    *args,
-                   object_details: dict = None,
                    request_id: str = None,
                    s3_input_key: str = None,
                    s3_input_bucket: str = settings.S3_DEFAULT_INPUT_BUCKET_NAME,
-                   input_number: int = None
+                   input_number: int = None,
+                   video_details: dict = None,
+                   watermark_details: dict = None,
+                   input_type: str = InputType.VIDEO_INPUT
                    ) -> dict:
     """download video to local input path
 
-        Kwargs:
-          object_details:
-            The local output directory
-          input_number:
-            input_number is using in redis key, to save progress of
+        one of video_details or watermark_details is required according
+        to input_type
+
+    Args:
+        self:
+        *args:
+        request_id:
+        s3_input_key:
+        s3_input_bucket:
+        input_number: input_number is using in redis key, to save progress of
             every input also, it's using to create different path
             for inputs
+        video_details:
+        watermark_details:
+        input_type:
 
-       required parameters:
-         - object_details
-         - request_id
-         - s3_input_key
+    Returns:
+
     """
 
     self.check_download_requirements(
         request_id=request_id,
         input_number=input_number,
-        object_details=object_details,
+        video_details=video_details,
+        watermark_details=watermark_details,
+        input_type=input_type,
         s3_input_key=s3_input_key,
         s3_input_bucket=s3_input_bucket)
 
@@ -74,6 +85,10 @@ def download_input(self,
         input_number,
         request_id
     )
+
+    object_details = video_details if \
+        input_type == InputType.VIDEO_INPUT \
+        else watermark_details
 
     # generate input_path
     input_path = self.generate_input_path(
@@ -121,4 +136,5 @@ def download_input(self,
 
     self.incr_ready_inputs(request_id)
 
-    return dict(input_path=input_path)
+    # pass result to next task as video path or watermark path
+    return {input_type + "_path": input_path}

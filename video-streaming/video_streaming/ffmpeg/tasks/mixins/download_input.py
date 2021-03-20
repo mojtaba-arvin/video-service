@@ -3,6 +3,7 @@ from celery import Task
 from video_streaming.core.services import S3Service
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3DownloadCallback
+from video_streaming.ffmpeg.constants import InputType
 from .input import BaseInputMixin
 
 
@@ -19,7 +20,9 @@ class DownloadInputMixin(BaseInputMixin):
     def check_download_requirements(self,
                                     request_id=None,
                                     input_number=None,
-                                    object_details=None,
+                                    video_details=None,
+                                    watermark_details=None,
+                                    input_type=None,
                                     s3_input_key=None,
                                     s3_input_bucket=None):
 
@@ -55,7 +58,19 @@ class DownloadInputMixin(BaseInputMixin):
                 message=self.error_messages.S3_INPUT_BUCKET_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if object_details is None:
+        if input_type is None:
+            self.save_job_stop_reason(
+                self.stop_reason.INTERNAL_ERROR,
+                request_id)
+            raise self.raise_ignore(
+                message=self.error_messages.INPUT_TYPE_IS_REQUIRED,
+                request_kwargs=self.request.kwargs)
+
+        if (input_type == InputType.WATERMARK_INPUT
+            and watermark_details is None
+            ) or (
+                input_type == InputType.VIDEO_INPUT
+                and video_details is None):
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)

@@ -28,8 +28,8 @@ class BaseInputMixin(object):
         )
 
     def on_failure(self, *request_args, **request_kwargs):
-        request_id = request_kwargs.get('request_id', None)
-        input_number = request_kwargs.get('input_number', None)
+        request_id = self.request.kwargs('request_id', None)
+        input_number = self.request.kwargs('input_number', None)
         if request_id is not None and input_number is not None:
             self.save_failed(
                 request_id,

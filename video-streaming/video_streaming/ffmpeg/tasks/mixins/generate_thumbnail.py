@@ -18,7 +18,7 @@ class GenerateThumbnailMixin(BaseOutputMixin):
             self,
             request_id=None,
             output_id=None,
-            input_path=None,
+            video_path=None,
             output_path=None,
             s3_output_key=None):
 
@@ -38,7 +38,7 @@ class GenerateThumbnailMixin(BaseOutputMixin):
                 message=self.error_messages.OUTPUT_NUMBER_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-        if input_path is None:
+        if video_path is None:
             self.save_job_stop_reason(
                 self.stop_reason.INTERNAL_ERROR,
                 request_id)

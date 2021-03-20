@@ -33,21 +33,22 @@ class GenerateThumbnailTask(
 def generate_thumbnail(
         self,
         *args,
-        input_path: str = None,
+        video_path: str = None,
         output_path: str = None,
         s3_output_key: str = None,
         request_id: str = None,
         output_id: str = None,
         thumbnail_time: str = "0",
         scale_width: int = -1,
-        scale_height: int = -1
+        scale_height: int = -1,
+        **kwargs,
         ) -> dict:
     """generate a thumbnails from the input video
     
     Args:
         self:
         *args:
-        input_path:
+        video_path:
         output_path:
         s3_output_key:
         request_id:
@@ -63,7 +64,8 @@ def generate_thumbnail(
             the provided width to preserve the aspect ratio
         scale_height:
             Defaults to -1
-
+        **kwargs:
+            some unused parameters from previous tasks that set by __call__
     Returns:
 
     """
@@ -71,7 +73,7 @@ def generate_thumbnail(
     self.check_generate_thumbnail_requirements(
         request_id=request_id,
         output_id=output_id,
-        input_path=input_path,
+        video_path=video_path,
         output_path=output_path,
         s3_output_key=s3_output_key)
 
@@ -149,7 +151,7 @@ def generate_thumbnail(
     try:
         (ffmpeg
             .input(
-                input_path,
+                video_path,
                 ss=thumbnail_time)
             .filter(
                 'scale',
