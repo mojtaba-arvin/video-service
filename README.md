@@ -22,11 +22,10 @@ Features:
 * Returns input video file details to client (using FFprobe), before video processing starting. ( client can use this information to show to the end user)
 * Returns **CPU and memory usage** with spent time of every output for the financial purposes when a video is being processed to create a playlist 
 * Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as a player poster or other purpose such as screenshots for demo 
+* Supports to add watermark
 
 TODO
-* adding watermark
-* adding optional argument to mapping playlist to different qualities as separated videos
-* call webhook url when every output was done
+* adding optional argument to mapping playlist qualities to different video files
 * adding gRPC client sample and test cases
 * update document
 
@@ -189,3 +188,6 @@ apps located at `video-streaming/video_streaming/`
 
 after create a new app, to discover celery tasks, add the app to `AUTO_DISCOVER_TASKS` in `settings.py`.
 
+### celery job workflow
+
+![celery tasks](https://user-images.githubusercontent.com/6056661/111865295-7f05c780-897b-11eb-9b34-5bc3bbf0662a.png)
