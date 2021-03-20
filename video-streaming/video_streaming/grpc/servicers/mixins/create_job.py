@@ -349,22 +349,26 @@ class CreateJobMixin(object):
                     input_type=input_type)
             )
             third_level.append(
-                # video or watermark object details will
-                # come from previous levels
-                tasks.download_input.s(
-                    request_id=request_id,
-                    s3_input_key=input_object.s3_input.key,
-                    s3_input_bucket=input_object.s3_input.bucket,
-                    input_number=input_number,
-                    input_type=input_type)
+                chain(
+                    # video or watermark object details will
+                    # come from previous levels
+                    tasks.download_input.s(
+                        request_id=request_id,
+                        s3_input_key=input_object.s3_input.key,
+                        s3_input_bucket=input_object.s3_input.bucket,
+                        input_number=input_number,
+                        input_type=input_type)
+                    ,
+                    tasks.analyze_input.s(
+                        request_id=request_id,
+                        input_number=input_number,
+                        input_type=input_type)
+                )
             )
 
-        # fourth_level.append(
-        #     tasks.analyze_input.s(
-        #         request_id=request_id,
-        #         input_number=0,
-        #         input_type=InputType.VIDEO_INPUT)
-        # )
+        fourth_level.append(
+            tasks.inputs_funnel.s(request_id=request_id)
+        )
 
         print(self._has_any_output(*request_outputs))
         # is there any defined output
@@ -505,7 +509,7 @@ class CreateJobMixin(object):
             second_level,  # checks
 
             third_level,  # downloads
-            fourth_level,  # analyze
+            fourth_level,  # wait
 
             fifth_level  # outputs
         ]

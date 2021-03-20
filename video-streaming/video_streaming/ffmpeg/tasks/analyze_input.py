@@ -1,7 +1,8 @@
 from abc import ABC
 from celery import states
 from video_streaming.celery import celery_app
-from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.core.constants import CacheKeysTemplates, \
+    PrimaryStatus
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS, \
     InputType

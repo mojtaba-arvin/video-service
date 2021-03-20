@@ -100,6 +100,9 @@ class StopReason:
     # AnalyzeInputTask
     INPUT_VIDEO_CODEC_TYPE_IN_NOT_VIDEO = "INPUT_VIDEO_CODEC_TYPE_IN_NOT_VIDEO"
 
+    # InputsFunnelTask
+    AGGREGATE_INPUTS_FAILED = "AGGREGATE_INPUTS_FAILED"
+
     # CreatePlaylistTask
     FAILED_CREATE_PLAYLIST = "FAILED_CREATE_PLAYLIST"
     INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO = "INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO"
@@ -116,3 +119,7 @@ class StopReason:
 
     # AddWatermarkTask
     FAILED_ADD_WATERMARK = "FAILED_ADD_WATERMARK"
+
+    # InputsFunnelTask
+    # when job_details not found
+    JOB_TIMEOUT = "JOB_TIMEOUT"

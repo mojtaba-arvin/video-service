@@ -34,6 +34,14 @@ class CacheKeysTemplates:
     # to save ffprobe data of input video
     INPUT_FFPROBE_DATA = _PREFIX + "i_ffprobe_{request_id}_{input_number}"
 
+    # string
+    INPUT_VIDEO_PATH = _PREFIX + "video_path_{request_id}"
+    INPUT_WATERMARK_PATH = _PREFIX + "watermark_path_{request_id}"
+
+    # integer
+    # to save number of aggregated inputs in inputs_funnel
+    AGGREGATED_INPUTS = _PREFIX + "aggregated_{request_id}"
+
     # integer
     # to save number of passed checks
     PASSED_CHECKS = _PREFIX + "passed_{request_id}"

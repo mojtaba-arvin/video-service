@@ -43,6 +43,8 @@ class ErrorMessages:
     CAN_NOT_UPLOAD_EMPTY_FILE = "cab not upload empty file"
     CAN_NOT_UPLOAD_FILE = "can not upload the file"
     INPUT_TYPE_IS_REQUIRED = "input type is required."
+    JOB_DETAILS_NOT_FOUND = "job details not found."
+    WAITING_FOR_AGGREGATE_INPUTS = "waiting for aggregate inputs."
 
     # gRPC
     INTERNAL_ERROR = "internal server error"
@@ -55,7 +57,6 @@ class ErrorMessages:
     JOB_IS_REVOKED = "job is revoked"
     JOB_IS_FINISHED = "job is finished"
     NO_WATERMARK_TO_USE = "no watermark to use"
-
 
 
 class ErrorCodes:
