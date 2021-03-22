@@ -1,3 +1,5 @@
+import subprocess
+
 import ffmpeg
 from abc import ABC
 from pathlib import Path
@@ -8,6 +10,7 @@ from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
+from ..utils import FfmpegCallback
 
 
 class AddWatermarkTask(
@@ -86,24 +89,50 @@ def add_watermark(
     main = ffmpeg.input(video_path)
     watermark = ffmpeg.input(watermark_path)
 
-    # TODO use callback
-    self.save_output_status(
-        self.output_status.PROCESSING,
-        output_id,
-        request_id)
-    try:
-        (ffmpeg.filter([main, watermark], 'overlay', 0, 0)
-            .output(output_path)
-            .run(
-                cmd=settings.FFMPEG_BIN_PATH,
-                capture_stdout=True,
-                capture_stderr=True,
-                # Overwrite output files without asking (ffmpeg -y option)
-                overwrite_output=True
-            )
-        )
-    except ffmpeg.Error as e:
-        raise self.retry(exc=e)
+    # self.save_output_status(
+    #     self.output_status.PROCESSING,
+    #     output_id,
+    #     request_id)
+
+    # callback: callable = FfmpegCallback(
+    #             task=self,
+    #             task_id=self.request.id.__str__(),
+    #             output_id=output_id,
+    #             request_id=request_id
+    #         ).ffmpeg_progress
+
+    stream = ffmpeg.filter(
+        [main, watermark], 'overlay', 0, 0
+        ).output(output_path)
+
+    with subprocess.Popen(
+            stream.compile(),
+            stdout=subprocess.PIPE,
+            # stderr=subprocess.PIPE,
+            bufsize=1,
+            universal_newlines=True) as process:
+        for line in process.stdout:
+            print(line, end='')  # process line here
+            # callback(line, process)
+
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(
+            process.returncode,
+            process.args)
+
+    # try:
+    #     (ffmpeg.filter([main, watermark], 'overlay', 0, 0)
+    #         .output(output_path)
+    #         .run(
+    #             cmd=settings.FFMPEG_BIN_PATH,
+    #             capture_stdout=True,
+    #             capture_stderr=True,
+    #             # Overwrite output files without asking (ffmpeg -y option)
+    #             overwrite_output=True
+    #         )
+    #     )
+    # except ffmpeg.Error as e:
+    #     raise self.retry(exc=e)
 
     # process: Popen = (
     #     ffmpeg.filter([main, watermark], 'overlay', 0, 0)
