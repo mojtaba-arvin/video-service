@@ -50,17 +50,20 @@ class FfmpegCallback(object):
             sys.stdout.flush()
 
     def ffmpeg_progress(self, ffmpeg_line, process):
-        self._check_to_kill(process)
-        psutil_process = psutil.Process(process.pid)
-        if self.first_chunk:
-            # save output status using output_id and request_id
-            self.task.save_output_status(
-                self.task.output_status.PROCESSING,
-                self.output_id,
-                self.request_id)
-            self._save_start_usage(psutil_process)
-            self.first_chunk = False
-        self._save_end_usage(psutil_process)
+        try:
+            self._check_to_kill(process)
+            psutil_process = psutil.Process(process.pid)
+            if self.first_chunk:
+                # save output status using output_id and request_id
+                self.task.save_output_status(
+                    self.task.output_status.PROCESSING,
+                    self.output_id,
+                    self.request_id)
+                self._save_start_usage(psutil_process)
+                self.first_chunk = False
+            self._save_end_usage(psutil_process)
+        except psutil.NoSuchProcess as e:
+            print(e)
 
     def _check_to_kill(self, process):
         is_job_stop = self.request_id is not None and \
