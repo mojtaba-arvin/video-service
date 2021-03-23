@@ -1,19 +1,14 @@
 import subprocess
-
 import ffmpeg
 from abc import ABC
 from pathlib import Path
-
-import psutil
-
-from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
+from video_streaming.ffmpeg.utils import FfmpegCallback
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
-from ..utils import FfmpegCallback
 
 
 class AddWatermarkTask(
