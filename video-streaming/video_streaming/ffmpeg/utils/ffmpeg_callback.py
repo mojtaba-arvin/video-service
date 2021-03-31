@@ -24,43 +24,49 @@ class FfmpegCallback(object):
         self.request_id = request_id
         self.start_memory_rss = None
 
-    def playlist_progress(self, ffmpeg_line, duration, time_, time_left, process):
-        self._check_to_kill(process)
-        psutil_process = psutil.Process(process.pid)
-        if self.first_chunk:
-            # save output status using output_id and request_id
-            self.task.save_output_status(
-                self.task.output_status.PROCESSING,
-                self.output_id,
-                self.request_id)
-            self._save_start_usage(psutil_process)
-            self.first_chunk = False
-        self._save_end_usage(psutil_process)
-        self.task.save_output_progress(
-            total=duration,
-            current=time_,
-            request_id=self.request_id,
-            output_id=self.output_id
-        )
-        if self.task.request.called_directly:
-            percent = round(time_ / duration * 100)
-            sys.stdout.write(
-                f"\r{self.request_id} | {self.output_id} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
+    def progress(self, ffmpeg_line, duration, time_, time_left, process):
+        try:
+            self._check_to_kill(process)
+            psutil_process = psutil.Process(process.pid)
+            if self.first_chunk:
+                # save output status using output_id and request_id
+                self.task.save_output_status(
+                    self.task.output_status.PROCESSING,
+                    self.output_id,
+                    self.request_id)
+                self._save_start_usage(psutil_process)
+                self.first_chunk = False
+            self._save_end_usage(psutil_process)
+            self.task.save_output_progress(
+                total=duration,
+                current=time_,
+                request_id=self.request_id,
+                output_id=self.output_id
             )
-            sys.stdout.flush()
+            if self.task.request.called_directly:
+                percent = round(time_ / duration * 100)
+                sys.stdout.write(
+                    f"\r{self.request_id} | {self.output_id} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
+                )
+                sys.stdout.flush()
+        except psutil.NoSuchProcess as e:
+            print(e)
 
     # def ffmpeg_progress(self, ffmpeg_line, process):
-    #     self._check_to_kill(process)
-    #     psutil_process = psutil.Process(process.pid)
-    #     if self.first_chunk:
-    #         save output status using output_id and request_id
-    #         self.task.save_output_status(
-    #             self.task.output_status.PROCESSING,
-    #             self.output_id,
-    #             self.request_id)
-    #         self._save_start_usage(psutil_process)
-    #         self.first_chunk = False
-    #     self._save_end_usage(psutil_process)
+    #     try:
+    #         self._check_to_kill(process)
+    #         psutil_process = psutil.Process(process.pid)
+    #         if self.first_chunk:
+    #             # save output status using output_id and request_id
+    #             self.task.save_output_status(
+    #                 self.task.output_status.PROCESSING,
+    #                 self.output_id,
+    #                 self.request_id)
+    #             self._save_start_usage(psutil_process)
+    #             self.first_chunk = False
+    #         self._save_end_usage(psutil_process)
+    #     except psutil.NoSuchProcess as e:
+    #         print(e)
 
     def _check_to_kill(self, process):
         is_job_stop = self.request_id is not None and \

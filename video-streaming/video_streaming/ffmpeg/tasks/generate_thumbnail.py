@@ -112,37 +112,6 @@ def generate_thumbnail(
     if scale_height == 0:
         scale_width = -1
 
-    # process: Popen = ffmpeg.input(
-    #         input_path,
-    #         ss=thumbnail_time
-    #     ).filter(
-    #         'scale',
-    #         scale_width,
-    #         scale_height
-    #     ).output(
-    #         output_path,
-    #         vframes=1
-    #     ).overwrite_output().run_async(
-    #         cmd=settings.FFMPEG_BIN_PATH,
-    #         pipe_stdout=True,
-    #         pipe_stderr=True,
-    #         # Overwrite output files without asking (ffmpeg -y option)
-    #         overwrite_output=True
-    #     )
-    # callback: callable = FfmpegCallback(
-    #             task=self,
-    #             task_id=self.request.id.__str__(),
-    #             output_id=output_id,
-    #             request_id=request_id
-    #         ).ffmpeg_progress
-    # try:
-    #     with FfmpegProcess(
-    #             process=process,
-    #             progress_callback=callback) as ffmpeg_process:
-    #         ffmpeg_process.run()
-    # except ffmpeg.Error as e:
-    #     raise self.retry(exc=e)
-
     self.save_output_status(
         self.output_status.PROCESSING,
         output_id,

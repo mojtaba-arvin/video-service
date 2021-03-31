@@ -146,7 +146,7 @@ def create_playlist(
                 task_id=self.request.id.__str__(),
                 output_id=output_id,
                 request_id=request_id
-            ).playlist_progress,
+            ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run)
     except Exception as e:

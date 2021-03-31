@@ -1,10 +1,13 @@
+import subprocess
+import time
 import ffmpeg
 from abc import ABC
 from pathlib import Path
-from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
+from video_streaming.ffmpeg.utils import FfmpegCallback, get_time, \
+    time_left
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
@@ -85,51 +88,46 @@ def add_watermark(
 
     main = ffmpeg.input(video_path)
     watermark = ffmpeg.input(watermark_path)
+    callback: callable = FfmpegCallback(
+                task=self,
+                task_id=self.request.id.__str__(),
+                output_id=output_id,
+                request_id=request_id
+            ).progress
 
-    # TODO use callback
-    self.save_output_status(
-        self.output_status.PROCESSING,
-        output_id,
-        request_id)
-    try:
-        (ffmpeg.filter([main, watermark], 'overlay', 0, 0)
-            .output(output_path)
-            .run(
-                cmd=settings.FFMPEG_BIN_PATH,
-                capture_stdout=True,
-                capture_stderr=True,
-                # Overwrite output files without asking (ffmpeg -y option)
-                overwrite_output=True
-            )
-        )
-    except ffmpeg.Error as e:
-        raise self.retry(exc=e)
+    stream = ffmpeg.filter(
+        [main, watermark], 'overlay', 0, 0
+        ).output(output_path)
 
-    # process: Popen = (
-    #     ffmpeg.filter([main, watermark], 'overlay', 0, 0)
-    #     .output(output_path)
-    #     .run_async(
-    #         cmd=settings.FFMPEG_BIN_PATH,
-    #         pipe_stdout=True,
-    #         pipe_stderr=True,
-    #         # Overwrite output files without asking (ffmpeg -y option)
-    #         overwrite_output=True
-    #     ))
-    # callback: callable = FfmpegCallback(
-    #             task=self,
-    #             task_id=self.request.id.__str__(),
-    #             output_id=output_id,
-    #             request_id=request_id
-    #         ).ffmpeg_progress
-    # try:
-    #     ffmpeg_process = FfmpegProcess(
-    #         process=process,
-    #         progress_callback=callback
-    #     )
-    #     print("ffmpeg_process run")
-    #     ffmpeg_process.run()
-    # except ffmpeg.Error as e:
-    #     raise self.retry(exc=e)
+    with subprocess.Popen(
+            stream.compile(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            # bufsize=1,
+            universal_newlines=True) as process:
+
+        duration = 1
+        time_ = 0
+        start_time = time.time()
+        while True:
+            line = process.stdout.readline().strip()
+            duration = get_time('Duration: ', line, duration)
+            time_ = get_time('time=', line, time_)
+            if process.poll() is not None:
+                break
+
+            callback(
+                line,
+                duration,
+                time_,
+                time_left(start_time, time_, duration),
+                process)
+
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(
+            process.returncode,
+            process.args)
 
     self.save_output_status(
         self.output_status.PROCESSING_FINISHED,
