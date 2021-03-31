@@ -1,11 +1,13 @@
 import subprocess
+import time
 import ffmpeg
 from abc import ABC
 from pathlib import Path
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
-from video_streaming.ffmpeg.utils import FfmpegCallback
+from video_streaming.ffmpeg.utils import FfmpegCallback, get_time, \
+    time_left
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
@@ -91,7 +93,7 @@ def add_watermark(
                 task_id=self.request.id.__str__(),
                 output_id=output_id,
                 request_id=request_id
-            ).ffmpeg_progress
+            ).progress
 
     stream = ffmpeg.filter(
         [main, watermark], 'overlay', 0, 0
@@ -101,14 +103,26 @@ def add_watermark(
             stream.compile(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=1,
+            stderr=subprocess.STDOUT,
+            # bufsize=1,
             universal_newlines=True) as process:
+
+        duration = 1
+        time_ = 0
+        start_time = time.time()
         while True:
-            # TODO log
+            line = process.stdout.readline().strip()
+            duration = get_time('Duration: ', line, duration)
+            time_ = get_time('time=', line, time_)
             if process.poll() is not None:
                 break
-            callback("", process)
+
+            callback(
+                line,
+                duration,
+                time_,
+                time_left(start_time, time_, duration),
+                process)
 
     if process.returncode != 0:
         raise subprocess.CalledProcessError(
