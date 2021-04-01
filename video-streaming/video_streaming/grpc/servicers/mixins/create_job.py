@@ -370,7 +370,6 @@ class CreateJobMixin(object):
             tasks.inputs_funnel.s(request_id=request_id)
         )
 
-        print(self._has_any_output(*request_outputs))
         # is there any defined output
         if not self._has_any_output(*request_outputs):
             raise exceptions.OneOutputIsRequiredException(

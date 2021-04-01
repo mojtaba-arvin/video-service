@@ -1,8 +1,6 @@
 from abc import ABC
-from celery import states
 from video_streaming.celery import celery_app
-from video_streaming.core.constants import CacheKeysTemplates, \
-    PrimaryStatus
+from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS, \
     InputType
@@ -102,6 +100,7 @@ def analyze_input(self,
     else:
         input_path = watermark_path
         # TODO analyze watermark
+        # TODO convert svg to png
 
     # save input status using input_number and request_id
     self.save_input_status(
