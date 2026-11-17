@@ -36,6 +36,11 @@ def _non_empty_file(root: Path, reference: str) -> Path:
         )
 
     decoded = unquote(reference)
+    unresolved = root / decoded
+    if any(part.is_symlink() for part in [unresolved] + list(unresolved.parents) if part != root.parent):
+        raise StreamingPackageValidationError(
+            "Symlink references are not allowed in a streaming package: " + reference
+        )
     if "\\" in decoded:
         raise StreamingPackageValidationError(
             "Backslashes are not valid package references: " + reference
@@ -110,7 +115,7 @@ def _validate_hls_media_playlist(root: Path, playlist: Path) -> int:
 
         if line.startswith("#"):
             for reference in _playlist_references(line):
-                _non_empty_file(root, reference)
+                _non_empty_file(playlist.parent, reference)
             continue
 
         if not pending_duration:
