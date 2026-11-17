@@ -978,3 +978,307 @@ def reset_package_directory(directory: str, expected_parent: str):
         shutil.rmtree(str(target))
     target.mkdir(parents=True, exist_ok=True)
     return str(target)
+
+
+
+def _probe_media(path, ffprobe_bin_path, timeout_seconds):
+    command = [
+        ffprobe_bin_path,
+        "-v", "error",
+        "-show_entries",
+        "stream=codec_type,codec_name,width,height,bit_rate:"
+        "format=duration,bit_rate",
+        "-of", "json",
+        str(path),
+    ]
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    return json.loads(result.stdout or "{}")
+
+
+def _hls_attribute_map(line):
+    value = line.split(":", 1)[1]
+    fields = []
+    current = []
+    quoted = False
+    for character in value:
+        if character == '"':
+            quoted = not quoted
+        if character == "," and not quoted:
+            fields.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    if current:
+        fields.append("".join(current))
+    result = {}
+    for field_value in fields:
+        if "=" not in field_value:
+            continue
+        key, item = field_value.split("=", 1)
+        result[key.strip().upper()] = item.strip().strip('"')
+    return result
+
+
+def _codec_family(value):
+    token = (value or "").lower().split(".", 1)[0]
+    aliases = {
+        "avc1": "h264",
+        "avc3": "h264",
+        "hvc1": "hevc",
+        "hev1": "hevc",
+        "vp09": "vp9",
+        "vp9": "vp9",
+        "mp4a": "aac",
+        "ac-3": "ac3",
+        "ec-3": "eac3",
+    }
+    return aliases.get(token, token)
+
+
+def _hls_master_attributes(manifest):
+    attributes_by_path = {}
+    pending = None
+    for raw_line in manifest.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            pending = _hls_attribute_map(line)
+        elif line.startswith("#EXT-X-I-FRAME-STREAM-INF:"):
+            attrs = _hls_attribute_map(line)
+            uri = attrs.get("URI")
+            if uri:
+                attributes_by_path[uri] = attrs
+        elif line and not line.startswith("#") and pending is not None:
+            attributes_by_path[line] = pending
+            pending = None
+    return attributes_by_path
+
+
+def _hls_extinf_summary(playlist):
+    durations = []
+    target_duration = 0.0
+    for raw_line in playlist.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("#EXTINF:"):
+            try:
+                durations.append(float(line.split(":", 1)[1].split(",", 1)[0]))
+            except ValueError:
+                pass
+        elif line.startswith("#EXT-X-TARGETDURATION:"):
+            try:
+                target_duration = float(line.split(":", 1)[1])
+            except ValueError:
+                pass
+    return durations, target_duration
+
+
+def _probe_package_metadata(
+        directory,
+        package_type,
+        manifest_path,
+        ffprobe_bin_path,
+        timeout_seconds):
+    """Probe headers/metadata only; never decode or re-encode media."""
+    root = Path(directory).resolve()
+    manifest = Path(manifest_path).resolve()
+    issues = []
+
+    def add(code, location, message):
+        issues.append(PackageValidationIssue(code, str(location), message))
+
+    try:
+        if package_type == "hls":
+            attributes = _hls_master_attributes(manifest)
+            for rendition_path in sorted(attributes):
+                local_path = (root / rendition_path).resolve()
+                metadata = _probe_media(
+                    local_path, ffprobe_bin_path, timeout_seconds
+                )
+                streams = metadata.get("streams", [])
+                video_stream = next(
+                    (stream for stream in streams
+                     if stream.get("codec_type") == "video"),
+                    None,
+                )
+                attrs = attributes[rendition_path]
+                location = local_path.relative_to(root).as_posix()
+
+                resolution = attrs.get("RESOLUTION")
+                if resolution and video_stream:
+                    expected_width, expected_height = [
+                        int(value) for value in resolution.lower().split("x", 1)
+                    ]
+                    actual_width = int(video_stream.get("width", 0))
+                    actual_height = int(video_stream.get("height", 0))
+                    if (expected_width, expected_height) != (
+                            actual_width, actual_height):
+                        add(
+                            "resolution_mismatch",
+                            location,
+                            "Manifest resolution {}x{} does not match media {}x{}"
+                            .format(
+                                expected_width, expected_height,
+                                actual_width, actual_height,
+                            ),
+                        )
+
+                codecs = attrs.get("CODECS")
+                if codecs:
+                    expected_families = {
+                        _codec_family(value)
+                        for value in codecs.split(",")
+                    }
+                    actual_families = {
+                        _codec_family(stream.get("codec_name"))
+                        for stream in streams
+                        if stream.get("codec_name")
+                    }
+                    if not expected_families.issubset(actual_families):
+                        add(
+                            "codec_mismatch",
+                            location,
+                            "Manifest CODECS {} do not match probed streams {}"
+                            .format(
+                                sorted(expected_families),
+                                sorted(actual_families),
+                            ),
+                        )
+
+                bandwidth = attrs.get("BANDWIDTH")
+                measured = (metadata.get("format") or {}).get("bit_rate")
+                if bandwidth and measured:
+                    declared = int(bandwidth)
+                    actual_bitrate = int(measured)
+                    if actual_bitrate > declared * 1.10:
+                        add(
+                            "bitrate_mismatch",
+                            location,
+                            "Measured bitrate {} exceeds declared BANDWIDTH {}"
+                            .format(actual_bitrate, declared),
+                        )
+
+                durations, target_duration = _hls_extinf_summary(local_path)
+                measured_duration = (metadata.get("format") or {}).get("duration")
+                if durations and measured_duration:
+                    manifest_duration = sum(durations)
+                    actual_duration = float(measured_duration)
+                    tolerance = max(
+                        target_duration or 0.0,
+                        actual_duration * 0.02,
+                        0.25,
+                    )
+                    if abs(manifest_duration - actual_duration) > tolerance:
+                        add(
+                            "duration_mismatch",
+                            location,
+                            "EXTINF duration {:.3f}s differs from probed media {:.3f}s"
+                            .format(manifest_duration, actual_duration),
+                        )
+
+        elif package_type == "dash":
+            metadata = _probe_media(
+                manifest, ffprobe_bin_path, timeout_seconds
+            )
+            streams = [
+                stream for stream in metadata.get("streams", [])
+                if stream.get("codec_type") == "video"
+            ]
+            mpd = ET.fromstring(manifest.read_bytes())
+            representations = []
+            for period in _children(mpd, "Period"):
+                for adaptation in _children(period, "AdaptationSet"):
+                    inherited_codecs = adaptation.attrib.get("codecs")
+                    for representation in _children(
+                            adaptation, "Representation"):
+                        item = dict(representation.attrib)
+                        item.setdefault("codecs", inherited_codecs)
+                        representations.append(item)
+
+            if streams and len(streams) != len(representations):
+                add(
+                    "representation_count_mismatch",
+                    manifest,
+                    "MPD declares {} representations but ffprobe found {} video streams"
+                    .format(len(representations), len(streams)),
+                )
+            for index, (representation, stream) in enumerate(
+                    zip(representations, streams)):
+                location = "{}#Representation[{}]".format(manifest, index)
+                declared_width = representation.get("width")
+                declared_height = representation.get("height")
+                if declared_width and declared_height:
+                    actual_size = (
+                        int(stream.get("width", 0)),
+                        int(stream.get("height", 0)),
+                    )
+                    declared_size = (
+                        int(declared_width), int(declared_height)
+                    )
+                    if declared_size != actual_size:
+                        add(
+                            "resolution_mismatch",
+                            location,
+                            "MPD resolution {} does not match probed media {}"
+                            .format(declared_size, actual_size),
+                        )
+
+                declared_codecs = representation.get("codecs")
+                actual_codec = stream.get("codec_name")
+                if declared_codecs and actual_codec:
+                    declared_families = {
+                        _codec_family(value)
+                        for value in declared_codecs.split(",")
+                    }
+                    if _codec_family(actual_codec) not in declared_families:
+                        add(
+                            "codec_mismatch",
+                            location,
+                            "MPD codec {} does not match probed codec {}"
+                            .format(declared_codecs, actual_codec),
+                        )
+
+                bandwidth = representation.get("bandwidth")
+                actual_bitrate = stream.get("bit_rate")
+                if bandwidth and actual_bitrate:
+                    if int(actual_bitrate) > int(bandwidth) * 1.10:
+                        add(
+                            "bitrate_mismatch",
+                            location,
+                            "Measured bitrate {} exceeds MPD bandwidth {}"
+                            .format(actual_bitrate, bandwidth),
+                        )
+
+            mpd_duration = mpd.attrib.get("mediaPresentationDuration")
+            actual_duration = (metadata.get("format") or {}).get("duration")
+            if mpd_duration and actual_duration:
+                declared_duration = _duration_seconds(mpd_duration)
+                actual_duration = float(actual_duration)
+                if abs(declared_duration - actual_duration) > max(
+                        1.0, actual_duration * 0.02):
+                    add(
+                        "duration_mismatch",
+                        manifest,
+                        "MPD duration {:.3f}s differs from probed media {:.3f}s"
+                        .format(declared_duration, actual_duration),
+                    )
+    except subprocess.TimeoutExpired:
+        add(
+            "metadata_probe_timeout",
+            manifest,
+            "ffprobe metadata inspection exceeded {} seconds".format(
+                timeout_seconds
+            ),
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError, ET.ParseError) as exc:
+        add(
+            "metadata_probe_failed",
+            manifest,
+            "ffprobe metadata inspection failed: {}".format(exc),
+        )
+
+    return issues
