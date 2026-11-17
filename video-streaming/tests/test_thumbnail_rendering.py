@@ -1,4 +1,4 @@
-"""Unit and FFmpeg integration tests for thumbnail rendering."""
+"""Unit and FFmpeg integration tests for thumbnail rendering and validation."""
 
 import shutil
 import subprocess
@@ -9,8 +9,10 @@ from pathlib import Path
 import ffmpeg
 
 from video_streaming.ffmpeg.thumbnail import (
+    ThumbnailValidationError,
     normalize_thumbnail_scale,
     render_thumbnail,
+    validate_thumbnail_output,
 )
 
 
@@ -70,6 +72,7 @@ class ThumbnailRenderingIntegrationTests(unittest.TestCase):
             scale_width=width,
             scale_height=height,
             ffmpeg_bin_path=shutil.which("ffmpeg"),
+            ffprobe_bin_path=shutil.which("ffprobe"),
         )
 
         probe = ffmpeg.probe(
@@ -99,6 +102,48 @@ class ThumbnailRenderingIntegrationTests(unittest.TestCase):
         self.assert_thumbnail_dimensions(
             "explicit.png", 320, 240, (320, 240)
         )
+
+    def test_missing_output_is_rejected(self):
+        with self.assertRaises(ThumbnailValidationError):
+            validate_thumbnail_output(
+                str(self.work_dir / "missing.png"),
+                ffprobe_bin_path=shutil.which("ffprobe"),
+            )
+
+    def test_empty_output_is_rejected(self):
+        empty_path = self.work_dir / "empty.png"
+        empty_path.write_bytes(b"")
+        with self.assertRaises(ThumbnailValidationError):
+            validate_thumbnail_output(
+                str(empty_path),
+                ffprobe_bin_path=shutil.which("ffprobe"),
+            )
+
+    def test_corrupt_output_is_rejected(self):
+        corrupt_path = self.work_dir / "corrupt.png"
+        corrupt_path.write_bytes(b"not-an-image")
+        with self.assertRaises(ThumbnailValidationError):
+            validate_thumbnail_output(
+                str(corrupt_path),
+                ffprobe_bin_path=shutil.which("ffprobe"),
+            )
+
+    def test_dimension_mismatch_is_rejected(self):
+        output_path = self.work_dir / "dimension-mismatch.png"
+        render_thumbnail(
+            video_path=str(self.input_path),
+            output_path=str(output_path),
+            scale_width=320,
+            scale_height=0,
+            ffmpeg_bin_path=shutil.which("ffmpeg"),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        with self.assertRaises(ThumbnailValidationError):
+            validate_thumbnail_output(
+                str(output_path),
+                ffprobe_bin_path=shutil.which("ffprobe"),
+                expected_width=640,
+            )
 
 
 if __name__ == "__main__":
