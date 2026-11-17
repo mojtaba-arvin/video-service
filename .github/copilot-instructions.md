@@ -2,7 +2,7 @@
 
 Read the repository-root AGENTS.md before changing code. It defines the
 current VOD architecture, correctness and security boundaries, verification
-commands, and task-specific skills in .github/skills/.
+commands, and task-specific skills in .agents/skills/.
 
 Keep changes narrow and evidence-backed. Preserve the Python 3.9 compatibility
 baseline, prefer generated FFmpeg lavfi fixtures over downloaded media, add
