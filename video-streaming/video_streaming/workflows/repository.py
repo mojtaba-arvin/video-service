@@ -281,19 +281,25 @@ class WorkflowRepository:
         """Start or idempotently recover the currently-running stage attempt."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
-            if stage.status == StageState.PROCESSING.value:
+            if stage.status in (
+                    StageState.PROCESSING.value,
+                    StageState.VALIDATED.value,
+                    StageState.PUBLISHING.value):
                 running = session.execute(
                     select(AttemptRecord).where(
                         AttemptRecord.stage_id == stage.id,
                         AttemptRecord.state == AttemptState.RUNNING.value,
                     ).order_by(AttemptRecord.attempt_number.desc())
                 ).scalar_one_or_none()
-                if running is not None:
-                    raise StageAlreadyRunning(
-                        "Stage {} already has active attempt {}".format(
-                            stage_key, running.attempt_number
-                        )
-                    )
+                if (
+                        stage.status == StageState.PROCESSING.value
+                        and running is not None
+                        and running.execution_ref == execution_ref):
+                    return running.id, running.attempt_number
+                raise StageAlreadyRunning(
+                    "Stage {} already has an active attempt or publication"
+                    .format(stage_key)
+                )
 
             current = StageState(stage.status)
             if StageState.PROCESSING not in ALLOWED_STAGE_TRANSITIONS[current]:
@@ -387,8 +393,11 @@ class WorkflowRepository:
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
             if stage.status == StageState.PUBLISHING.value:
+                if attempt.state == AttemptState.RUNNING.value:
+                    return False
                 raise StageAlreadyRunning(
-                    "Stage {} is already being published".format(stage_key)
+                    "Stage {} is already being published by another attempt"
+                    .format(stage_key)
                 )
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Attempt is not running")
@@ -515,6 +524,8 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            if attempt.state != AttemptState.RUNNING.value:
+                return False
             if stage.status in (
                     StageState.FINISHED.value,
                     StageState.FAILED.value,
@@ -545,6 +556,49 @@ class WorkflowRepository:
                 job.updated_at = utcnow()
                 job.version += 1
         return True
+
+    def cancel_attempt(
+            self,
+            job_id,
+            stage_key,
+            attempt_id,
+            reason="CANCELLED"):
+        """Persist cancellation of a running attempt and its workflow stage."""
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None or attempt.stage_id != stage.id:
+                raise ValueError("Attempt does not belong to workflow stage")
+            if attempt.state != AttemptState.RUNNING.value:
+                return False
+            if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
+                    StageState(stage.status)]:
+                raise InvalidStateTransition(
+                    "Cannot cancel stage {} from {}".format(
+                        stage_key, stage.status
+                    )
+                )
+            now = utcnow()
+            self._transition(stage, StageState.CANCELLED)
+            started = attempt.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            attempt.state = AttemptState.CANCELLED.value
+            attempt.finished_at = now
+            attempt.duration_ms = max(
+                0, int((now - started).total_seconds() * 1000)
+            )
+            attempt.error_code = "CANCELLED"
+            attempt.error_message = reason
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.CANCELLED.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.CANCELLED.value
+            job.updated_at = now
+            job.version += 1
+        return True
+
 
     def recover_stale_attempts(self, older_than):
         """Move abandoned running attempts to RETRY_WAIT without Redis TTL."""
