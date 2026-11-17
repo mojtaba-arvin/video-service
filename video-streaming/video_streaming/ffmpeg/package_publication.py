@@ -20,9 +20,9 @@ class PackagePublicationError(RuntimeError):
 
 
 def _object_key(prefix, relative_path):
-    return "/".join(
-        part for part in (prefix.strip("/"), relative_path) if part
-    )
+    if not prefix:
+        return relative_path
+    return prefix.rstrip("/") + "/" + relative_path
 
 
 def _verify_readable(storage, bucket, key, expected_size=None):
