@@ -35,8 +35,12 @@ python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py --output-dir 
 PYTHONPATH=video-streaming python -m unittest discover -s video-streaming/tests -v
 ~~~
 
-The current compatibility baseline is Python 3.9. Do not raise it without a
-compatibility decision and CI evidence.
+The legacy service baseline is Python 3.9, which reached end of life on
+2025-10-31. Keep its regression job temporarily as a backward-compatibility
+check, not as a security-supported runtime target. A separate Python 3.12 job
+checks only the current regression suite; it does not prove that the full
+service and its runtime dependencies are Python 3.12 compatible. Upgrade the
+runtime through a dedicated dependency/container compatibility increment.
 
 ## Task-specific skills
 
