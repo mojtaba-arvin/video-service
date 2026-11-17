@@ -137,7 +137,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.env_path.write_text(
             "\n".join([
                 "CELERY_BROKER_URL=memory://",
-                "CELERY_RESULT_BACKEND=cache+memory://",
+                "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1",
                 "TASK_RETRY_BACKOFF_MAX=2",
                 "TASK_RETRY_FFMPEG_COMMAND_MAX=0",
                 "DEFAULT_PLAYLIST_IS_HLS=True",
@@ -213,7 +213,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             task_eager_propagates=True,
             task_store_eager_result=True,
             broker_url="memory://",
-            result_backend="cache+memory://",
+            result_backend="redis://127.0.0.1:6379/1",
         )
 
         class WebhookHandler(BaseHTTPRequestHandler):
