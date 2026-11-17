@@ -12,11 +12,11 @@ ffmpeg-python==0.2.0
 
 # celery
 
-celery==4.4.7
-flower==0.9.7
+celery==5.6.3
+flower==2.0.1
 gevent==21.1.2
 asgiref==1.1.1
-redis==3.5.3
+redis==5.2.1
 
 # circus
 # can not building wheel for pyzmq 20
