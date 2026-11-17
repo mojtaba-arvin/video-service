@@ -180,6 +180,8 @@ def create_playlist(
             manifest_path=output_path,
             package_type="hls" if is_hls else "dash",
             expected_renditions=expected_renditions,
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+            metadata_probe_timeout_seconds=10,
         )
         validation_report.require_valid()
         self.cache.set(
