@@ -5,6 +5,7 @@ from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.ffmpeg.thumbnail import render_thumbnail
 from .base import BaseStreamingTask
 from .mixins import GenerateThumbnailMixin
 
@@ -106,38 +107,20 @@ def generate_thumbnail(
     # TODO validate thumbnail time is in video duration with
     #  ffprobe result cache, and it's positive
 
-    # default value of int in proto is zero, map 0 to -1 as default value
-    if scale_width == 0:
-        scale_width = -1
-    if scale_height == 0:
-        scale_width = -1
-
     self.save_output_status(
         self.output_status.PROCESSING,
         output_id,
         request_id)
 
     try:
-        (ffmpeg
-            .input(
-                video_path,
-                ss=thumbnail_time)
-            .filter(
-                'scale',
-                scale_width,
-                scale_height
-            )
-            .output(
-                output_path,
-                vframes=1
-            )
-            .run(
-                cmd=settings.FFMPEG_BIN_PATH,
-                capture_stdout=True,
-                capture_stderr=True,
-                # Overwrite output files without asking (ffmpeg -y option)
-                overwrite_output=True
-            ))
+        render_thumbnail(
+            video_path=video_path,
+            output_path=output_path,
+            thumbnail_time=thumbnail_time,
+            scale_width=scale_width,
+            scale_height=scale_height,
+            ffmpeg_bin_path=settings.FFMPEG_BIN_PATH
+        )
     except ffmpeg.Error as e:
         raise self.retry(exc=e)
 
