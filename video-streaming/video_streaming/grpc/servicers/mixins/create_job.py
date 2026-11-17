@@ -172,7 +172,8 @@ class CreateJobMixin(object):
                     s3_output_key=output.upload_to.key,
                     s3_output_bucket=output.upload_to.bucket,
                     request_id=request_id,
-                    output_id=output_id
+                    output_id=output_id,
+                    protocol=("hls" if output.protocol == self.pb2.Protocol.HLS else "dash")
                 ),
                 tasks.call_webhook.s(request_id=request_id)
             )
