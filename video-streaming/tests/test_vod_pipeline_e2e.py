@@ -217,7 +217,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         # The application may have cached DisabledBackend while importing
         # its production defaults before the test environment was overridden.
-        celery_app._backend = celery_app._get_backend()
+        from celery.backends.redis import RedisBackend
+        celery_app._backend = RedisBackend(
+            app=celery_app,
+            url="redis://127.0.0.1:6379/1",
+        )
         if celery_app.backend.__class__.__name__ == "DisabledBackend":
             raise RuntimeError("Celery chord result backend was not configured")
 
