@@ -109,6 +109,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: workflows
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d workflows"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,9 +146,16 @@ jobs:
           cd video-streaming/scripts
           sh generate_grpc_codes.sh
 
+      - name: Apply workflow database migrations
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: alembic -c video-streaming/alembic.ini upgrade head
+
       - name: Run full VOD integration test
         env:
           PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
           AWS_EC2_METADATA_DISABLED: "true"
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
