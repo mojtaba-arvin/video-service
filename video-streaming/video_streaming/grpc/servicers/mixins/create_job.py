@@ -317,10 +317,14 @@ class CreateJobMixin(object):
         watermarked_thumbnails_ids: list[str] = []
         no_watermarked_playlists_ids: list[str] = []
         no_watermarked_thumbnails_ids: list[str] = []
-        request_has_watermark: bool = request.watermark.upload_to.key \
+        request_has_watermark: bool = bool(
+            request.watermark.s3_input.key
             and not request.watermark.s3_input.key.isspace()
-        upload_watermarked_video: bool = request.watermark.upload_to.key \
+        )
+        upload_watermarked_video: bool = bool(
+            request.watermark.upload_to.key
             and not request.watermark.upload_to.key.isspace()
+        )
         watermarked_video_output_id: str = CacheKeysTemplates. \
             WATERMARKED_VIDEO_OUTPUT_ID.format(number=0)
         request_outputs: list = [
@@ -334,11 +338,11 @@ class CreateJobMixin(object):
 
         # For strings in proto3, the default value is the empty string
         # check input key to not be empty string
-        if request.video.s3_input.key.isspace():
+        if not request.video.s3_input.key or request.video.s3_input.key.isspace():
             raise exceptions.S3KeyCanNotBeEmptyException
 
         for input_number, input_object, input_type in request_inputs:
-            if input_object.s3_input.key.isspace():
+            if not input_object.s3_input.key or input_object.s3_input.key.isspace():
                 # watermark is optional input, skip it if empty
                 continue
             # is video exist on the cloud
