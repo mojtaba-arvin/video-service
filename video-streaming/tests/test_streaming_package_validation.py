@@ -247,22 +247,24 @@ class StreamingPackageValidationTests(unittest.TestCase):
                 str(directory), str(manifest), "dash"
             )
 
-    def test_upload_order_places_all_manifests_after_media(self):
+    def test_upload_order_places_child_manifests_after_media(self):
         directory = self.root / "upload-order"
-        directory.mkdir()
-        (directory / "master.m3u8").write_text("#EXTM3U\n")
-        (directory / "variant.m3u8").write_text("#EXTM3U\n")
-        (directory / "manifest.mpd").write_text("<MPD/>")
-        (directory / "segment-0001.m4s").write_bytes(b"segment")
-        (directory / "nested").mkdir()
-        (directory / "nested" / "init.mp4").write_bytes(b"init")
-
-        files = ordered_package_files(str(directory), "master.m3u8", "hls")
+        manifest = self.make_hls_package(directory)
+        files = ordered_package_files(
+            str(directory), "video.m3u8", "hls"
+        )
         names = [relative for _, relative, _ in files]
-        self.assertLess(names.index("segment-0001.m4s"), names.index("variant.m3u8"))
-        self.assertLess(names.index("variant.m3u8"), names.index("master.m3u8"))
-        self.assertEqual(names[-1], "master.m3u8")
-        self.assertIn("nested/init.mp4", names)
+        self.assertLess(
+            names.index("video_180p_000.ts"),
+            names.index("video_180p.m3u8"),
+        )
+        self.assertLess(
+            names.index("video_90p.m3u8"),
+            names.index("video.m3u8"),
+        )
+        self.assertEqual(names[-1], "video.m3u8")
+        self.assertTrue(manifest.exists())
+
 
     def test_dash_manifest_is_uploaded_after_every_representation(self):
         directory = self.root / "dash-upload-order"
