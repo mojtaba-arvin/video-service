@@ -41,7 +41,7 @@ TASK_RETRY_BACKOFF_MAX = env_config.get(
     default=10,
     cast=int)
 TASK_RETRY_FFMPEG_COMMAND_MAX = env_config.get(
-    "TASK_RETRY_BACKOFF_MAX",
+    "TASK_RETRY_FFMPEG_COMMAND_MAX",
     default=1,
     cast=int)
 
@@ -51,8 +51,11 @@ TASK_RETRY_FFMPEG_COMMAND_MAX = env_config.get(
 
 # HLS or MPEG-Dash
 DEFAULT_PLAYLIST_IS_HLS = env_config.get(
-    "DEBUG_PLAYLIST_IS_HLS",
-    default=True,
+    "DEFAULT_PLAYLIST_IS_HLS",
+    default=env_config.get(
+        "DEBUG_PLAYLIST_IS_HLS",
+        default=True,
+        cast=bool),
     cast=bool)
 
 # to use fmp4 segment type in HLS playlist
@@ -123,7 +126,7 @@ S3_DEFAULT_INPUT_BUCKET_NAME = env_config.get(
     default=S3_DEFAULT_BUCKET,
     cast=str)
 S3_DEFAULT_OUTPUT_BUCKET_NAME = env_config.get(
-    "S3_DEFAULT_INPUT_BUCKET_NAME",
+    "S3_DEFAULT_OUTPUT_BUCKET_NAME",
     default=S3_DEFAULT_BUCKET,
     cast=str)
 
