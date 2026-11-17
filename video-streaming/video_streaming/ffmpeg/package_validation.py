@@ -1,12 +1,22 @@
 """Validate local HLS and MPEG-DASH VOD packages before publication.
 
-The validator deliberately accepts only self-contained, static VOD packages.
-Remote URLs, path traversal, dynamic MPDs, and unresolved DASH templates fail
-closed so an incomplete package cannot be marked successful or uploaded.
+Publication invariant: a manifest is not uploaded until every artifact it
+references is uploaded and readable. Child manifests precede parents; the
+root manifest is the final publication point.
+
+Status invariant: a playlist output cannot enter PROCESSING_FINISHED until its
+local validation report is valid and the publication boundary has independently
+verified every uploaded dependency and the root manifest.
+
+Validation is inexpensive and structural (manifest/filesystem metadata and
+optional ffprobe metadata); it never decodes or re-encodes media. Remote URLs,
+path traversal, dynamic MPDs, and unresolved DASH templates fail closed.
 """
 
 import os
 import re
+from dataclasses import dataclass, field
+from typing import List, Optional
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -14,6 +24,55 @@ from urllib.parse import unquote, urlsplit
 
 class StreamingPackageValidationError(ValueError):
     """Raised when a generated streaming package is incomplete or invalid."""
+
+
+@dataclass
+class PackageValidationIssue:
+    code: str
+    location: str
+    message: str
+
+
+@dataclass
+class PackageValidationReport:
+    protocol: str
+    manifest: str
+    expected_renditions: List[str] = field(default_factory=list)
+    actual_renditions: List[str] = field(default_factory=list)
+    segments: int = 0
+    errors: List[PackageValidationIssue] = field(default_factory=list)
+
+    @property
+    def valid(self):
+        return not self.errors
+
+    def as_dict(self):
+        return {
+            "protocol": self.protocol,
+            "manifest": self.manifest,
+            "expected_renditions": list(self.expected_renditions),
+            "actual_renditions": list(self.actual_renditions),
+            "segments": self.segments,
+            "valid": self.valid,
+            "errors": [
+                {
+                    "code": issue.code,
+                    "location": issue.location,
+                    "message": issue.message,
+                }
+                for issue in self.errors
+            ],
+        }
+
+    def require_valid(self):
+        if self.errors:
+            first = self.errors[0]
+            raise StreamingPackageValidationError(
+                "{} at {}: {}".format(
+                    first.code, first.location, first.message
+                )
+            )
+        return self
 
 
 _URI_ATTRIBUTE = re.compile(r'\bURI="([^"]+)"')
@@ -215,6 +274,7 @@ def validate_hls_package(root: Path, manifest: Path) -> dict:
 
     rendition_count = 0
     segment_count = 0
+    rendition_names = []
     seen = set()
     for reference in rendition_refs:
         rendition = _non_empty_file(root, reference)
@@ -226,6 +286,7 @@ def validate_hls_package(root: Path, manifest: Path) -> dict:
             continue
         seen.add(rendition)
         segment_count += _validate_hls_media_playlist(rendition)
+        rendition_names.append(rendition.relative_to(root).as_posix())
         rendition_count += 1
 
     if rendition_count == 0:
@@ -235,6 +296,7 @@ def validate_hls_package(root: Path, manifest: Path) -> dict:
         "protocol": "hls",
         "manifest": manifest.name,
         "renditions": rendition_count,
+        "rendition_names": sorted(rendition_names),
         "segments": segment_count,
     }
 
@@ -384,7 +446,7 @@ def _validate_dash_representation(root, representation, inherited,
                     time_value=time_value,
                 ),
             )
-        return len(points)
+        return len(points), representation.attrib.get("id", "")
 
     # SegmentList is also supported when every media URL is explicit.
     segment_lists = [
@@ -411,7 +473,7 @@ def _validate_dash_representation(root, representation, inherited,
             )
         for reference in segment_urls:
             _non_empty_file(root, reference)
-        return len(segment_urls)
+        return len(segment_urls), representation.attrib.get("id", "")
 
     raise StreamingPackageValidationError(
         "DASH representation has no supported SegmentTemplate or SegmentList"
@@ -452,6 +514,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
 
     total_representations = 0
     total_segments = 0
+    representation_ids = []
     mpd_duration = mpd.attrib.get("mediaPresentationDuration")
     period_duration = (
         _duration_seconds(mpd_duration) if mpd_duration else None
@@ -483,9 +546,11 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
                     raise StreamingPackageValidationError(
                         "DASH Representation BaseURL resolution is not supported"
                     )
-                total_segments += _validate_dash_representation(
+                segment_count, representation_id = _validate_dash_representation(
                     root, representation, inherited, period_duration
                 )
+                total_segments += segment_count
+                representation_ids.append(representation_id)
                 total_representations += 1
 
     if total_representations == 0 or total_segments == 0:
@@ -497,6 +562,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
         "protocol": "dash",
         "manifest": manifest.name,
         "renditions": total_representations,
+        "rendition_ids": sorted(representation_ids),
         "segments": total_segments,
     }
 
