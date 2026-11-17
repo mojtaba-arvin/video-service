@@ -1,5 +1,6 @@
 """Integration tests for HLS and DASH package validation."""
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -218,12 +219,10 @@ class StreamingPackageValidationTests(unittest.TestCase):
     def test_rejects_unsupported_dash_template_repeat(self):
         directory = self.root / "dash-negative-repeat"
         manifest = self.make_dash_package(directory)
-        manifest.write_text(
-            manifest.read_text(encoding="utf-8").replace(
-                'r="2"', 'r="-1"'
-            ),
-            encoding="utf-8",
-        )
+        manifest_text = manifest.read_text(encoding="utf-8")
+        manifest_text = re.sub(r' r="-?\d+"', "", manifest_text, count=1)
+        manifest_text = manifest_text.replace("<S ", '<S r="-1" ', 1)
+        manifest.write_text(manifest_text, encoding="utf-8")
         with self.assertRaises(StreamingPackageValidationError):
             validate_streaming_package(
                 str(directory), str(manifest), "dash"
