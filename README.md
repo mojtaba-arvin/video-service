@@ -1,11 +1,15 @@
 # **[Python Video Streaming Microservice](https://github.com/mojtaba-arvin/video-service)**
 
+> **Project direction:** evolve the legacy VOD service into a portable, AI-native, cost-aware video orchestration layer. The repository currently contains the original gRPC/Celery/FFmpeg pipeline; durable orchestration, MCP, edge execution, cost intelligence, and player QoE are target capabilities, not claims about the current implementation.
+
+**Architecture and delivery docs:** [Product vision](docs/architecture/vision.md) · [Verified current state](docs/architecture/current-state.md) · [Outcome backlog](docs/roadmap/README.md) · [Documentation index](docs/README.md)
+
 ![video-service](https://user-images.githubusercontent.com/6056661/110987240-0d7ab780-8384-11eb-8e20-05a0a9144d35.png)
 
 Python video streaming microservice, allows you to change the number of qualities or formats,
 to reduce processing and storage space costs.
 
-For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
+For some delivery profiles, HLS with fragmented MP4 (fMP4/CMAF) can reduce duplicated packaging or storage compared with maintaining separate HLS and DASH outputs. Actual savings depend on player compatibility, encoding strategy, storage, and delivery configuration; no fixed percentage is guaranteed.
 
 The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` HLS segment type.
 
@@ -24,10 +28,9 @@ Features:
 * Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as a player poster or other purpose such as screenshots for demo 
 * Supports to add watermark
 
-TODO
-* adding optional argument to mapping playlist qualities to different video files
-* adding gRPC client sample and test cases
-* update document
+## Project status and delivery backlog
+
+This repository is the legacy asynchronous VOD implementation being evolved incrementally. See the [outcome backlog](docs/roadmap/README.md) for current priorities and evidence. Planned capabilities must not be interpreted as supported features.
 
 ## Setup
 
