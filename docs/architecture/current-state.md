@@ -185,7 +185,7 @@ rather than implied by the roadmap.
 
 A follow-up governance branch adds full-SHA-pinned checkout/setup actions,
 concurrency cancellation, a generated synthetic VOD regression corpus,
-CodeQL advanced analysis, pull-request dependency review, Dependabot update
+existing CodeQL default analysis, pull-request dependency review, Dependabot update
 schedules, a security reporting policy, and a pull request template.
 
 Five repository agent skills now define procedures for FFmpeg regression
