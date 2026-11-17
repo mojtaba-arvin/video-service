@@ -678,6 +678,17 @@ def _validation_error_code(message: str) -> str:
     return "invalid_package"
 
 
+def _validation_error_location(message: str, fallback: str) -> str:
+    """Extract an artifact path from a validation message when present."""
+    candidate = message.rsplit(": ", 1)[-1].strip()
+    if candidate and (
+            "/" in candidate or "\\" in candidate
+            or candidate.startswith("..")
+            or Path(candidate).suffix):
+        return candidate
+    return fallback
+
+
 def validate_package(
         directory: str,
         package_type: str,
@@ -747,7 +758,7 @@ def validate_package(
         message = str(exc)
         report.errors.append(PackageValidationIssue(
             code=_validation_error_code(message),
-            location=str(manifest),
+            location=_validation_error_location(message, str(manifest)),
             message=message,
         ))
 
