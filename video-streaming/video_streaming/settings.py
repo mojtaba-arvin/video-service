@@ -219,23 +219,10 @@ FFMPEG_BIN_PATH = env_config.get(
     default="/usr/local/bin/ffmpeg",
     cast=str)
 
-##################################################
-#    Durable workflow database                  #
-##################################################
-
-WORKFLOW_DATABASE_URL = env_config.get(
-    "WORKFLOW_DATABASE_URL",
-    default="",
-    cast=str)
-
-WORKFLOW_DATABASE_POOL_SIZE = env_config.get(
-    "WORKFLOW_DATABASE_POOL_SIZE",
-    default=5,
-    cast=int)
-
-WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
-    "WORKFLOW_DATABASE_MAX_OVERFLOW",
-    default=5,
+# Metadata-only ffprobe validation timeout per package/rendition.
+PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
+    "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
+    default=10,
     cast=int)
 
 ##################################################
