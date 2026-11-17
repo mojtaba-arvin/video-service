@@ -192,7 +192,9 @@ def create_playlist(
             package_type="hls" if is_hls else "dash",
             expected_renditions=expected_renditions,
             ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
-            metadata_probe_timeout_seconds=10,
+            metadata_probe_timeout_seconds=(
+                settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
+            ),
         )
         validation_report.require_valid()
         self.cache.set(
