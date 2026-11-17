@@ -30,7 +30,8 @@ reading implementation details.
 Install test dependencies and FFmpeg/FFprobe:
 
 ~~~sh
-python -m pip install -r requirements-test.txt
+python -m pip install -r requirements-test-py39.txt
+# For the forward-compatibility test environment, use requirements-test-py312.txt.
 python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py --output-dir /tmp/synthetic-vod-v1
 PYTHONPATH=video-streaming python -m unittest discover -s video-streaming/tests -v
 ~~~
