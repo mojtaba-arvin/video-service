@@ -9,6 +9,7 @@ from uuid import uuid4
 from video_streaming.workflows.domain import (
     IdempotencyConflict,
     InvalidStateTransition,
+    StageAlreadyRunning,
     StageState,
 )
 from video_streaming.workflows.repository import WorkflowRepository, utcnow
@@ -84,11 +85,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
         attempt_id, attempt_number = self.repository.start_attempt(
             job_id, "p0", execution_backend="test-worker", execution_ref="task-1"
         )
-        replay_attempt_id, replay_number = self.repository.start_attempt(
-            job_id, "p0", execution_backend="test-worker", execution_ref="task-redelivery"
-        )
-        self.assertEqual(attempt_id, replay_attempt_id)
-        self.assertEqual(attempt_number, replay_number)
+        with self.assertRaises(StageAlreadyRunning):
+            self.repository.start_attempt(
+                job_id, "p0",
+                execution_backend="test-worker",
+                execution_ref="duplicate-task",
+            )
 
         report = {
             "protocol": "hls",
