@@ -11,6 +11,8 @@ This documentation describes both the **verified current implementation** and th
 5. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
 6. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
 
+7. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
+
 ## Documentation rules
 
 - **Evidence before claims:** distinguish repository facts, measured results, assumptions, and proposals.
