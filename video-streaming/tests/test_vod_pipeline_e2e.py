@@ -215,6 +215,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             broker_url="memory://",
             result_backend="redis://127.0.0.1:6379/1",
         )
+        # The application may have cached DisabledBackend while importing
+        # its production defaults before the test environment was overridden.
+        celery_app._backend = None
+        if celery_app.backend.__class__.__name__ == "DisabledBackend":
+            raise RuntimeError("Celery chord result backend was not configured")
 
         class WebhookHandler(BaseHTTPRequestHandler):
             received = []
