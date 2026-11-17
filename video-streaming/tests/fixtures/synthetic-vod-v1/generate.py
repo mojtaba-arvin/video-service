@@ -29,6 +29,7 @@ def run(command):
             check=True,
             capture_output=True,
             text=True,
+            timeout=60,
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
@@ -179,6 +180,12 @@ def main():
     for fixture in manifest["fixtures"]:
         output_path = output_dir / fixture["filename"]
         generate_fixture(ffmpeg_path, fixture, output_path)
+        if not output_path.is_file() or output_path.stat().st_size <= 0:
+            raise RuntimeError(
+                "{}: FFmpeg did not create a non-empty output".format(
+                    fixture["id"]
+                )
+            )
         media_probe = probe_media(ffprobe_path, output_path)
         metadata = validate_fixture(fixture, media_probe)
         artifacts.append({
