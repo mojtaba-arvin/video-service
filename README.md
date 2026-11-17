@@ -1,11 +1,15 @@
 # **[Python Video Streaming Microservice](https://github.com/mojtaba-arvin/video-service)**
 
+> **Project direction:** evolve the existing VOD processing service into a portable, AI-native, cost-aware video orchestration layer. The current repository is a legacy asynchronous VOD implementation; MCP, durable orchestration, advanced scheduling, edge execution, and player QoE are roadmap goals, not current features.
+
+**Architecture and delivery documentation:** [Product vision](docs/architecture/vision.md) · [Current-state review](docs/architecture/current-state.md) · [Implementation roadmap](docs/roadmap/README.md) · [Documentation index](docs/README.md)
+
 ![video-service](https://user-images.githubusercontent.com/6056661/110987240-0d7ab780-8384-11eb-8e20-05a0a9144d35.png)
 
 Python video streaming microservice, allows you to change the number of qualities or formats,
 to reduce processing and storage space costs.
 
-For example, instead of building both HLS and MPEG-DASH playlists, you can build a HLS with `fmp4`, that similar to `MPEG-DASH`, which reduces costs by 50%. 
+For some delivery profiles, HLS with fragmented MP4 (fMP4/CMAF) can reduce duplicated packaging or storage compared with maintaining separate HLS and DASH outputs. Actual savings depend on player compatibility, encoding strategy, storage, and delivery configuration; no fixed percentage is guaranteed. 
 
 The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` HLS segment type.
 
@@ -24,10 +28,10 @@ Features:
 * Supports to generate different thumbnails from the input video by list of times, to choose one of them by user as a player poster or other purpose such as screenshots for demo 
 * Supports to add watermark
 
-TODO
-* adding optional argument to mapping playlist qualities to different video files
-* adding gRPC client sample and test cases
-* update document
+## Project status and roadmap
+
+This codebase represents the original asynchronous VOD processing implementation. Its architecture and operational limitations are documented in the [current-state review](docs/architecture/current-state.md). The longer-term product direction and phased delivery gates are documented in the [product vision](docs/architecture/vision.md) and [implementation roadmap](docs/roadmap/README.md). Planned capabilities must not be interpreted as implemented features.
+
 
 ## Setup
 
