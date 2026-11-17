@@ -11,6 +11,7 @@ from video_streaming.ffmpeg.package_validation import (
     PackageValidationReport,
     StreamingPackageValidationError,
     ordered_package_files,
+    reset_package_directory,
     validate_package,
     validate_streaming_package,
 )
@@ -372,6 +373,30 @@ class StreamingPackageValidationTests(unittest.TestCase):
             validate_streaming_package(
                 str(directory), str(manifest), "hls"
             )
+
+    def test_retry_reset_removes_only_current_output_directory(self):
+        job_root = self.root / "outputs_job"
+        output_dir = job_root / "p0"
+        sibling = job_root / "p1"
+        output_dir.mkdir(parents=True)
+        sibling.mkdir()
+        (output_dir / "stale.ts").write_bytes(b"old")
+        (sibling / "keep.ts").write_bytes(b"keep")
+
+        reset = reset_package_directory(
+            str(output_dir), str(job_root)
+        )
+        self.assertTrue(Path(reset).is_dir())
+        self.assertFalse((output_dir / "stale.ts").exists())
+        self.assertEqual((sibling / "keep.ts").read_bytes(), b"keep")
+
+    def test_retry_reset_rejects_path_outside_job_output_root(self):
+        job_root = self.root / "outputs_job"
+        job_root.mkdir()
+        outside = self.root / "other" / "p0"
+        outside.mkdir(parents=True)
+        with self.assertRaises(StreamingPackageValidationError):
+            reset_package_directory(str(outside), str(job_root))
 
     def test_rejects_hls_path_traversal_reference(self):
         directory = self.root / "hls-path-traversal"
