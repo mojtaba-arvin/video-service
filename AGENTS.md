@@ -40,7 +40,7 @@ compatibility decision and CI evidence.
 
 ## Task-specific skills
 
-Use the relevant procedural guide under .github/skills/:
+Use the relevant procedural guide under .agents/skills/:
 
 - ffmpeg-regression-testing — media behavior, generated fixtures, FFprobe,
   failure, cancellation, and process cleanup.
