@@ -505,3 +505,48 @@ def validate_streaming_package(directory: str, manifest_path: str,
     raise StreamingPackageValidationError(
         "Unsupported streaming protocol: " + protocol
     )
+
+
+
+def ordered_package_files(directory: str, manifest_name: str):
+    """Return package files with all manifests uploaded after their media.
+
+    HLS media playlists are uploaded after segments and the master playlist is
+    uploaded last. DASH MPD is uploaded last. Relative paths are preserved.
+    """
+    root = Path(directory).resolve()
+    if not root.is_dir():
+        raise StreamingPackageValidationError(
+            "Streaming package directory does not exist"
+        )
+
+    files = []
+    for current, directories, filenames in os.walk(str(root), followlinks=False):
+        directories.sort()
+        for name in list(directories):
+            if (Path(current) / name).is_symlink():
+                raise StreamingPackageValidationError(
+                    "Symlink directories are not allowed in a streaming package"
+                )
+        for name in sorted(filenames):
+            path = Path(current) / name
+            if path.is_symlink() or not path.is_file():
+                raise StreamingPackageValidationError(
+                    "Symlink or non-regular output file is not allowed: " + name
+                )
+            relative = path.relative_to(root).as_posix()
+            size = path.stat().st_size
+            if size <= 0:
+                raise StreamingPackageValidationError(
+                    "Package contains an empty output file: " + relative
+                )
+            if relative == manifest_name:
+                rank = 2
+            elif path.suffix.lower() in (".m3u8", ".mpd"):
+                rank = 1
+            else:
+                rank = 0
+            files.append((rank, str(path), relative, size))
+
+    files.sort(key=lambda item: (item[0], item[2]))
+    return [(path, relative, size) for _, path, relative, size in files]
