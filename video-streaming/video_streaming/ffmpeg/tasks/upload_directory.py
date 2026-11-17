@@ -37,6 +37,7 @@ def upload_directory(self,
                      s3_output_bucket: str = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME,
                      request_id: str = None,
                      output_id: str = None,
+                     protocol: str = None,
                      **kwargs
                      ):
     """upload the directory of the output files to S3 object storage
@@ -81,7 +82,8 @@ def upload_directory(self,
             s3_output_key,
             s3_output_bucket,
             output_id,
-            request_id)
+            request_id,
+            protocol)
     # except urllib3.exceptions.HeaderParsingError as e:
     #     # MissingHeaderBodySeparatorDefect
     #     # TODO notify developer
