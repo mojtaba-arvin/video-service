@@ -38,6 +38,8 @@ class InMemoryCache:
         self.values = {}
 
     def set(self, key, value, timeout=None):
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
         self.values[key] = value
 
     def get(self, key, decode=True):
