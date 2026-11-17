@@ -293,6 +293,59 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.env_path.write_bytes(cls.previous_env)
         cls.temp_dir.cleanup()
 
+    def test_processing_finished_requires_both_validation_proofs(self):
+        from video_streaming.core.constants import (
+            CacheKeysTemplates,
+            OutputStatus,
+        )
+        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+
+        class StatusProbe:
+            def __init__(self):
+                self.cache = InMemoryCache()
+                self.output_status = OutputStatus
+
+            def can_set_output_status(self, output_id, request_id):
+                return False
+
+        probe = StatusProbe()
+        request_id = "status-invariant-job"
+        output_id = "p0"
+        probe.cache.set(
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=request_id),
+            {"no_watermarked_playlists_ids": [output_id]},
+        )
+        with self.assertRaisesRegex(
+                RuntimeError, "both succeed"):
+            BaseOutputMixin.save_output_status(
+                probe, OutputStatus.PROCESSING_FINISHED,
+                output_id, request_id,
+            )
+
+        probe.cache.set(
+            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+                request_id=request_id, output_id=output_id
+            ),
+            "1",
+        )
+        with self.assertRaisesRegex(
+                RuntimeError, "both succeed"):
+            BaseOutputMixin.save_output_status(
+                probe, OutputStatus.PROCESSING_FINISHED,
+                output_id, request_id,
+            )
+
+        probe.cache.set(
+            CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+                request_id=request_id, output_id=output_id
+            ),
+            "1",
+        )
+        BaseOutputMixin.save_output_status(
+            probe, OutputStatus.PROCESSING_FINISHED,
+            output_id, request_id,
+        )
+
     def test_grpc_job_runs_through_celery_ffmpeg_and_storage(self):
         options = self.pb2.ConvertOptions(
             fmp4=False,
