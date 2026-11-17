@@ -1,9 +1,9 @@
 # gRPC
 
-grpcio==1.35.0
-grpcio-tools==1.35.0
-grpcio-health-checking==1.35.0
-protobuf==3.14.0
+grpcio==1.78.2
+grpcio-tools==1.78.2
+grpcio-health-checking==1.78.2
+protobuf==6.33.1
 
 # ffmpeg
 
@@ -24,7 +24,7 @@ pyzmq==19.0.2
 circus==0.17.1
 
 # using .env
-python-decouple==3.4
+python-decouple==3.8
 
 # clouds 
 boto3==1.17.14
