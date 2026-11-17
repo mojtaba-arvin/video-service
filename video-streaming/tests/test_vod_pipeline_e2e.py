@@ -304,6 +304,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         request = self.pb2.JobRequest(
             webhook_url=self.webhook_url,
             reference_id="vod-e2e-reference",
+            idempotency_key="vod-e2e-idempotency-key",
             video=self.pb2.Video(
                 s3_input=self.pb2.S3Input(
                     key="source.mp4",
@@ -315,6 +316,16 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
 
         accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
+
+        replayed = self.stub.create_job(request, timeout=120)
+        self.assertEqual(replayed.tracking_id, accepted.tracking_id)
+
+        from video_streaming.workflows.service import get_workflow_repository
+        snapshot = get_workflow_repository().get_job_snapshot(
+            accepted.tracking_id
+        )
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(len(snapshot["stages"]), 1)
 
         results = self.stub.get_results(
             self.pb2.JobsResultsRequest(
