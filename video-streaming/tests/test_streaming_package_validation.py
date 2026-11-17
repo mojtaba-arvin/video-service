@@ -236,6 +236,18 @@ class StreamingPackageValidationTests(unittest.TestCase):
         with self.assertRaises(StreamingPackageValidationError):
             ordered_package_files(str(directory), "master.m3u8")
 
+    def test_rejects_symlinked_manifest(self):
+        directory = self.root / "hls-symlink-manifest"
+        directory.mkdir()
+        target = directory / "real.m3u8"
+        target.write_text("#EXTM3U\n")
+        manifest = directory / "master.m3u8"
+        manifest.symlink_to(target)
+        with self.assertRaises(StreamingPackageValidationError):
+            validate_streaming_package(
+                str(directory), str(manifest), "hls"
+            )
+
     def test_rejects_hls_path_traversal_reference(self):
         directory = self.root / "hls-path-traversal"
         directory.mkdir()
