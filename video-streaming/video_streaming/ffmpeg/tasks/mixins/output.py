@@ -294,8 +294,14 @@ class BaseOutputMixin(object):
         # when self.output_path is None, using self.s3_output_key
         #  to set self.directory and self.output_path
 
-        # s3_output_key : "/foo/bar/example.mpd"
+        # The S3 key is also used to derive a local filename. Reject path
+        # components that could escape the job-owned output directory.
         output_filename = s3_output_key.rpartition('/')[-1]
+        if (
+                output_filename in ("", ".", "..")
+                or "\\" in output_filename
+                or "\x00" in output_filename):
+            raise ValueError("S3 output key has an unsafe local filename")
 
         directory = os.path.join(
             self.get_outputs_root_directory(request_id),
