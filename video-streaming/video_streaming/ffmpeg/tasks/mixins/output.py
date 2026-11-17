@@ -79,10 +79,38 @@ class BaseOutputMixin(object):
             # input_number has been not set
             return None
 
-        if not self.cache.get(CacheKeysTemplates.JOB_DETAILS.format(
-                request_id=request_id)):
-            # JOB_DETAILS has been not set
+        job_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=request_id)
+        )
+        if not job_details:
+            # JOB_DETAILS has not been set
             return None
+
+        # A playlist may report PROCESSING_FINISHED only after both boundary
+        # proofs exist: local package validation and remote publication/readback.
+        playlist_output_ids = set(
+            job_details.get("no_watermarked_playlists_ids", [])
+            + job_details.get("watermarked_playlists_ids", [])
+        )
+        if status_name == self.output_status.PROCESSING_FINISHED and \
+                output_id in playlist_output_ids:
+            local_proof = self.cache.get(
+                CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+                    request_id=request_id, output_id=output_id
+                ),
+                decode=False,
+            )
+            remote_proof = self.cache.get(
+                CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+                    request_id=request_id, output_id=output_id
+                ),
+                decode=False,
+            )
+            if local_proof != "1" or remote_proof != "1":
+                raise RuntimeError(
+                    "PROCESSING_FINISHED is forbidden until local validation "
+                    "and storage publication verification both succeed"
+                )
 
         # to prevent set output status after it was set to
         # in 'OUTPUT_FAILED' and 'OUTPUT_REVOKED'
@@ -266,8 +294,14 @@ class BaseOutputMixin(object):
         # when self.output_path is None, using self.s3_output_key
         #  to set self.directory and self.output_path
 
-        # s3_output_key : "/foo/bar/example.mpd"
+        # The S3 key is also used to derive a local filename. Reject path
+        # components that could escape the job-owned output directory.
         output_filename = s3_output_key.rpartition('/')[-1]
+        if (
+                output_filename in ("", ".", "..")
+                or "\\" in output_filename
+                or "\x00" in output_filename):
+            raise ValueError("S3 output key has an unsafe local filename")
 
         directory = os.path.join(
             self.get_outputs_root_directory(request_id),
