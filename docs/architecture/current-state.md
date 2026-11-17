@@ -158,7 +158,7 @@ been merged to `develop`:
 | Test and CI baseline | Python 3.9 `unittest` job runs on Ubuntu 24.04 for PRs and pushes to develop | Merged in PR #55 |
 | Environment file hygiene | Tracked `.env.local` removed; non-secret `.env.example` added; `.env` and `.env.*` ignored except the template | Merged in PR #56 |
 
-The CI suite now runs 12 tests: five isolated settings regressions, four scale-normalization checks, and three deterministic FFmpeg render/FFprobe dimension checks. It still does not cover the complete gRPC → Celery → FFmpeg → object-storage VOD path.
+The CI suite now runs 17 tests: five isolated settings regressions, four scale-normalization checks, and eight FFmpeg render/output-validation integration checks. CI also generates and FFprobe-validates a separate synthetic VOD fixture corpus. It still does not cover the complete gRPC → Celery → FFmpeg → object-storage VOD path.
 
 ### Environment history finding
 
@@ -179,3 +179,28 @@ The thumbnail scale-default defect was fixed in PR #57: width and height are nor
 
 The latest fully merged baseline includes configuration tests, environment tracking checks, and thumbnail rendering integration. It does not yet establish durable job state, FFmpeg process-tree isolation, playlist artifact validation/publication safety, webhook SSRF defenses, authenticated tenant boundaries, or player QoE. Those remain unimplemented or unverified
 rather than implied by the roadmap.
+
+
+### Repository automation additions (2026-11-17)
+
+A follow-up governance branch adds full-SHA-pinned checkout/setup actions,
+concurrency cancellation, a generated synthetic VOD regression corpus,
+CodeQL advanced analysis, pull-request dependency review, Dependabot update
+schedules, a security reporting policy, and a pull request template.
+
+Five repository agent skills now define procedures for FFmpeg regression
+testing, durable workflow design, MCP/agent interface design, codec/cost
+benchmarking, and security-boundary review. These skills guide contributors
+and coding agents; they do not mean that MCP, durable orchestration, or billing
+intelligence has already been implemented.
+
+The synthetic-vod-v1 corpus is generated from FFmpeg lavfi sources at test
+time. It covers short landscape, portrait-with-audio, and low-resolution
+sources. It is designed for deterministic correctness tests, not perceptual
+quality or production cost claims.
+
+The CodeQL and dependency-review workflows are not yet required merge checks.
+GitHub repository administration also remains necessary: current inspection
+found no active ruleset and develop is unprotected. The connected GitHub
+integration does not expose write access to branch-protection or repository
+security settings.
