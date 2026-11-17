@@ -93,3 +93,40 @@ jobs:
         env:
           PYTHONPATH: video-streaming
         run: python -m unittest discover -s video-streaming/tests -v
+
+
+  vod-e2e:
+    name: gRPC → Celery → FFmpeg → storage (Python 3.9)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements-integration-py39.txt
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+
+      - name: Install isolated integration dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-integration-py39.txt
+
+      - name: Run full VOD integration test
+        env:
+          PYTHONPATH: video-streaming
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_vod_pipeline_e2e.py' \
+            -v
