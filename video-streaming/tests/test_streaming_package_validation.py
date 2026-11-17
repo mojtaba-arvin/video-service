@@ -179,9 +179,6 @@ class StreamingPackageValidationTests(unittest.TestCase):
         directory = self.root / "dash-base-url"
         manifest = self.make_dash_package(directory)
         text = manifest.read_text(encoding="utf-8")
-        text = text.replace("<MPD ", '<MPD><BaseURL>media/</BaseURL><MPD ', 1)
-        # Keep the document well-formed while adding a root BaseURL.
-        text = manifest.read_text(encoding="utf-8")
         text = text.replace(
             "</MPD>", "<BaseURL>media/</BaseURL></MPD>", 1
         )
