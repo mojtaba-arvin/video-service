@@ -129,6 +129,18 @@ class StreamingPackageValidationTests(unittest.TestCase):
                 str(directory), str(manifest), "hls"
             )
 
+    def test_rejects_hls_playlist_with_unpaired_extinf(self):
+        directory = self.root / "hls-unpaired-extinf"
+        manifest = self.make_hls_package(directory)
+        variant = directory / "video_180p.m3u8"
+        text = variant.read_text(encoding="utf-8")
+        text = text.replace("#EXTINF:", "#EXTINF:1.0,\n#EXTINF:", 1)
+        variant.write_text(text, encoding="utf-8")
+        with self.assertRaises(StreamingPackageValidationError):
+            validate_streaming_package(
+                str(directory), str(manifest), "hls"
+            )
+
     def test_rejects_hls_live_playlist_without_endlist(self):
         directory = self.root / "hls-no-endlist"
         manifest = self.make_hls_package(directory)
@@ -158,6 +170,22 @@ class StreamingPackageValidationTests(unittest.TestCase):
         manifest = self.make_dash_package(directory)
         segment = next(directory.glob("*chunk*"))
         segment.unlink()
+        with self.assertRaises(StreamingPackageValidationError):
+            validate_streaming_package(
+                str(directory), str(manifest), "dash"
+            )
+
+    def test_rejects_dash_base_url_until_resolution_is_implemented(self):
+        directory = self.root / "dash-base-url"
+        manifest = self.make_dash_package(directory)
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace("<MPD ", '<MPD><BaseURL>media/</BaseURL><MPD ', 1)
+        # Keep the document well-formed while adding a root BaseURL.
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace(
+            "</MPD>", "<BaseURL>media/</BaseURL></MPD>", 1
+        )
+        manifest.write_text(text, encoding="utf-8")
         with self.assertRaises(StreamingPackageValidationError):
             validate_streaming_package(
                 str(directory), str(manifest), "dash"
@@ -193,6 +221,15 @@ class StreamingPackageValidationTests(unittest.TestCase):
         self.assertLess(names.index("variant.m3u8"), names.index("master.m3u8"))
         self.assertEqual(names[-1], "master.m3u8")
         self.assertIn("nested/init.mp4", names)
+
+    def test_dash_manifest_is_uploaded_after_every_representation(self):
+        directory = self.root / "dash-upload-order"
+        directory.mkdir()
+        (directory / "manifest.mpd").write_text("<MPD/>")
+        (directory / "init.mp4").write_bytes(b"init")
+        (directory / "segment.m4s").write_bytes(b"segment")
+        files = ordered_package_files(str(directory), "manifest.mpd")
+        self.assertEqual(files[-1][1], "manifest.mpd")
 
     def test_upload_order_rejects_empty_artifacts(self):
         directory = self.root / "upload-empty"
