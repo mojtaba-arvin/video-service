@@ -222,6 +222,38 @@ class S3Service:
         except Exception as e:
             return self._exception_handler(e)
 
+    def delete_object(self, key: str, bucket_name: str = None, **kwargs):
+        """Delete one object; deleting an absent key is idempotent."""
+        kwargs["Key"] = key
+        kwargs["Bucket"] = bucket_name or self.DEFAULT_BUCKET
+        try:
+            return self.client.delete_object(**kwargs)
+        except Exception as exc:
+            return self._exception_handler(exc)
+
+    def read_range(
+            self,
+            key: str,
+            bucket_name: str = None,
+            start: int = 0,
+            end: int = 0):
+        """Read a bounded byte range to verify object readability cheaply."""
+        try:
+            response = self.client.get_object(
+                Bucket=bucket_name or self.DEFAULT_BUCKET,
+                Key=key,
+                Range="bytes={}-{}".format(start, end),
+            )
+            body = response.get("Body")
+            if body is None:
+                return None
+            try:
+                return body.read(end - start + 1)
+            finally:
+                body.close()
+        except Exception as exc:
+            return self._exception_handler(exc)
+
     def upload_file_by_path(
             self,
             key: str,
