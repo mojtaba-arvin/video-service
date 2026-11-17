@@ -228,6 +228,10 @@ class S3Service:
         kwargs["Bucket"] = bucket_name or self.DEFAULT_BUCKET
         try:
             return self.client.delete_object(**kwargs)
+        except botocore_exceptions.ClientError as exc:
+            # A denied delete must not be mistaken for a successful withdrawal
+            # of the old manifest. S3 DeleteObject is idempotent for absent keys.
+            raise self.exceptions.S3BaseException(exc)
         except Exception as exc:
             return self._exception_handler(exc)
 
@@ -271,6 +275,10 @@ class S3Service:
                 ExtraArgs=extra_args,
                 Callback=callback,
                 Config=config or self.transfer_config)
+        except botocore_exceptions.ClientError as exc:
+            # Upload-side 403/404 responses are failures, never successful
+            # no-ops; callers must not publish a manifest after one.
+            raise self.exceptions.S3BaseException(exc)
         except Exception as e:
             return self._exception_handler(e)
 
