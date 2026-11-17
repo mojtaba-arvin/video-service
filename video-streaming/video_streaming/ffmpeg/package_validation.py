@@ -88,6 +88,11 @@ def _validate_hls_media_playlist(root: Path, playlist: Path) -> int:
         line = raw_line.strip()
         if not line:
             continue
+        if has_endlist:
+            raise StreamingPackageValidationError(
+                "HLS VOD playlist contains data after EXT-X-ENDLIST: "
+                + playlist.name
+            )
 
         if line == "#EXT-X-ENDLIST":
             has_endlist = True
@@ -101,11 +106,16 @@ def _validate_hls_media_playlist(root: Path, playlist: Path) -> int:
             continue
 
         if line.startswith("#EXTINF:"):
+            if pending_duration:
+                raise StreamingPackageValidationError(
+                    "HLS playlist has multiple EXTINF tags without a segment URI: "
+                    + playlist.name
+                )
             try:
                 duration = float(line.split(":", 1)[1].split(",", 1)[0])
             except ValueError:
                 duration = 0
-            if duration <= 0:
+            if duration != duration or duration <= 0:
                 raise StreamingPackageValidationError(
                     "HLS segment has a non-positive EXTINF duration: "
                     + playlist.name
@@ -419,6 +429,10 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
 
     if _local_name(mpd.tag) != "MPD":
         raise StreamingPackageValidationError("DASH manifest root is not MPD")
+    if _first_child(mpd, "BaseURL") is not None:
+        raise StreamingPackageValidationError(
+            "DASH BaseURL resolution is not supported; use package-relative templates"
+        )
     if mpd.attrib.get("type", "static").lower() != "static":
         raise StreamingPackageValidationError(
             "Only static DASH VOD manifests can be published"
@@ -436,12 +450,20 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
     )
 
     for period in periods:
+        if _first_child(period, "BaseURL") is not None:
+            raise StreamingPackageValidationError(
+                "DASH Period BaseURL resolution is not supported"
+            )
         adaptation_sets = _children(period, "AdaptationSet")
         if not adaptation_sets:
             raise StreamingPackageValidationError(
                 "DASH Period contains no AdaptationSet"
             )
         for adaptation in adaptation_sets:
+            if _first_child(adaptation, "BaseURL") is not None:
+                raise StreamingPackageValidationError(
+                    "DASH AdaptationSet BaseURL resolution is not supported"
+                )
             representations = _children(adaptation, "Representation")
             if not representations:
                 raise StreamingPackageValidationError(
@@ -449,6 +471,10 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
                 )
             inherited = [mpd, period, adaptation]
             for representation in representations:
+                if _first_child(representation, "BaseURL") is not None:
+                    raise StreamingPackageValidationError(
+                        "DASH Representation BaseURL resolution is not supported"
+                    )
                 total_segments += _validate_dash_representation(
                     root, representation, inherited, period_duration
                 )
