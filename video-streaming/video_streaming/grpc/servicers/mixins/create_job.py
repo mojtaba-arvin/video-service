@@ -1,3 +1,4 @@
+import hashlib
 import json
 import uuid
 from celery import result as celery_result, chain, group, signature, \
@@ -12,6 +13,7 @@ from video_streaming.ffmpeg.constants import VideoEncodingFormats, \
     InputType
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class CreateJobMixin(object):
@@ -491,6 +493,108 @@ class CreateJobMixin(object):
                     group(*watermarked_tasks)
                 )
             )
+
+        # Persist the workflow before dispatch. Client retries with the same
+        # idempotency key return the existing tracking ID without scheduling a
+        # second Celery graph. The payload hash excludes the key itself.
+        stage_specs = []
+        for number, output in enumerate(request.playlists):
+            if not output.upload_to.key or output.upload_to.key.isspace():
+                continue
+            output_id = (
+                CacheKeysTemplates.WATERMARKED_PLAYLIST_OUTPUT_ID.format(
+                    number=number
+                )
+                if output.use_watermark
+                else CacheKeysTemplates.PLAYLIST_OUTPUT_ID.format(
+                    number=number
+                )
+            )
+            stage_specs.append({
+                "stage_key": output_id,
+                "operation": (
+                    "video.hls.package_and_publish"
+                    if output.protocol == self.pb2.Protocol.HLS
+                    else "video.dash.package_and_publish"
+                ),
+                "input": {
+                    "protocol": (
+                        "hls"
+                        if output.protocol == self.pb2.Protocol.HLS
+                        else "dash"
+                    ),
+                    "bucket": output.upload_to.bucket,
+                    "key": output.upload_to.key,
+                    "quality_names": self._parse_quality_names(
+                        output.options.quality_names
+                    ),
+                    "use_watermark": output.use_watermark,
+                },
+                "output": {
+                    "manifest_key": output.upload_to.key,
+                    "expected_renditions": [],
+                },
+            })
+
+        for number, output in enumerate(request.thumbnails):
+            if not output.upload_to.key or output.upload_to.key.isspace():
+                continue
+            output_id = (
+                CacheKeysTemplates.WATERMARKED_THUMBNAIL_OUTPUT_ID.format(
+                    number=number
+                )
+                if output.use_watermark
+                else CacheKeysTemplates.THUMBNAIL_OUTPUT_ID.format(
+                    number=number
+                )
+            )
+            stage_specs.append({
+                "stage_key": output_id,
+                "operation": "video.thumbnail_and_publish",
+                "input": {
+                    "bucket": output.upload_to.bucket,
+                    "key": output.upload_to.key,
+                    "thumbnail_time": output.thumbnail_time,
+                    "scale_width": output.options.scale_width,
+                    "scale_height": output.options.scale_height,
+                    "use_watermark": output.use_watermark,
+                },
+            })
+
+        if request_has_watermark and upload_watermarked_video:
+            stage_specs.append({
+                "stage_key": watermarked_video_output_id,
+                "operation": "video.watermark_and_publish",
+                "input": {
+                    "bucket": request.watermark.upload_to.bucket,
+                    "key": request.watermark.upload_to.key,
+                },
+            })
+
+        request_for_hash = self.pb2.JobRequest()
+        request_for_hash.CopyFrom(request)
+        request_for_hash.idempotency_key = ""
+        request_hash = hashlib.sha256(
+            request_for_hash.SerializeToString(deterministic=True)
+        ).hexdigest()
+        client_idempotency_key = request.idempotency_key.strip()
+        durable_idempotency_key = client_idempotency_key or request_id
+        persisted_request_id, is_new_job = (
+            get_workflow_repository().create_job(
+                job_id=request_id,
+                idempotency_key=durable_idempotency_key,
+                request_hash=request_hash,
+                reference_id=request.reference_id,
+                workflow_name="video.vod",
+                stage_specs=stage_specs,
+                metadata={
+                    "reference_id": request.reference_id,
+                    "output_count": len(stage_specs),
+                },
+            )
+        )
+        if not is_new_job:
+            return self._job_response(persisted_request_id)
 
         job_details = dict(
             reference_id=request.reference_id,
