@@ -25,6 +25,20 @@ jobs:
       - name: Install test dependency
         run: python -m pip install --disable-pip-version-check "python-decouple==3.4"
 
+      - name: Validate environment template tracking rules
+        run: |
+          git ls-files --error-unmatch video-streaming/video_streaming/.env.example >/dev/null
+          if git ls-files --error-unmatch video-streaming/video_streaming/.env.local >/dev/null 2>&1; then
+            echo ".env.local must not be tracked" >&2
+            exit 1
+          fi
+          if git check-ignore --quiet --no-index video-streaming/video_streaming/.env.example; then
+            echo ".env.example must remain trackable" >&2
+            exit 1
+          fi
+          git check-ignore --quiet --no-index video-streaming/video_streaming/.env
+          git check-ignore --quiet --no-index video-streaming/video_streaming/.env.local
+
       - name: Run regression tests
         env:
           PYTHONPATH: video-streaming
