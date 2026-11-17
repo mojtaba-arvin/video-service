@@ -1140,7 +1140,7 @@ def _probe_package_metadata(
                     manifest_duration = sum(durations)
                     actual_duration = float(measured_duration)
                     tolerance = max(
-                        target_duration or 0.0,
+                        (target_duration or 0.0) * 0.10,
                         actual_duration * 0.02,
                         0.25,
                     )
