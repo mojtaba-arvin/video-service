@@ -18,6 +18,9 @@ develop. Configure:
 
 - Require pull requests before merging.
 - Require the Unit tests (Python 3.9) status check.
+- After it has passed on several normal and fork-originated PRs, consider also
+  requiring Regression suite (Python 3.12). That job validates tests only;
+  it does not certify the full legacy service runtime.
 - Require all PR conversations to be resolved.
 - Require linear history.
 - Block force pushes.
