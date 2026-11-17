@@ -740,3 +740,229 @@ def validate_package(
         ))
 
     return report
+
+
+
+def manifest_dependencies(
+        directory: str,
+        manifest_path: str,
+        protocol: str) -> List[str]:
+    """Return safe package-relative dependencies of one manifest.
+
+    HLS dependencies are parsed directly from URI attributes and media URI
+    lines. DASH has no nested manifests in this supported static profile, so
+    the validated MPD depends on every non-MPD package object.
+    """
+    root = Path(directory).resolve()
+    manifest = Path(manifest_path).resolve()
+    try:
+        manifest.relative_to(root)
+    except ValueError as exc:
+        raise StreamingPackageValidationError(
+            "Manifest dependency path escapes package root"
+        ) from exc
+
+    protocol = (protocol or "").lower()
+    dependencies = set()
+    if protocol == "dash":
+        for current, directories, filenames in os.walk(
+                str(root), followlinks=False):
+            for dirname in directories:
+                if (Path(current) / dirname).is_symlink():
+                    raise StreamingPackageValidationError(
+                        "Symlink directory in DASH package"
+                    )
+            for filename in filenames:
+                candidate = Path(current) / filename
+                if candidate.is_symlink():
+                    raise StreamingPackageValidationError(
+                        "Symlink file in DASH package: " + filename
+                    )
+                if candidate.resolve() != manifest and candidate.suffix.lower() != ".mpd":
+                    dependencies.add(candidate.resolve().relative_to(root).as_posix())
+        return sorted(dependencies)
+
+    if protocol != "hls":
+        raise StreamingPackageValidationError(
+            "Unsupported package protocol: " + protocol
+        )
+
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise StreamingPackageValidationError(
+            "Cannot read HLS manifest dependencies: " + str(manifest)
+        ) from exc
+
+    for raw_line in lines[1:]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        references = _playlist_references(line) if line.startswith("#") else [line]
+        for reference in references:
+            candidate = _non_empty_file(manifest.parent, reference)
+            dependencies.add(candidate.relative_to(root).as_posix())
+
+    return sorted(dependencies)
+
+
+def ordered_package_files(
+        directory: str,
+        manifest_name: str,
+        protocol: str) -> List[tuple]:
+    """Topologically order a package so every manifest dependency is prior.
+
+    The returned tuple items are (absolute path, package-relative path, size).
+    Unreferenced local artifacts and orphan playlists fail closed rather than
+    accidentally being uploaded from a previous retry.
+    """
+    root = Path(directory).resolve()
+    if not root.is_dir():
+        raise StreamingPackageValidationError(
+            "Streaming package directory does not exist"
+        )
+    root_manifest = (root / manifest_name).resolve()
+    try:
+        root_manifest.relative_to(root)
+    except ValueError as exc:
+        raise StreamingPackageValidationError(
+            "Root manifest escapes package directory"
+        ) from exc
+    if not root_manifest.is_file() or root_manifest.is_symlink():
+        raise StreamingPackageValidationError(
+            "Root manifest is missing or unsafe"
+        )
+
+    inventory = {}
+    for current, directories, filenames in os.walk(
+            str(root), followlinks=False):
+        directories.sort()
+        for dirname in directories:
+            if (Path(current) / dirname).is_symlink():
+                raise StreamingPackageValidationError(
+                    "Symlink directories are not allowed in a package"
+                )
+        for filename in sorted(filenames):
+            path = Path(current) / filename
+            if path.is_symlink() or not path.is_file():
+                raise StreamingPackageValidationError(
+                    "Symlink or non-regular output file: " + filename
+                )
+            relative = path.relative_to(root).as_posix()
+            size = path.stat().st_size
+            if size <= 0:
+                raise StreamingPackageValidationError(
+                    "Package contains an empty output file: " + relative
+                )
+            inventory[relative] = (str(path), size)
+
+    if protocol == "dash":
+        if any(
+                relative.endswith(".mpd") and relative != manifest_name
+                for relative in inventory):
+            raise StreamingPackageValidationError(
+                "DASH package contains an unexpected secondary MPD"
+            )
+        referenced = set(manifest_dependencies(
+            str(root), str(root_manifest), protocol
+        ))
+        actual = set(inventory) - {manifest_name}
+        if actual != referenced:
+            raise StreamingPackageValidationError(
+                "DASH package contains unreferenced or missing artifacts"
+            )
+        ordered = sorted(actual) + [manifest_name]
+    elif protocol == "hls":
+        visiting = set()
+        visited = set()
+        postorder = []
+        referenced_media = set()
+
+        def visit(relative_manifest):
+            if relative_manifest in visiting:
+                raise StreamingPackageValidationError(
+                    "HLS playlist dependency cycle: " + relative_manifest
+                )
+            if relative_manifest in visited:
+                return
+            if relative_manifest not in inventory:
+                raise StreamingPackageValidationError(
+                    "HLS child playlist is missing: " + relative_manifest
+                )
+            visiting.add(relative_manifest)
+            absolute_manifest = root / relative_manifest
+            dependencies = manifest_dependencies(
+                str(root), str(absolute_manifest), "hls"
+            )
+            for dependency in dependencies:
+                if dependency.lower().endswith(".m3u8"):
+                    visit(dependency)
+                else:
+                    referenced_media.add(dependency)
+            visiting.remove(relative_manifest)
+            visited.add(relative_manifest)
+            postorder.append(relative_manifest)
+
+        root_relative = root_manifest.relative_to(root).as_posix()
+        visit(root_relative)
+        local_playlists = {
+            relative for relative in inventory
+            if relative.lower().endswith(".m3u8")
+        }
+        if local_playlists != visited:
+            orphaned = sorted(local_playlists - visited)
+            raise StreamingPackageValidationError(
+                "HLS package contains unreferenced playlists: "
+                + ", ".join(orphaned)
+            )
+        local_media = set(inventory) - local_playlists
+        if local_media != referenced_media:
+            orphaned = sorted(local_media - referenced_media)
+            missing = sorted(referenced_media - local_media)
+            raise StreamingPackageValidationError(
+                "HLS media inventory mismatch; unreferenced={}, missing={}".format(
+                    orphaned, missing
+                )
+            )
+        ordered = sorted(local_media) + postorder
+    else:
+        raise StreamingPackageValidationError(
+            "Unsupported package protocol: " + str(protocol)
+        )
+
+    if not ordered or ordered[-1] != manifest_name:
+        raise StreamingPackageValidationError(
+            "Root manifest must be the last publication artifact"
+        )
+    return [
+        (inventory[relative][0], relative, inventory[relative][1])
+        for relative in ordered
+    ]
+
+
+def reset_package_directory(directory: str, expected_parent: str):
+    """Remove only the output-id directory owned by the current VOD job.
+
+    The target must be a direct child of the caller-provided job output root;
+    symlinks and paths outside that root are rejected.
+    """
+    target_input = Path(directory)
+    parent = Path(expected_parent).resolve()
+    if target_input.is_symlink():
+        raise StreamingPackageValidationError(
+            "Refusing to reset a symlinked package directory"
+        )
+    target = target_input.resolve()
+    if target.parent != parent:
+        raise StreamingPackageValidationError(
+            "Package retry directory is not an output-id child of the job root"
+        )
+    if target.exists():
+        if not target.is_dir():
+            raise StreamingPackageValidationError(
+                "Package retry target is not a directory"
+            )
+        import shutil
+        shutil.rmtree(str(target))
+    target.mkdir(parents=True, exist_ok=True)
+    return str(target)
