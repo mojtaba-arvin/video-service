@@ -346,6 +346,23 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             output_id, request_id,
         )
 
+    def test_output_key_cannot_escape_managed_local_directory(self):
+        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+
+        class PathProbe:
+            def get_outputs_root_directory(self, request_id):
+                return str(self.root / "outputs_" / request_id)
+
+        probe = PathProbe()
+        probe.root = self.root
+        with self.assertRaisesRegex(ValueError, "unsafe local filename"):
+            BaseOutputMixin.ensure_set_output_location(
+                probe,
+                request_id="path-guard",
+                output_id="p0",
+                s3_output_key="folder/..",
+            )
+
     def test_grpc_job_runs_through_celery_ffmpeg_and_storage(self):
         options = self.pb2.ConvertOptions(
             fmp4=False,
