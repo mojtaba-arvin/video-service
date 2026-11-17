@@ -16,7 +16,8 @@ The initial test suite uses Python's standard-library `unittest` runner and the 
 
 ```sh
 # Install FFmpeg and FFprobe using your platform package manager first.
-python -m pip install -r requirements-test.txt
+python -m pip install -r requirements-test-py39.txt
+# For the forward-compatibility test environment, use requirements-test-py312.txt.
 python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py --output-dir /tmp/synthetic-vod-v1
 PYTHONPATH=video-streaming python -m unittest discover -s video-streaming/tests -v
 ```
