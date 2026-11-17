@@ -103,6 +103,11 @@ class ThumbnailRenderingIntegrationTests(unittest.TestCase):
             "explicit.png", 320, 240, (320, 240)
         )
 
+    def test_unspecified_dimensions_preserve_source_size(self):
+        self.assert_thumbnail_dimensions(
+            "original-size.png", 0, 0, (640, 360)
+        )
+
     def test_missing_output_is_rejected(self):
         with self.assertRaises(ThumbnailValidationError):
             validate_thumbnail_output(
