@@ -16,6 +16,7 @@ from .domain import (
     InvalidStateTransition,
     JobState,
     StageState,
+    StageAlreadyRunning,
     WorkflowState,
     ALLOWED_STAGE_TRANSITIONS,
 )
@@ -288,9 +289,11 @@ class WorkflowRepository:
                     ).order_by(AttemptRecord.attempt_number.desc())
                 ).scalar_one_or_none()
                 if running is not None:
-                    if execution_ref and not running.execution_ref:
-                        running.execution_ref = execution_ref
-                    return running.id, running.attempt_number
+                    raise StageAlreadyRunning(
+                        "Stage {} already has active attempt {}".format(
+                            stage_key, running.attempt_number
+                        )
+                    )
 
             current = StageState(stage.status)
             if StageState.PROCESSING not in ALLOWED_STAGE_TRANSITIONS[current]:
@@ -384,7 +387,9 @@ class WorkflowRepository:
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
             if stage.status == StageState.PUBLISHING.value:
-                return False
+                raise StageAlreadyRunning(
+                    "Stage {} is already being published".format(stage_key)
+                )
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Attempt is not running")
             self._transition(stage, StageState.PUBLISHING)
