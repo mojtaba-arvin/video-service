@@ -1,6 +1,7 @@
 from abc import ABC
 from video_streaming.celery import celery_app
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.core.constants import CacheKeysTemplates
 from .base import BaseStreamingTask
 from .mixins import CallWebhookMixin
 
@@ -30,6 +31,13 @@ def call_webhook(self,
         raise self.raise_ignore(
             message=self.error_messages.REQUEST_ID_IS_REQUIRED,
             request_kwargs=self.request.kwargs)
+
+    if not webhook_url:
+        job_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=request_id)
+        )
+        if job_details:
+            webhook_url = job_details.get("webhook_url")
 
     if not webhook_url:
         # TODO notify developer
