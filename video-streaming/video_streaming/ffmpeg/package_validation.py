@@ -14,6 +14,7 @@ path traversal, dynamic MPDs, and unresolved DASH templates fail closed.
 """
 
 import json
+import math
 import os
 import re
 import subprocess
