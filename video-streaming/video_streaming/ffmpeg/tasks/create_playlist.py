@@ -1,4 +1,5 @@
 from abc import ABC
+import os
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
