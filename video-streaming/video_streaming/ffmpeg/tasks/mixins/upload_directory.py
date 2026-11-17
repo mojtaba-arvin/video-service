@@ -3,10 +3,7 @@ from functools import partial
 from celery import Task
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3UploadCallback
-from video_streaming.ffmpeg.package_validation import (
-    ordered_package_files,
-    validate_streaming_package,
-)
+from video_streaming.ffmpeg.package_publication import publish_package
 from .output import BaseOutputMixin
 
 
@@ -68,13 +65,39 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 S3_OUTPUT_BUCKET_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-    @staticmethod
-    def get_directory_size(
-            directory: str,
-            manifest_name: str) -> tuple[int, list[tuple[str, str, int]]]:
-        files = ordered_package_files(directory, manifest_name)
-        total_size = sum(file_size for _, _, file_size in files)
-        return total_size, files
+    def upload_directory(
+            self,
+            directory,
+            s3_output_key,
+            s3_output_bucket,
+            output_id,
+            request_id,
+            protocol,
+            expected_renditions=None) -> int:
+        """Validate and publish package artifacts with manifests last."""
+        directory_callback = S3UploadCallback(
+            task=self,
+            task_id=self.request.id.__str__(),
+            output_id=output_id,
+            request_id=request_id,
+        ).directory_progress
+
+        manifest_path = os.path.join(
+            directory, os.path.basename(s3_output_key)
+        )
+        publication = publish_package(
+            directory=directory,
+            manifest_path=manifest_path,
+            protocol=protocol,
+            expected_renditions=expected_renditions,
+            s3_output_key=s3_output_key,
+            s3_output_bucket=s3_output_bucket,
+            storage=self.s3_service,
+            callback_factory=lambda index, total_files, total_size: partial(
+                directory_callback, total_size, total_files, index
+            ),
+        )
+        return publication["directory_size"]
 
     def upload_directory(self,
                          directory,
