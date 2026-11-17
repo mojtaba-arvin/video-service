@@ -8,8 +8,10 @@ import unittest
 from pathlib import Path
 
 from video_streaming.ffmpeg.package_validation import (
+    PackageValidationReport,
     StreamingPackageValidationError,
     ordered_package_files,
+    validate_package,
     validate_streaming_package,
 )
 
@@ -104,6 +106,49 @@ class StreamingPackageValidationTests(unittest.TestCase):
         )
         self.assertEqual(result["renditions"], 2)
         self.assertGreaterEqual(result["segments"], 2)
+
+    def test_structured_report_captures_expected_rendition_mismatch(self):
+        directory = self.root / "hls-expected-mismatch"
+        manifest = self.make_hls_package(directory)
+        report = validate_package(
+            str(directory),
+            "hls",
+            ["video_180p.m3u8", "video_720p.m3u8"],
+            str(manifest),
+        )
+        self.assertIsInstance(report, PackageValidationReport)
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            report.errors[0].code, "expected_renditions_mismatch"
+        )
+        self.assertEqual(report.errors[0].location, str(manifest))
+        with self.assertRaises(StreamingPackageValidationError):
+            report.require_valid()
+
+    def test_structured_report_returns_actual_renditions(self):
+        directory = self.root / "hls-expected-valid"
+        manifest = self.make_hls_package(directory)
+        report = validate_package(
+            str(directory),
+            "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+        )
+        self.assertTrue(report.valid)
+        self.assertEqual(
+            report.actual_renditions,
+            ["video_180p.m3u8", "video_90p.m3u8"],
+        )
+
+    def test_rejects_empty_root_playlist_with_structured_error(self):
+        directory = self.root / "hls-empty-root"
+        directory.mkdir()
+        manifest = directory / "master.m3u8"
+        manifest.write_text("", encoding="utf-8")
+        report = validate_package(str(directory), "hls", [], str(manifest))
+        self.assertFalse(report.valid)
+        self.assertEqual(len(report.errors), 1)
+        self.assertEqual(report.errors[0].location, str(manifest))
 
     def test_rejects_hls_package_with_missing_segment(self):
         directory = self.root / "hls-missing-segment"
@@ -212,7 +257,7 @@ class StreamingPackageValidationTests(unittest.TestCase):
         (directory / "nested").mkdir()
         (directory / "nested" / "init.mp4").write_bytes(b"init")
 
-        files = ordered_package_files(str(directory), "master.m3u8")
+        files = ordered_package_files(str(directory), "master.m3u8", "hls")
         names = [relative for _, relative, _ in files]
         self.assertLess(names.index("segment-0001.m4s"), names.index("variant.m3u8"))
         self.assertLess(names.index("variant.m3u8"), names.index("master.m3u8"))
@@ -225,7 +270,7 @@ class StreamingPackageValidationTests(unittest.TestCase):
         (directory / "manifest.mpd").write_text("<MPD/>")
         (directory / "init.mp4").write_bytes(b"init")
         (directory / "segment.m4s").write_bytes(b"segment")
-        files = ordered_package_files(str(directory), "manifest.mpd")
+        files = ordered_package_files(str(directory), "manifest.mpd", "dash")
         self.assertEqual(files[-1][1], "manifest.mpd")
 
     def test_upload_order_rejects_empty_artifacts(self):
@@ -234,7 +279,7 @@ class StreamingPackageValidationTests(unittest.TestCase):
         (directory / "master.m3u8").write_text("#EXTM3U\n")
         (directory / "empty.ts").write_bytes(b"")
         with self.assertRaises(StreamingPackageValidationError):
-            ordered_package_files(str(directory), "master.m3u8")
+            ordered_package_files(str(directory), "master.m3u8", "hls")
 
     def test_rejects_symlinked_manifest(self):
         directory = self.root / "hls-symlink-manifest"
