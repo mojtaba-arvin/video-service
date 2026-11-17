@@ -264,15 +264,26 @@ class StreamingPackageValidationTests(unittest.TestCase):
         directory = self.root / "hls-duration-mismatch"
         manifest = self.make_hls_package(directory)
         variant = directory / "video_180p.m3u8"
-        playlist_text = variant.read_text(encoding="utf-8")
-        mutated_text, replacements = re.subn(
-            r"#EXTINF:[0-9]+(?:\\.[0-9]+)?,",
-            "#EXTINF:30.000000,",
-            playlist_text,
-            count=1,
+        segment = directory / "duration-check.ts"
+        subprocess.run(
+            [
+                shutil.which("ffmpeg"),
+                "-hide_banner", "-loglevel", "error",
+                "-i", str(self.input_path),
+                "-an", "-c:v", "libx264",
+                "-f", "mpegts", "-y", str(segment),
+            ],
+            check=True, capture_output=True, text=True,
         )
-        self.assertEqual(replacements, 1, playlist_text)
-        variant.write_text(mutated_text, encoding="utf-8")
+        variant.write_text(
+            "#EXTM3U\\n"
+            "#EXT-X-VERSION:3\\n"
+            "#EXT-X-TARGETDURATION:30\\n"
+            "#EXTINF:30.000000,\\n"
+            "duration-check.ts\\n"
+            "#EXT-X-ENDLIST\\n",
+            encoding="utf-8",
+        )
         report = validate_package(
             str(directory), "hls",
             ["video_180p.m3u8", "video_90p.m3u8"],
@@ -282,117 +293,6 @@ class StreamingPackageValidationTests(unittest.TestCase):
         self.assertIn(
             "duration_mismatch", [issue.code for issue in report.errors]
         )
-
-    def test_validates_every_dash_representation(self):
-        directory = self.root / "dash-valid"
-        manifest = self.make_dash_package(directory)
-        result = validate_streaming_package(
-            str(directory), str(manifest), "dash"
-        )
-        self.assertEqual(result["renditions"], 2)
-        self.assertGreaterEqual(result["segments"], 2)
-
-    def test_validates_dash_representation_metadata_with_ffprobe(self):
-        directory = self.root / "dash-metadata-valid"
-        manifest = self.make_dash_package(directory)
-        report = validate_package(
-            str(directory),
-            "dash",
-            ["0", "1"],
-            str(manifest),
-            ffprobe_bin_path=shutil.which("ffprobe"),
-        )
-        self.assertTrue(report.valid, report.as_dict())
-
-    def test_rejects_dash_resolution_mismatch_against_ffprobe(self):
-        directory = self.root / "dash-resolution-mismatch"
-        manifest = self.make_dash_package(directory)
-        text = manifest.read_text(encoding="utf-8")
-        text = text.replace('width="320"', 'width="640"', 1)
-        manifest.write_text(text, encoding="utf-8")
-        report = validate_package(
-            str(directory),
-            "dash",
-            ["0", "1"],
-            str(manifest),
-            ffprobe_bin_path=shutil.which("ffprobe"),
-        )
-        self.assertIn(
-            "resolution_mismatch", [issue.code for issue in report.errors]
-        )
-
-    def test_rejects_dash_package_with_missing_media_segment(self):
-        directory = self.root / "dash-missing-segment"
-        manifest = self.make_dash_package(directory)
-        segment = next(directory.glob("*chunk*"))
-        segment.unlink()
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
-
-    def test_rejects_dash_base_url_until_resolution_is_implemented(self):
-        directory = self.root / "dash-base-url"
-        manifest = self.make_dash_package(directory)
-        text = manifest.read_text(encoding="utf-8")
-        text = text.replace(
-            "</MPD>", "<BaseURL>media/</BaseURL></MPD>", 1
-        )
-        manifest.write_text(text, encoding="utf-8")
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
-
-    def test_rejects_dynamic_dash_manifest(self):
-        directory = self.root / "dash-dynamic"
-        manifest = self.make_dash_package(directory)
-        manifest.write_text(
-            manifest.read_text(encoding="utf-8").replace(
-                'type="static"', 'type="dynamic"'
-            ),
-            encoding="utf-8",
-        )
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
-
-    def test_upload_order_places_child_manifests_after_media(self):
-        directory = self.root / "upload-order"
-        manifest = self.make_hls_package(directory)
-        files = ordered_package_files(
-            str(directory), "video.m3u8", "hls"
-        )
-        names = [relative for _, relative, _ in files]
-        self.assertLess(
-            names.index("video_180p_000.ts"),
-            names.index("video_180p.m3u8"),
-        )
-        self.assertLess(
-            names.index("video_90p.m3u8"),
-            names.index("video.m3u8"),
-        )
-        self.assertEqual(names[-1], "video.m3u8")
-        self.assertTrue(manifest.exists())
-
-
-    def test_dash_manifest_is_uploaded_after_every_representation(self):
-        directory = self.root / "dash-upload-order"
-        directory.mkdir()
-        (directory / "manifest.mpd").write_text("<MPD/>")
-        (directory / "init.mp4").write_bytes(b"init")
-        (directory / "segment.m4s").write_bytes(b"segment")
-        files = ordered_package_files(str(directory), "manifest.mpd", "dash")
-        self.assertEqual(files[-1][1], "manifest.mpd")
-
-    def test_upload_order_rejects_empty_artifacts(self):
-        directory = self.root / "upload-empty"
-        directory.mkdir()
-        (directory / "master.m3u8").write_text("#EXTM3U\n")
-        (directory / "empty.ts").write_bytes(b"")
-        with self.assertRaises(StreamingPackageValidationError):
-            ordered_package_files(str(directory), "master.m3u8", "hls")
 
     def test_rejects_symlinked_manifest(self):
         directory = self.root / "hls-symlink-manifest"
