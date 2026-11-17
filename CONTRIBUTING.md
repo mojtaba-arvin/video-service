@@ -21,9 +21,9 @@ python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py --output-dir 
 PYTHONPATH=video-streaming python -m unittest discover -s video-streaming/tests -v
 ```
 
-GitHub Actions runs this command for pull requests targeting `develop` and for pushes to `develop`.
+GitHub Actions runs this command for pull requests targeting `develop` and for pushes to `develop`. A separate Python 3.12 job runs the same regression suite.
 
-The CI job now validates configuration, environment-file tracking rules, and thumbnail rendering/output validation through real FFmpeg and FFprobe executions. It still does not validate Celery orchestration, Redis, RabbitMQ, S3 publication, container builds, gRPC authentication, webhook security, or a complete VOD job.
+The CI job now validates configuration, environment-file tracking rules, and thumbnail rendering/output validation through real FFmpeg and FFprobe executions. It still does not validate Celery orchestration, Redis, RabbitMQ, S3 publication, container builds, gRPC authentication, webhook security, or a complete VOD job. The legacy service baseline is Python 3.9, which reached end of life on 2025-10-31. CI keeps a Python 3.9 backward-compatibility job and separately runs the regression suite on Python 3.12. The Python 3.12 job covers only the current tests; it does not prove that the full service and all runtime requirements are compatible. Upgrade the production/runtime baseline in a dedicated, tested dependency and container migration.
 
 
 ## Agent-assisted development
