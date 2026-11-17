@@ -8,6 +8,7 @@ from pathlib import Path
 
 from video_streaming.ffmpeg.package_validation import (
     StreamingPackageValidationError,
+    ordered_package_files,
     validate_streaming_package,
 )
 
@@ -173,6 +174,45 @@ class StreamingPackageValidationTests(unittest.TestCase):
         with self.assertRaises(StreamingPackageValidationError):
             validate_streaming_package(
                 str(directory), str(manifest), "dash"
+            )
+
+    def test_upload_order_places_all_manifests_after_media(self):
+        directory = self.root / "upload-order"
+        directory.mkdir()
+        (directory / "master.m3u8").write_text("#EXTM3U\n")
+        (directory / "variant.m3u8").write_text("#EXTM3U\n")
+        (directory / "manifest.mpd").write_text("<MPD/>")
+        (directory / "segment-0001.m4s").write_bytes(b"segment")
+        (directory / "nested").mkdir()
+        (directory / "nested" / "init.mp4").write_bytes(b"init")
+
+        files = ordered_package_files(str(directory), "master.m3u8")
+        names = [relative for _, relative, _ in files]
+        self.assertLess(names.index("segment-0001.m4s"), names.index("variant.m3u8"))
+        self.assertLess(names.index("variant.m3u8"), names.index("master.m3u8"))
+        self.assertEqual(names[-1], "master.m3u8")
+        self.assertIn("nested/init.mp4", names)
+
+    def test_upload_order_rejects_empty_artifacts(self):
+        directory = self.root / "upload-empty"
+        directory.mkdir()
+        (directory / "master.m3u8").write_text("#EXTM3U\n")
+        (directory / "empty.ts").write_bytes(b"")
+        with self.assertRaises(StreamingPackageValidationError):
+            ordered_package_files(str(directory), "master.m3u8")
+
+    def test_rejects_hls_path_traversal_reference(self):
+        directory = self.root / "hls-path-traversal"
+        directory.mkdir()
+        (directory / "master.m3u8").write_text(
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=100000\n"
+            "../outside.m3u8\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(StreamingPackageValidationError):
+            validate_streaming_package(
+                str(directory), str(directory / "master.m3u8"), "hls"
             )
 
     def test_rejects_unsupported_dash_template_repeat(self):
