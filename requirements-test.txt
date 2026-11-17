@@ -1,3 +1,2 @@
-# Minimal, pinned dependencies used by the regression suite.
-python-decouple==3.4
+# Shared dependencies required by the regression test suite.
 ffmpeg-python==0.2.0
