@@ -264,12 +264,15 @@ class StreamingPackageValidationTests(unittest.TestCase):
         directory = self.root / "hls-duration-mismatch"
         manifest = self.make_hls_package(directory)
         variant = directory / "video_180p.m3u8"
-        variant.write_text(
-            variant.read_text(encoding="utf-8").replace(
-                "#EXTINF:1.000000,", "#EXTINF:5.000000,", 1
-            ),
-            encoding="utf-8",
+        playlist_text = variant.read_text(encoding="utf-8")
+        mutated_text, replacements = re.subn(
+            r"#EXTINF:[0-9]+(?:\\.[0-9]+)?,",
+            "#EXTINF:30.000000,",
+            playlist_text,
+            count=1,
         )
+        self.assertEqual(replacements, 1, playlist_text)
+        variant.write_text(mutated_text, encoding="utf-8")
         report = validate_package(
             str(directory), "hls",
             ["video_180p.m3u8", "video_90p.m3u8"],
