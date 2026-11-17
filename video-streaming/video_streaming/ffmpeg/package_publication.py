@@ -5,7 +5,6 @@ HEAD-verified, and successfully read through a one-byte ranged GET. The root
 manifest is withdrawn before retry publication and uploaded last.
 """
 
-import os
 from pathlib import Path
 
 from video_streaming.ffmpeg.package_validation import (
@@ -91,7 +90,6 @@ def publish_package(
         total_size = sum(file_size for _, _, file_size in files)
         total_files = len(files)
 
-    try:
         for index, (file_path, relative_path, file_size) in enumerate(files):
             local_path = Path(file_path)
             object_key = _object_key(prefix, relative_path)
