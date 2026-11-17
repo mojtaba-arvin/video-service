@@ -17,6 +17,10 @@ class ChainCallbackMixin(object):
             result = args.pop(0)
             if isinstance(result, dict):
                 kwargs.update(result)
+            elif isinstance(result, (list, tuple)):
+                for item in result:
+                    if isinstance(item, dict):
+                        kwargs.update(item)
             self.request.args = args
             self.request.kwargs = kwargs
             args = tuple(args)

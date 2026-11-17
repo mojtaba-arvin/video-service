@@ -246,7 +246,14 @@ class CreateJobMixin(object):
 
         chain_items = []
         for level_tasks in ordered_levels:
-            if level_tasks:
+            if not level_tasks:
+                continue
+            # A singleton group is not a useful parallel boundary and can
+            # discard the preceding result when Celery links groups/chords.
+            # Keep serial stages as signatures; use groups only for fan-out.
+            if len(level_tasks) == 1:
+                chain_items.append(level_tasks[0])
+            else:
                 chain_items.append(group(*level_tasks))
 
         job = chain(*chain_items)
@@ -317,10 +324,14 @@ class CreateJobMixin(object):
         watermarked_thumbnails_ids: list[str] = []
         no_watermarked_playlists_ids: list[str] = []
         no_watermarked_thumbnails_ids: list[str] = []
-        request_has_watermark: bool = request.watermark.upload_to.key \
+        request_has_watermark: bool = bool(
+            request.watermark.s3_input.key
             and not request.watermark.s3_input.key.isspace()
-        upload_watermarked_video: bool = request.watermark.upload_to.key \
+        )
+        upload_watermarked_video: bool = bool(
+            request.watermark.upload_to.key
             and not request.watermark.upload_to.key.isspace()
+        )
         watermarked_video_output_id: str = CacheKeysTemplates. \
             WATERMARKED_VIDEO_OUTPUT_ID.format(number=0)
         request_outputs: list = [
@@ -334,11 +345,11 @@ class CreateJobMixin(object):
 
         # For strings in proto3, the default value is the empty string
         # check input key to not be empty string
-        if request.video.s3_input.key.isspace():
+        if not request.video.s3_input.key or request.video.s3_input.key.isspace():
             raise exceptions.S3KeyCanNotBeEmptyException
 
         for input_number, input_object, input_type in request_inputs:
-            if input_object.s3_input.key.isspace():
+            if not input_object.s3_input.key or input_object.s3_input.key.isspace():
                 # watermark is optional input, skip it if empty
                 continue
             # is video exist on the cloud
@@ -381,7 +392,7 @@ class CreateJobMixin(object):
         output_buckets: list[str] = []
         output_locations: list[tuple] = []
         for output in request_outputs:
-            if output.upload_to.key.isspace():
+            if not output.upload_to.key or output.upload_to.key.isspace():
                 continue
 
             self._validate_output_bucket(output)

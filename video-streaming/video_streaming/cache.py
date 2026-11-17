@@ -11,7 +11,7 @@ class RedisCache:
         url = url or self.REDIS_URL
         self.redis = redis.from_url(
             url,
-            charset="utf-8",
+            encoding="utf-8",
             decode_responses=True,
             **kwargs)
 
