@@ -8,3 +8,6 @@ Keep changes narrow and evidence-backed. Preserve the Python 3.9 compatibility
 baseline, prefer generated FFmpeg lavfi fixtures over downloaded media, add
 tests in the same PR as behavior changes, and update Issue #54 when acceptance
 status changes. Do not turn roadmap items into implemented-feature claims.
+
+Use the specialist profiles under .github/agents/ for focused media-pipeline,
+read-only security-review, or orchestration/MCP design tasks when appropriate.
