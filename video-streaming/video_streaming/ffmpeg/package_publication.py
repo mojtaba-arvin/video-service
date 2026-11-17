@@ -74,6 +74,7 @@ def publish_package(
     # Remove the prior root publication point before validation or writes.
     # If a retry is invalid or interrupted, an old manifest cannot advertise it.
     storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+    manifest_keys = [root_key]
 
     try:
         report = validate_package(
@@ -95,6 +96,10 @@ def publish_package(
             for file_path, relative_path, _ in files
             if Path(file_path).suffix.lower() in (".m3u8", ".mpd")
         ]
+        for manifest_key in manifest_keys:
+            storage.delete_object(
+                key=manifest_key, bucket_name=s3_output_bucket
+            )
 
         for index, (file_path, relative_path, file_size) in enumerate(files):
             local_path = Path(file_path)
@@ -147,7 +152,7 @@ def publish_package(
         # Never leave old/partial playlists advertising an incomplete package.
         # Media segments may be overwritten deterministically, but no manifest
         # created or replaced by this attempt remains visible.
-        for manifest_key in set([root_key] + locals().get("manifest_keys", [])):
+        for manifest_key in set(manifest_keys):
             storage.delete_object(
                 key=manifest_key, bucket_name=s3_output_bucket
             )
