@@ -5,6 +5,7 @@ HEAD-verified, and successfully read through a one-byte ranged GET. The root
 manifest is withdrawn before retry publication and uploaded last.
 """
 
+import os
 from pathlib import Path
 
 from video_streaming.ffmpeg.package_validation import (
@@ -71,10 +72,20 @@ def publish_package(
     prefix = s3_output_key.rpartition("/")[0]
     root_key = _object_key(prefix, manifest_relative)
 
-    # Remove the prior root publication point before validation or writes.
-    # If a retry is invalid or interrupted, an old manifest cannot advertise it.
-    storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+    # Withdraw the root and child manifests already present in this isolated
+    # output directory. A failed retry must not leave any old playlist
+    # advertising assets while the package is being replaced.
     manifest_keys = [root_key]
+    for current, directories, filenames in os.walk(
+            str(root), followlinks=False):
+        for filename in filenames:
+            if Path(filename).suffix.lower() in (".m3u8", ".mpd"):
+                relative = (Path(current) / filename).relative_to(root).as_posix()
+                key = _object_key(prefix, relative)
+                if key not in manifest_keys:
+                    manifest_keys.append(key)
+    for key in manifest_keys:
+        storage.delete_object(key=key, bucket_name=s3_output_bucket)
 
     try:
         report = validate_package(
