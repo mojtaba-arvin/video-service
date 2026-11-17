@@ -30,7 +30,7 @@ The CI job now validates configuration, environment-file tracking rules, and thu
 
 Read the repository-root AGENTS.md before using an AI coding agent. It defines
 the verified architecture boundaries and local verification commands. Use the
-task-specific skills under .github/skills/ for FFmpeg regression testing,
+task-specific skills under .agents/skills/ for FFmpeg regression testing,
 durable workflow design, MCP/agent contracts, cost and codec benchmarking,
 and security reviews. These are process guides, not implemented capabilities.
 
