@@ -926,7 +926,12 @@ def reset_package_directory(directory: str, expected_parent: str):
     symlinks and paths outside that root are rejected.
     """
     target_input = Path(directory)
-    parent = Path(expected_parent).resolve()
+    parent_input = Path(expected_parent)
+    if parent_input.is_symlink():
+        raise StreamingPackageValidationError(
+            "Refusing to reset an output directory with a symlinked job root"
+        )
+    parent = parent_input.resolve()
     if target_input.is_symlink():
         raise StreamingPackageValidationError(
             "Refusing to reset a symlinked package directory"
