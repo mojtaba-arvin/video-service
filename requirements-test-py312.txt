@@ -1,0 +1,3 @@
+-r requirements-test.txt
+# python-decouple 3.8 removed the distutils dependency used by older releases.
+python-decouple==3.8
