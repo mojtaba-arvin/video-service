@@ -6,7 +6,7 @@ This documentation describes both the **verified current implementation** and th
 
 1. [Product vision and architecture principles](architecture/vision.md) — what this project is becoming, the problems it addresses, product boundaries, and measurable outcomes.
 2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop`, what the code demonstrates, and the concrete reliability and security gaps found during repository inspection.
-3. [Implementation roadmap](roadmap/README.md) — sequenced delivery stages, dependencies, acceptance gates, and explicit deferrals.
+3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities, acceptance evidence, and explicit deferrals.
 
 ## Documentation rules
 
