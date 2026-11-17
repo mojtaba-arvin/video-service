@@ -5,7 +5,10 @@ from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
-from video_streaming.ffmpeg.thumbnail import render_thumbnail
+from video_streaming.ffmpeg.thumbnail import (
+    ThumbnailValidationError,
+    render_thumbnail,
+)
 from .base import BaseStreamingTask
 from .mixins import GenerateThumbnailMixin
 
@@ -119,9 +122,10 @@ def generate_thumbnail(
             thumbnail_time=thumbnail_time,
             scale_width=scale_width,
             scale_height=scale_height,
-            ffmpeg_bin_path=settings.FFMPEG_BIN_PATH
+            ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH
         )
-    except ffmpeg.Error as e:
+    except (ffmpeg.Error, ThumbnailValidationError) as e:
         raise self.retry(exc=e)
 
     self.save_output_status(
