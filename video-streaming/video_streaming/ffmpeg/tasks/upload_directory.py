@@ -69,6 +69,13 @@ def upload_directory(self,
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
+    # A retry must not inherit a remote-validation proof from a prior attempt.
+    self.cache.delete(
+        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+            request_id=request_id, output_id=output_id
+        )
+    )
+
     # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.UPLOADING,
