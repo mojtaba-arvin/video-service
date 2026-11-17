@@ -1,5 +1,6 @@
 """PostgreSQL-backed tests for durable workflow state and recovery."""
 
+import os
 import threading
 import unittest
 from datetime import timedelta
@@ -13,6 +14,10 @@ from video_streaming.workflows.domain import (
 from video_streaming.workflows.repository import WorkflowRepository, utcnow
 
 
+@unittest.skipUnless(
+    os.environ.get("WORKFLOW_DATABASE_URL"),
+    "PostgreSQL workflow integration job supplies WORKFLOW_DATABASE_URL",
+)
 class WorkflowRepositoryTests(unittest.TestCase):
 
     @classmethod
