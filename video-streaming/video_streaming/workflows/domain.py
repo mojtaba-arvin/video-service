@@ -70,3 +70,7 @@ class InvalidStateTransition(RuntimeError):
 
 class IdempotencyConflict(RuntimeError):
     """Raised when one idempotency key is reused for a different request."""
+
+
+class StageAlreadyRunning(RuntimeError):
+    """Raised when another execution attempt currently owns a workflow stage."""
