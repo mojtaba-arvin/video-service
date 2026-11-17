@@ -62,12 +62,11 @@ you can `clone` these repositories:
 
 ### 2. Setup video service project environments
 
-You should create an `.env` file at `video-streaming/video_streaming`
-. There is a sample of required environments that you can use it:
+Create the runtime `.env` file at `video-streaming/video_streaming` from the tracked, non-secret template:
+```sh
+cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 ```
-cp video-streaming/video_streaming/.env.local video-streaming/video_streaming/.env
-```
-The project uses `python-decouple` package, you can add other variables and cast them in `settings.py`. or anywhere in project using `RepositoryEnv` class
+Replace the placeholder storage credentials and endpoint with values for your own environment. The generated `.env` file is ignored by Git and must never be committed. The project uses `python-decouple`; additional variables can be declared and cast in `settings.py` or read through `RepositoryEnv`.
 
 |    | VARIABLE                         | DESCRIPTION                                                                 |
 |----|----------------------------------|-----------------------------------------------------------------------------|
