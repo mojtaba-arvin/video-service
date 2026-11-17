@@ -8,7 +8,7 @@ from sqlalchemy import (
     Numeric, String, Text, UniqueConstraint, create_engine, select, func,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from .domain import (
     AttemptState,
@@ -548,7 +548,10 @@ class WorkflowRepository:
             ).scalars().all()
             for attempt in attempts:
                 stage = session.get(StageRecord, attempt.stage_id)
-                if stage.status != StageState.PROCESSING.value:
+                if stage.status not in (
+                        StageState.PROCESSING.value,
+                        StageState.VALIDATED.value,
+                        StageState.PUBLISHING.value):
                     continue
                 self._transition(stage, StageState.RETRY_WAIT)
                 attempt.state = AttemptState.RETRYABLE.value
