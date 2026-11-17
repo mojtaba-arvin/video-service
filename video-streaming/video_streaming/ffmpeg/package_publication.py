@@ -90,6 +90,11 @@ def publish_package(
         )
         total_size = sum(file_size for _, _, file_size in files)
         total_files = len(files)
+        manifest_keys = [
+            _object_key(prefix, relative_path)
+            for file_path, relative_path, _ in files
+            if Path(file_path).suffix.lower() in (".m3u8", ".mpd")
+        ]
 
         for index, (file_path, relative_path, file_size) in enumerate(files):
             local_path = Path(file_path)
@@ -139,9 +144,13 @@ def publish_package(
             expected_size=manifest.stat().st_size,
         )
     except Exception:
-        # Never leave an old or partially replaced root manifest advertising
-        # a package whose full dependency graph was not verified.
-        storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+        # Never leave old/partial playlists advertising an incomplete package.
+        # Media segments may be overwritten deterministically, but no manifest
+        # created or replaced by this attempt remains visible.
+        for manifest_key in set([root_key] + locals().get("manifest_keys", [])):
+            storage.delete_object(
+                key=manifest_key, bucket_name=s3_output_bucket
+            )
         raise
 
     return {
