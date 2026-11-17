@@ -66,7 +66,8 @@ def publish_package(
     """
     root = Path(directory).resolve()
     manifest_input = Path(manifest_path)
-    manifest_relative = manifest_input.relative_to(root).as_posix()
+    manifest = manifest_input.resolve()
+    manifest_relative = manifest.relative_to(root).as_posix()
     prefix = s3_output_key.rpartition("/")[0]
     root_key = _object_key(prefix, manifest_relative)
 
