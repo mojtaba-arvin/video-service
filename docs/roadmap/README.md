@@ -32,9 +32,9 @@ The canonical task status is tracked in [Issue #54](https://github.com/mojtaba-a
 
 | Priority | Outcome lane | Current increment / next proof | Status |
 |---|---|---|---|
-| P0 | Engineering foundation | Python 3.9 unit-test runner, settings regressions, and CI on PR/push | **Done** — PR #55; five tests pass |
+| P0 | Engineering foundation | Python 3.9 unit-test runner, generated VOD fixture validation, pinned Actions, CodeQL, dependency review, and Dependabot | **Done** — PR #55 established the runner; 17 tests now run in the expanded CI workflow |
 | P0 | Configuration and portability | Remove tracked local environment values, add safe template and enforce ignore rules in CI | **Done** — PR #56 |
-| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 12 CI tests pass, including three FFmpeg/FFprobe render integrations |
+| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 17 tests pass in CI, including eight FFmpeg/FFprobe render and validation integrations |
 | P1 | Execution correctness | Validate HLS/DASH playlist manifests and expected renditions before publication; test non-zero FFmpeg exit, invalid/partial output, and cancellation | **Next** — thumbnail output validation is done in PR #59; playlist validation remains open |
 | P1 | Process isolation | Supervise FFmpeg process groups/descendants; define timeout, termination, resource bounds, and cleanup semantics | Planned |
 | P1 | API and outbound security | Redacted structured logs; caller authentication/authorization; SSRF-safe webhook delivery with DNS/redirect controls | Planned |
