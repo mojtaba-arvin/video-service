@@ -9,6 +9,7 @@ merges on its own.
 
 GitHub documents branch protection rules and repository rulesets for public
 repositories on GitHub Free. No paid plan is needed to protect this branch.
+See the official [ruleset availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) and [ruleset management](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets) documentation.
 
 ## Recommended active ruleset for develop
 
@@ -44,13 +45,26 @@ Avoid duplicate job/check names across workflows.
 5. Restrict Actions to GitHub-authored and verified actions used by this repo,
    or explicitly allow-list required actions.
 6. Enable the dependency graph, Dependabot alerts, and Dependabot security
-   updates.
-7. Enable secret scanning and push protection where offered for this public
-   repository.
-8. Use the committed CodeQL advanced workflow. Do not also enable CodeQL
-   default setup unless the advanced workflow is deliberately removed.
+   updates. GitHub documents Dependabot version updates for all repositories.
+7. Secret scanning runs automatically and for free on public repositories.
+   Enable user-facing secret scanning alerts and push protection where offered;
+   they are not all automatically enabled for public repositories.
+8. Use either the committed CodeQL advanced workflow or GitHub's low-maintenance
+   default setup, not both at once. GitHub recommends starting with default
+   setup when custom configuration is unnecessary; this repository currently
+   uses advanced setup to pin actions and control trusted PR analysis.
 9. Standard GitHub-hosted runner usage is free for public repositories; larger
    runners are billed. Keep media fixtures small and generate them at runtime.
+   Advanced CodeQL analysis uses Actions workflows; standard hosted-runner
+   usage remains free for this public repository.
+
+## Agent customization
+
+Shared, portable skills live in .agents/skills so they can be used by coding
+agents that support the Agent Skills convention. GitHub Copilot-specific
+custom agent profiles live in .github/agents. The project uses AGENTS.md for
+cross-agent repository instructions and .github/copilot-instructions.md for
+Copilot repository instructions. See GitHub's [agent skills](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills) and [custom agent profiles](https://docs.github.com/en/copilot/reference/custom-agents-configuration) documentation.
 
 ## Solo-maintainer merge policy
 
@@ -82,5 +96,6 @@ GitHub automatic head-branch deletion setting for future merges.
 Ruleset creation, branch protection, repository-level security switches,
 merge-method settings, and automatic branch deletion are repository settings.
 The connected GitHub integration can read these settings but does not expose
-the write operations needed to apply them. They must be confirmed by a
+the write operations needed to apply them. GitHub requires repository admin
+access (or the edit repository rules permission) to create or edit rulesets. They must be confirmed by a
 repository administrator in GitHub settings.
