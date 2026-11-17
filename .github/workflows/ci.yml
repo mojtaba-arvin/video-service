@@ -9,18 +9,25 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-tests:
     name: Unit tests (Python 3.9)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements-test-py39.txt
 
       - name: Install FFmpeg
         run: |
@@ -28,7 +35,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y ffmpeg
 
       - name: Install test dependencies
-        run: python -m pip install --disable-pip-version-check "python-decouple==3.4" "ffmpeg-python==0.2.0"
+        run: python -m pip install --disable-pip-version-check --requirement requirements-test-py39.txt
 
       - name: Validate environment template tracking rules
         run: |
@@ -43,6 +50,44 @@ jobs:
           fi
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env.local
+
+      - name: Generate and validate synthetic VOD corpus
+        run: |
+          python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py \
+            --output-dir "$RUNNER_TEMP/synthetic-vod-v1"
+
+      - name: Run regression tests
+        env:
+          PYTHONPATH: video-streaming
+        run: python -m unittest discover -s video-streaming/tests -v
+
+  compatibility:
+    name: Regression suite (Python 3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test-py312.txt
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-test-py312.txt
+
+      - name: Generate and validate synthetic VOD corpus
+        run: |
+          python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py \
+            --output-dir "$RUNNER_TEMP/synthetic-vod-v1"
 
       - name: Run regression tests
         env:

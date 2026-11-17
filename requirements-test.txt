@@ -1,0 +1,2 @@
+# Shared dependencies required by the regression test suite.
+ffmpeg-python==0.2.0

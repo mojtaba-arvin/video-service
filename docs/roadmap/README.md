@@ -32,9 +32,9 @@ The canonical task status is tracked in [Issue #54](https://github.com/mojtaba-a
 
 | Priority | Outcome lane | Current increment / next proof | Status |
 |---|---|---|---|
-| P0 | Engineering foundation | Python 3.9 unit-test runner, settings regressions, and CI on PR/push | **Done** — PR #55; five tests pass |
+| P0 | Engineering foundation | Python 3.9 unit-test runner, generated VOD fixture validation, pinned Actions, CodeQL, dependency review, and Dependabot | **Done** — PR #55 established the runner; 17 tests now run in the expanded CI workflow |
 | P0 | Configuration and portability | Remove tracked local environment values, add safe template and enforce ignore rules in CI | **Done** — PR #56 |
-| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 12 CI tests pass, including three FFmpeg/FFprobe render integrations |
+| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 17 tests pass in CI, including eight FFmpeg/FFprobe render and validation integrations |
 | P1 | Execution correctness | Validate HLS/DASH playlist manifests and expected renditions before publication; test non-zero FFmpeg exit, invalid/partial output, and cancellation | **Next** — thumbnail output validation is done in PR #59; playlist validation remains open |
 | P1 | Process isolation | Supervise FFmpeg process groups/descendants; define timeout, termination, resource bounds, and cleanup semantics | Planned |
 | P1 | API and outbound security | Redacted structured logs; caller authentication/authorization; SSRF-safe webhook delivery with DNS/redirect controls | Planned |
@@ -79,3 +79,18 @@ The initial proof can use the existing Celery path and a local filesystem/S3 tes
 ## Explicitly deferred unless evidence changes
 
 Advanced spot/preemptible scheduling, live migration, distributed inference, mandatory Kubernetes, live video, DRM/multi-DRM, just-in-time packaging, and player SDK integration are not prerequisites for the initial reliable VOD platform. Revisit them only when their dependencies, a target workload, and a measurable success criterion are established.
+
+
+## Additional P0 — runtime security baseline
+
+The legacy service currently targets Python 3.9. Python 3.9 reached end of
+life on 2025-10-31 and no longer receives official security updates
+([Python version status](https://devguide.python.org/versions/)). CI now keeps
+a Python 3.9 regression check for backward compatibility and adds a separate
+Python 3.12 regression-suite run. The latter is not evidence that the full
+service, its old runtime dependencies, or its container is compatible.
+
+Next acceptance increment: inventory the runtime image and all pinned
+dependencies, select a supported Python target, prove compatibility with
+gRPC/Celery/Redis/S3/FFmpeg integrations, rebuild the container, and run a
+complete VOD smoke test before changing the production baseline.

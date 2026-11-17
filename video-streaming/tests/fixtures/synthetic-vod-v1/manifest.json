@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "dataset_id": "synthetic-vod-v1",
+  "description": "Small synthetic FFmpeg regression corpus generated from lavfi sources.",
+  "source_policy": "Generated at test time; no third-party or customer media is included.",
+  "fixtures": [
+    {
+      "id": "landscape-silent-24fps",
+      "filename": "landscape-silent-24fps.mp4",
+      "video_source": "testsrc2=size=640x360:rate=24:duration=6",
+      "audio_source": null,
+      "duration_seconds": 6.0,
+      "duration_tolerance_seconds": 0.5,
+      "width": 640,
+      "height": 360,
+      "frame_rate": "24/1",
+      "video_codec": "mpeg4",
+      "audio_codec": null,
+      "video_gop": 48
+    },
+    {
+      "id": "portrait-audio-30fps",
+      "filename": "portrait-audio-30fps.mp4",
+      "video_source": "testsrc2=size=360x640:rate=30:duration=5",
+      "audio_source": "sine=frequency=997:sample_rate=48000:duration=5",
+      "duration_seconds": 5.0,
+      "duration_tolerance_seconds": 0.5,
+      "width": 360,
+      "height": 640,
+      "frame_rate": "30/1",
+      "video_codec": "mpeg4",
+      "audio_codec": "aac",
+      "video_gop": 60
+    },
+    {
+      "id": "low-resolution-color-15fps",
+      "filename": "low-resolution-color-15fps.mp4",
+      "video_source": "color=c=blue:s=320x180:r=15:d=2",
+      "audio_source": null,
+      "duration_seconds": 2.0,
+      "duration_tolerance_seconds": 0.5,
+      "width": 320,
+      "height": 180,
+      "frame_rate": "15/1",
+      "video_codec": "mpeg4",
+      "audio_codec": null,
+      "video_gop": 30
+    }
+  ]
+}
