@@ -158,8 +158,7 @@ been merged to `develop`:
 | Test and CI baseline | Python 3.9 `unittest` job runs on Ubuntu 24.04 for PRs and pushes to develop | Merged in PR #55 |
 | Environment file hygiene | Tracked `.env.local` removed; non-secret `.env.example` added; `.env` and `.env.*` ignored except the template | Merged in PR #56 |
 
-The initial CI suite has five isolated configuration regression tests. It does not
-yet cover the complete gRPC → Celery → FFmpeg → object-storage VOD path.
+The CI suite now runs 12 tests: five isolated settings regressions, four scale-normalization checks, and three deterministic FFmpeg render/FFprobe dimension checks. It still does not cover the complete gRPC → Celery → FFmpeg → object-storage VOD path.
 
 ### Environment history finding
 
@@ -174,15 +173,9 @@ been rewritten, and no external service credentials were changed.
 
 ### Current media correctness work
 
-The original thumbnail scale-default defect is being addressed in PR #57 by
-normalizing width and height independently and testing actual FFmpeg renders
-with FFprobe. Until that PR is merged, the fix must be treated as proposed,
-not as a capability already present on `develop`.
+The thumbnail scale-default defect was fixed in PR #57: width and height are normalized independently and the renderer is covered by actual FFmpeg/FFprobe integration tests. The fix is merged to `develop`.
 
 ### Current verification boundary
 
-The latest fully merged baseline includes configuration tests and environment
-tracking checks. It does not yet establish durable job state, FFmpeg process-tree
-isolation, webhook SSRF defenses, authenticated tenant boundaries, atomic
-artifact publication, or player QoE. Those remain unimplemented or unverified
+The latest fully merged baseline includes configuration tests, environment tracking checks, and thumbnail rendering integration. It does not yet establish durable job state, FFmpeg process-tree isolation, playlist artifact validation/publication safety, webhook SSRF defenses, authenticated tenant boundaries, or player QoE. Those remain unimplemented or unverified
 rather than implied by the roadmap.
