@@ -5,6 +5,7 @@ from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
 from video_streaming.ffmpeg.package_validation import validate_streaming_package
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.workflows.service import get_workflow_repository
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -108,6 +109,14 @@ def create_playlist(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
+    attempt_id, attempt_number = get_workflow_repository().start_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        execution_backend="celery",
+        execution_ref=self.request.id.__str__(),
+    )
+    input_bytes = os.path.getsize(video_path)
+
     # save primary status using request_id
     self.save_primary_status(
         self.primary_status.OUTPUTS_PROGRESSING,
@@ -150,10 +159,16 @@ def create_playlist(
             ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run)
-        validate_streaming_package(
+        validation_report = validate_streaming_package(
             directory=directory,
             manifest_path=output_path,
             protocol="hls" if is_hls else "dash",
+        )
+        get_workflow_repository().mark_validated(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report,
         )
     except Exception as e:
 
@@ -162,8 +177,17 @@ def create_playlist(
         if self.is_output_forced_to_stop(request_id, output_id):
             raise self.raise_revoke_output(request_id, output_id)
 
-        # TODO handle possible Runtime Errors
-        # notice : video processing has cost to retry
+        # The attempt is durable and retryable before Celery schedules its
+        # next execution. Redis TTL is not involved in recovery semantics.
+        get_workflow_repository().fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=True,
+            error_code="PACKAGE_CREATION_OR_VALIDATION_FAILED",
+            error_message=str(e),
+            metrics={"input_bytes": input_bytes},
+        )
         raise self.retry(
             exc=e,
             max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
@@ -179,9 +203,11 @@ def create_playlist(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
-    self.save_output_status(
-        self.output_status.PROCESSING_FINISHED,
-        output_id,
-        request_id)
-
-    return dict(directory=directory)
+    # Processing is not complete until the publication stage verifies storage.
+    return dict(
+        directory=directory,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        input_bytes=input_bytes,
+        validation_report=validation_report,
+    )
