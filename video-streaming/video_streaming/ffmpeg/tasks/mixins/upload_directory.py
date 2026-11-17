@@ -3,6 +3,10 @@ from functools import partial
 from celery import Task
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3UploadCallback
+from video_streaming.ffmpeg.package_validation import (
+    ordered_package_files,
+    validate_streaming_package,
+)
 from .output import BaseOutputMixin
 
 
@@ -66,17 +70,10 @@ class UploadDirectoryMixin(BaseOutputMixin):
 
     @staticmethod
     def get_directory_size(
-            directory: str) -> tuple[int, list[tuple[str, str, int]]]:
-        total_size = 0
-        files = []
-        for entry in os.scandir(directory):
-            if entry.is_file():
-                entry_size = entry.stat().st_size
-                files.append(
-                    (entry.path, entry.name, entry_size)
-                )
-                total_size += entry_size
-
+            directory: str,
+            manifest_name: str) -> tuple[int, list[tuple[str, str, int]]]:
+        files = ordered_package_files(directory, manifest_name)
+        total_size = sum(file_size for _, _, file_size in files)
         return total_size, files
 
     def upload_directory(self,
@@ -84,10 +81,15 @@ class UploadDirectoryMixin(BaseOutputMixin):
                          s3_output_key,
                          s3_output_bucket,
                          output_id,
-                         request_id) -> int:
+                         request_id,
+                         protocol) -> int:
         """upload the directory of the output files to S3 object storage
          Returns directory size
          """
+
+        manifest_name = os.path.basename(s3_output_key)
+        manifest_path = os.path.join(directory, manifest_name)
+        validate_streaming_package(directory, manifest_path, protocol)
 
         directory_callback = S3UploadCallback(
                 task=self,
@@ -96,9 +98,9 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 request_id=request_id,
             ).directory_progress
 
-        total_size, files = self.get_directory_size(directory)
+        total_size, files = self.get_directory_size(directory, manifest_name)
         total_files = len(files)
-        for number, (file_path, file_name, file_size) in \
+        for number, (file_path, relative_path, file_size) in \
                 enumerate(files):
             partial_callback = partial(
                 directory_callback,
@@ -106,14 +108,14 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 total_files,
                 number)
 
-            # s3_output_key as key can be something like : "folder1/folder2/example.m3u8"
-            # file names are something like "example_480p_0003.m4s" ,...
-            # this code will generate key for every file like : "folder1/folder2/example_480p_0003.m4s"
-            # to prevent upload all files with the same key
-            s3_folder = s3_output_key.rpartition('/')[0] + "/"
+            # Preserve nested package paths under the manifest's object prefix.
+            s3_folder = s3_output_key.rpartition('/')[0]
+            object_key = "/".join(
+                part for part in (s3_folder, relative_path) if part
+            )
 
             self.s3_service.upload_file_by_path(
-                key=s3_folder + file_name,
+                key=object_key,
                 file_path=file_path,
                 bucket_name=s3_output_bucket,
                 callback=partial_callback
