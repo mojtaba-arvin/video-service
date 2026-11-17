@@ -130,6 +130,15 @@ class PackagePublicationTests(unittest.TestCase):
         self.assertNotIn(self.root_key, self.storage.objects)
         self.assertNotIn("vod/variant.m3u8", self.storage.objects)
 
+    def test_root_manifest_failure_removes_child_playlist(self):
+        self.storage.fail_upload_key = "vod/master.m3u8"
+        self.storage.objects["vod/master.m3u8"] = b"old"
+        self.storage.objects["vod/variant.m3u8"] = b"old-variant"
+        with self.assertRaises(IOError):
+            self.publish()
+        self.assertNotIn("vod/master.m3u8", self.storage.objects)
+        self.assertNotIn("vod/variant.m3u8", self.storage.objects)
+
     def test_unreadable_segment_prevents_variant_and_master_publication(self):
         self.storage.unreadable_key = "vod/segment_000.ts"
         with self.assertRaises(PackagePublicationError):
