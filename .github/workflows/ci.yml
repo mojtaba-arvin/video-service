@@ -118,6 +118,11 @@ jobs:
       - name: Install isolated integration dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-integration-py39.txt
 
+      - name: Generate gRPC Python modules
+        run: |
+          cd video-streaming/scripts
+          sh generate_grpc_codes.sh
+
       - name: Run full VOD integration test
         env:
           PYTHONPATH: video-streaming
