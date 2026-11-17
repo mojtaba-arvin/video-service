@@ -16,4 +16,5 @@ def get_workflow_repository():
     return WorkflowRepository(
         settings.WORKFLOW_DATABASE_URL,
         pool_size=settings.WORKFLOW_DATABASE_POOL_SIZE,
+        max_overflow=settings.WORKFLOW_DATABASE_MAX_OVERFLOW,
     )
