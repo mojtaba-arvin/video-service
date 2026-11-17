@@ -101,6 +101,16 @@ class InMemoryS3:
             callback(len(value))
         return destination_path
 
+    def delete_object(self, key, bucket_name=None, **kwargs):
+        self.buckets.setdefault(bucket_name, {}).pop(key, None)
+        return {"Deleted": key}
+
+    def read_range(self, key, bucket_name=None, start=0, end=0):
+        value = self.buckets.get(bucket_name, {}).get(key)
+        if value is None:
+            return None
+        return value[start:end + 1]
+
     def upload_file_by_path(self, key, file_path, bucket_name=None,
                             callback=None, **kwargs):
         with open(file_path, "rb") as source:
