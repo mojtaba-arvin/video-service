@@ -1,6 +1,7 @@
 # Isolated dependencies for the Python 3.9 gRPC/Celery/FFmpeg VOD integration test.
 celery==5.6.3
 grpcio==1.78.2
+grpcio-tools==1.78.2
 grpcio-health-checking==1.78.2
 protobuf==6.33.5
 python-ffmpeg-video-streaming==0.1.14
