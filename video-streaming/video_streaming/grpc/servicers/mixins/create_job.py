@@ -246,7 +246,14 @@ class CreateJobMixin(object):
 
         chain_items = []
         for level_tasks in ordered_levels:
-            if level_tasks:
+            if not level_tasks:
+                continue
+            # A singleton group is not a useful parallel boundary and can
+            # discard the preceding result when Celery links groups/chords.
+            # Keep serial stages as signatures; use groups only for fan-out.
+            if len(level_tasks) == 1:
+                chain_items.append(level_tasks[0])
+            else:
                 chain_items.append(group(*level_tasks))
 
         job = chain(*chain_items)
