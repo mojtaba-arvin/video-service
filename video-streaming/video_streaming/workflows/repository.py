@@ -445,7 +445,13 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             attempt.metrics_json = metrics
-            attempt.artifact_count = len(artifacts)
+            prior_artifact_count = session.execute(
+                select(func.count()).select_from(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.attempt_id == attempt_id,
+                )
+            ).scalar_one()
+            attempt.artifact_count = prior_artifact_count + len(artifacts)
             estimate = self._estimate_cost(metrics, pricing)
             if estimate is not None:
                 attempt.estimated_cost = estimate
@@ -556,6 +562,12 @@ class WorkflowRepository:
                 self._transition(stage, StageState.RETRY_WAIT)
                 attempt.state = AttemptState.RETRYABLE.value
                 attempt.finished_at = now
+                started = attempt.started_at
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                attempt.duration_ms = max(
+                    0, int((now - started).total_seconds() * 1000)
+                )
                 attempt.error_code = "WORKER_LOST"
                 attempt.error_message = "Recovered stale running attempt"
                 recovered += 1
