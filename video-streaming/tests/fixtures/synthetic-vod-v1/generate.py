@@ -217,6 +217,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as exc:
         print("Synthetic corpus generation failed: {}".format(exc), file=sys.stderr)
         sys.exit(1)
