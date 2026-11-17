@@ -10,6 +10,7 @@ from video_streaming.ffmpeg.package_validation import (
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.workflows.service import get_workflow_repository
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -113,21 +114,19 @@ def create_playlist(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
+    workflow_repository = get_workflow_repository()
+    attempt_id, attempt_number = workflow_repository.start_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        execution_backend="celery",
+        execution_ref=self.request.id.__str__(),
+    )
+    input_bytes = os.path.getsize(video_path)
+
     # save primary status using request_id
     self.save_primary_status(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
-
-    # Clear proofs from any earlier attempt; only this attempt may authorize
-    # the later PROCESSING_FINISHED transition.
-    self.cache.delete(
-        CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-            request_id=request_id, output_id=output_id
-        ),
-        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
-            request_id=request_id, output_id=output_id
-        ),
-    )
 
     # save output status using output_id and request_id
     self.save_output_status(
@@ -197,12 +196,12 @@ def create_playlist(
             ),
         )
         validation_report.require_valid()
-        self.cache.set(
-            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-                request_id=request_id,
-                output_id=output_id,
-            ),
-            "1",
+        report_payload = validation_report.as_dict()
+        workflow_repository.mark_validated(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=report_payload,
         )
     except Exception as e:
 
@@ -211,11 +210,36 @@ def create_playlist(
         if self.is_output_forced_to_stop(request_id, output_id):
             raise self.raise_revoke_output(request_id, output_id)
 
-        # TODO handle possible Runtime Errors
-        # notice : video processing has cost to retry
-        raise self.retry(
-            exc=e,
-            max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            workflow_repository.cancel_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=attempt_id,
+                reason="CANCELLED_DURING_PROCESSING",
+            )
+            if self.is_forced_to_stop(request_id):
+                raise self.raise_revoke(request_id)
+            raise self.raise_revoke_output(request_id, output_id)
+
+        retries_available = (
+            self.request.retries < settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+        )
+        workflow_repository.fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=retries_available,
+            error_code="PACKAGE_CREATION_OR_VALIDATION_FAILED",
+            error_message=str(e),
+            metrics={"input_bytes": input_bytes},
+        )
+        if retries_available:
+            raise self.retry(
+                exc=e,
+                max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+            )
+        raise
 
     # TODO check ffmpeg is really finished successfully,
     #  Sometimes FfmpegCallback has an error but the Ffmpeg stops
@@ -233,4 +257,7 @@ def create_playlist(
     return dict(
         directory=directory,
         expected_renditions=expected_renditions,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        input_bytes=input_bytes,
     )
