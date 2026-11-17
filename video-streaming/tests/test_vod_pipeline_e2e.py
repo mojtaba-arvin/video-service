@@ -218,7 +218,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         # The application may have cached DisabledBackend while importing
         # its production defaults before the test environment was overridden.
         from celery.backends.redis import RedisBackend
-        celery_app._backend = RedisBackend(
+        celery_app._backend_cache = None
+        celery_app._local.backend = RedisBackend(
             app=celery_app,
             url="redis://127.0.0.1:6379/1",
         )
