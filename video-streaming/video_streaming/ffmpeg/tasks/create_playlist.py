@@ -121,15 +121,6 @@ def create_playlist(
         execution_backend="celery",
         execution_ref=self.request.id.__str__(),
     )
-    input_bytes = os.path.getsize(video_path)
-
-    workflow_repository = get_workflow_repository()
-    attempt_id, attempt_number = workflow_repository.start_attempt(
-        job_id=request_id,
-        stage_key=output_id,
-        execution_backend="celery",
-        execution_ref=self.request.id.__str__(),
-    )
     input_bytes = 0
     expected_renditions = []
     validation_report = None
