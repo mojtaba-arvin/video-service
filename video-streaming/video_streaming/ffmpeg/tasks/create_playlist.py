@@ -118,6 +118,17 @@ def create_playlist(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
 
+    # Clear proofs from any earlier attempt; only this attempt may authorize
+    # the later PROCESSING_FINISHED transition.
+    self.cache.delete(
+        CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+            request_id=request_id, output_id=output_id
+        ),
+        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+            request_id=request_id, output_id=output_id
+        ),
+    )
+
     # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
