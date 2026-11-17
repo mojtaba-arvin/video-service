@@ -289,6 +289,35 @@ class StreamingPackageValidationTests(unittest.TestCase):
         self.assertEqual(result["renditions"], 2)
         self.assertGreaterEqual(result["segments"], 2)
 
+    def test_validates_dash_representation_metadata_with_ffprobe(self):
+        directory = self.root / "dash-metadata-valid"
+        manifest = self.make_dash_package(directory)
+        report = validate_package(
+            str(directory),
+            "dash",
+            ["0", "1"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertTrue(report.valid, report.as_dict())
+
+    def test_rejects_dash_resolution_mismatch_against_ffprobe(self):
+        directory = self.root / "dash-resolution-mismatch"
+        manifest = self.make_dash_package(directory)
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace('width="320"', 'width="640"', 1)
+        manifest.write_text(text, encoding="utf-8")
+        report = validate_package(
+            str(directory),
+            "dash",
+            ["0", "1"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "resolution_mismatch", [issue.code for issue in report.errors]
+        )
+
     def test_rejects_dash_package_with_missing_media_segment(self):
         directory = self.root / "dash-missing-segment"
         manifest = self.make_dash_package(directory)
