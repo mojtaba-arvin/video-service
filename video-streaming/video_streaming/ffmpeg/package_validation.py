@@ -185,7 +185,7 @@ def _validate_hls_media_playlist(playlist: Path) -> int:
                 duration = float(line.split(":", 1)[1].split(",", 1)[0])
             except ValueError:
                 duration = 0
-            if duration != duration or duration <= 0:
+            if not math.isfinite(duration) or duration <= 0:
                 raise StreamingPackageValidationError(
                     "HLS segment has a non-positive EXTINF duration: "
                     + playlist.name
