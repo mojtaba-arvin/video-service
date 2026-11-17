@@ -199,6 +199,12 @@ time. It covers short landscape, portrait-with-audio, and low-resolution
 sources. It is designed for deterministic correctness tests, not perceptual
 quality or production cost claims.
 
+The regression suite now also runs under Python 3.12. The legacy service and
+its runtime image still target Python 3.9, which reached end of life on
+2025-10-31. Python 3.12 test-suite success does not prove runtime dependency or
+container compatibility; migrating the service runtime remains an explicit
+security and maintenance item.
+
 The CodeQL and dependency-review workflows are not yet required merge checks.
 GitHub repository administration also remains necessary: current inspection
 found no active ruleset and develop is unprotected. The connected GitHub
