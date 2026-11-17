@@ -1,3 +1,4 @@
+import ffmpeg
 from abc import ABC
 from pathlib import Path
 from video_streaming import settings
