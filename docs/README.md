@@ -7,6 +7,8 @@ This documentation describes both the **verified current implementation** and th
 1. [Product vision and architecture principles](architecture/vision.md) — what this project is becoming, the problems it addresses, product boundaries, and measurable outcomes.
 2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop`, what the code demonstrates, and the concrete reliability and security gaps found during repository inspection.
 3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities, acceptance evidence, and explicit deferrals.
+4. [GitHub governance](engineering/github-governance.md) — recommended rulesets, security settings, and the verified public-repository plan constraints.
+5. [Agent engineering guide](../AGENTS.md) — repository-wide instructions and links to task-specific skills.
 
 ## Documentation rules
 
