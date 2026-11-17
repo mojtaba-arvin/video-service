@@ -79,3 +79,18 @@ The initial proof can use the existing Celery path and a local filesystem/S3 tes
 ## Explicitly deferred unless evidence changes
 
 Advanced spot/preemptible scheduling, live migration, distributed inference, mandatory Kubernetes, live video, DRM/multi-DRM, just-in-time packaging, and player SDK integration are not prerequisites for the initial reliable VOD platform. Revisit them only when their dependencies, a target workload, and a measurable success criterion are established.
+
+
+## Additional P0 — runtime security baseline
+
+The legacy service currently targets Python 3.9. Python 3.9 reached end of
+life on 2025-10-31 and no longer receives official security updates
+([Python version status](https://devguide.python.org/versions/)). CI now keeps
+a Python 3.9 regression check for backward compatibility and adds a separate
+Python 3.12 regression-suite run. The latter is not evidence that the full
+service, its old runtime dependencies, or its container is compatible.
+
+Next acceptance increment: inventory the runtime image and all pinned
+dependencies, select a supported Python target, prove compatibility with
+gRPC/Celery/Redis/S3/FFmpeg integrations, rebuild the container, and run a
+complete VOD smoke test before changing the production baseline.
