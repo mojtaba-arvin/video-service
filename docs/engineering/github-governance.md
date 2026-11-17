@@ -47,9 +47,11 @@ Avoid duplicate job/check names across workflows.
 6. Enable the dependency graph, Dependabot alerts, and Dependabot security
    updates. [Dependabot version updates are available for all repositories](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-version-updates).
 7. Secret scanning [runs automatically and for free on public repositories](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/detect-secret-leaks/enable-secret-scanning). Enable user-facing alerts and push protection where offered; these options are not all enabled automatically. The [repository security settings guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-security-and-analysis-settings-for-your-repository) describes the dependency-graph, Dependabot-alert, and push-protection switches.
-8. Code scanning is available for public repositories. Use either the committed
-   [CodeQL advanced workflow](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/configure-code-scanning/configuring-advanced-setup-for-code-scanning)
-   or GitHub's low-maintenance [default setup](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/configure-code-scanning/configure-code-scanning), not both at once. GitHub recommends default setup when custom configuration is unnecessary; this repository currently uses advanced setup to pin actions and control trusted PR analysis.
+8. Code scanning is available for public repositories. This repository already
+   uses GitHub's low-maintenance [CodeQL default setup](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/configure-code-scanning/configure-code-scanning).
+   PR #61 produced a GitHub Advanced Security CodeQL check with no new alerts.
+   Keep this default setup and do not add a second advanced workflow unless a
+   concrete customization need justifies replacing it.
 9. [Standard GitHub-hosted runner usage is free for public repositories](https://docs.github.com/en/billing/concepts/product-billing/github-actions); larger runners are billed. Keep media fixtures small and generate them at runtime.
    Advanced CodeQL analysis uses Actions workflows; standard hosted-runner
    usage remains free for this public repository.
