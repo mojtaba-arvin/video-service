@@ -13,8 +13,10 @@ optional ffprobe metadata); it never decodes or re-encodes media. Remote URLs,
 path traversal, dynamic MPDs, and unresolved DASH templates fail closed.
 """
 
+import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 import xml.etree.ElementTree as ET
@@ -680,7 +682,9 @@ def validate_package(
         directory: str,
         package_type: str,
         expected_renditions: Optional[List[str]],
-        manifest_path: str = None) -> PackageValidationReport:
+        manifest_path: str = None,
+        ffprobe_bin_path: str = None,
+        metadata_probe_timeout_seconds: int = 10) -> PackageValidationReport:
     """Return a structured reusable validation report for a VOD package.
 
     expected_renditions is a list of HLS rendition playlist paths relative
@@ -731,6 +735,14 @@ def validate_package(
                         )
                     ),
                 ))
+        if ffprobe_bin_path and not report.errors:
+            report.errors.extend(_probe_package_metadata(
+                directory=directory,
+                package_type=protocol,
+                manifest_path=manifest,
+                ffprobe_bin_path=ffprobe_bin_path,
+                timeout_seconds=metadata_probe_timeout_seconds,
+            ))
     except Exception as exc:
         message = str(exc)
         report.errors.append(PackageValidationIssue(
