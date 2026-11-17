@@ -223,6 +223,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             app=celery_app,
             url="redis://127.0.0.1:6379/1",
         )
+        celery_app.set_default()
+        celery_app.set_current()
         if celery_app.backend.__class__.__name__ == "DisabledBackend":
             raise RuntimeError("Celery chord result backend was not configured")
 
