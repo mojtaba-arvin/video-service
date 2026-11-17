@@ -1,7 +1,6 @@
 """Regression tests for environment-backed application settings."""
 
 import importlib
-import os
 from pathlib import Path
 import sys
 import tempfile
