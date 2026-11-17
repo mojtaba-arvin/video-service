@@ -655,3 +655,88 @@ def ordered_package_files(directory: str, manifest_name: str):
 
     files.sort(key=lambda item: (item[0], item[2]))
     return [(path, relative, size) for _, path, relative, size in files]
+
+
+
+def _validation_error_code(message: str) -> str:
+    """Map validator failures to stable machine-readable categories."""
+    lowered = message.lower()
+    if any(token in lowered for token in (
+            "escapes", "backslash", "external", "symlink", "baseurl")):
+        return "unsafe_reference"
+    if any(token in lowered for token in (
+            "missing", "not found", "empty", "non-empty")):
+        return "artifact_missing_or_empty"
+    if "rendition" in lowered or "representation" in lowered:
+        return "rendition_mismatch"
+    if "extinf" in lowered or "playlist" in lowered:
+        return "invalid_hls_playlist"
+    if "dash" in lowered or "mpd" in lowered or "segmenttemplate" in lowered:
+        return "invalid_dash_manifest"
+    return "invalid_package"
+
+
+def validate_package(
+        directory: str,
+        package_type: str,
+        expected_renditions: Optional[List[str]],
+        manifest_path: str = None) -> PackageValidationReport:
+    """Return a structured reusable validation report for a VOD package.
+
+    expected_renditions is a list of HLS rendition playlist paths relative
+    to the package root, or DASH Representation IDs. An empty list means the
+    caller expects no rendition; None disables the expectation check.
+    This entry point performs structural validation only and does no decode.
+    """
+    protocol = (package_type or "").lower()
+    manifest = manifest_path
+    if manifest is None:
+        extension = ".m3u8" if protocol == "hls" else ".mpd"
+        candidates = sorted(Path(directory).glob("*" + extension))
+        manifest = str(candidates[0]) if len(candidates) == 1 else ""
+
+    report = PackageValidationReport(
+        protocol=protocol,
+        manifest=str(manifest or ""),
+        expected_renditions=list(expected_renditions or []),
+    )
+
+    try:
+        if not manifest:
+            raise StreamingPackageValidationError(
+                "Package root manifest could not be determined"
+            )
+        details = validate_streaming_package(
+            directory=directory,
+            manifest_path=manifest,
+            protocol=protocol,
+        )
+        actual = (
+            details.get("rendition_names", [])
+            if protocol == "hls"
+            else details.get("rendition_ids", [])
+        )
+        report.actual_renditions = list(actual)
+        report.segments = int(details.get("segments", 0))
+        if expected_renditions is not None:
+            expected = sorted(str(item) for item in expected_renditions)
+            actual_sorted = sorted(str(item) for item in actual)
+            if expected != actual_sorted:
+                report.errors.append(PackageValidationIssue(
+                    code="expected_renditions_mismatch",
+                    location=str(manifest),
+                    message=(
+                        "Expected renditions {} but found {}".format(
+                            expected, actual_sorted
+                        )
+                    ),
+                ))
+    except Exception as exc:
+        message = str(exc)
+        report.errors.append(PackageValidationIssue(
+            code=_validation_error_code(message),
+            location=str(manifest),
+            message=message,
+        ))
+
+    return report
