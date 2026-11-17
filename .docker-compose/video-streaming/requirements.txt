@@ -3,7 +3,7 @@
 grpcio==1.78.2
 grpcio-tools==1.78.2
 grpcio-health-checking==1.78.2
-protobuf==6.33.1
+protobuf==6.33.5
 
 # ffmpeg
 
