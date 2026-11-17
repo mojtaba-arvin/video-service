@@ -153,15 +153,26 @@ class ArtifactRecord(Base):
 class WorkflowRepository:
     """Persistent repository; Celery IDs are optional execution metadata only."""
 
-    def __init__(self, database_url, create_schema=False, engine=None):
+    def __init__(
+            self,
+            database_url,
+            create_schema=False,
+            engine=None,
+            pool_size=5,
+            max_overflow=5):
         if engine is None and not database_url:
             raise ValueError("WORKFLOW_DATABASE_URL is required")
         if engine is None:
-            options = {"pool_pre_ping": True, "future": True}
-            connect_args = {}
+            options = {
+                "pool_pre_ping": True,
+                "future": True,
+                "pool_size": pool_size,
+                "max_overflow": max_overflow,
+            }
             if database_url.startswith("sqlite:"):
-                connect_args["check_same_thread"] = False
-                options["connect_args"] = connect_args
+                options["connect_args"] = {"check_same_thread": False}
+                options.pop("pool_size", None)
+                options.pop("max_overflow", None)
             engine = create_engine(database_url, **options)
         self.engine = engine
         self._session = sessionmaker(
@@ -337,6 +348,16 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            if stage.status == StageState.VALIDATED.value:
+                existing = session.execute(
+                    select(ArtifactRecord).where(
+                        ArtifactRecord.stage_id == stage.id,
+                        ArtifactRecord.attempt_id == attempt_id,
+                        ArtifactRecord.logical_name == "validation-report",
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    return False
             self._transition(stage, StageState.VALIDATED)
             stage.output_contract_json = {
                 "validation": validation_report,
@@ -362,6 +383,8 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            if stage.status == StageState.PUBLISHING.value:
+                return False
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Attempt is not running")
             self._transition(stage, StageState.PUBLISHING)
@@ -412,6 +435,8 @@ class WorkflowRepository:
             attempt.state = AttemptState.SUCCEEDED.value
             attempt.finished_at = finished_at
             started = attempt.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
             attempt.duration_ms = max(
                 0, int((finished_at - started).total_seconds() * 1000)
             )
@@ -487,8 +512,11 @@ class WorkflowRepository:
             self._transition(stage, target)
             attempt.state = attempt_state.value
             attempt.finished_at = utcnow()
+            started = attempt.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
             attempt.duration_ms = max(
-                0, int((attempt.finished_at - attempt.started_at).total_seconds() * 1000)
+                0, int((attempt.finished_at - started).total_seconds() * 1000)
             )
             attempt.cpu_seconds = metrics.get("cpu_seconds")
             attempt.peak_memory_bytes = metrics.get("peak_memory_bytes")
