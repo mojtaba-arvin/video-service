@@ -65,30 +65,31 @@ def publish_package(
     attempts do not create duplicate segment keys. A failed attempt leaves no
     root manifest pointing at a partial package.
     """
-    report = validate_package(
-        directory=directory,
-        package_type=protocol,
-        expected_renditions=expected_renditions,
-        manifest_path=manifest_path,
-    )
-    report.require_valid()
-
     root = Path(directory).resolve()
-    manifest = Path(manifest_path).resolve()
-    manifest_relative = manifest.relative_to(root).as_posix()
-    files = ordered_package_files(
-        directory=directory,
-        manifest_name=manifest_relative,
-        protocol=protocol,
-    )
-    total_size = sum(file_size for _, _, file_size in files)
-    total_files = len(files)
+    manifest_input = Path(manifest_path)
+    manifest_relative = manifest_input.relative_to(root).as_posix()
     prefix = s3_output_key.rpartition("/")[0]
     root_key = _object_key(prefix, manifest_relative)
 
-    # Withdraw the previous publication point before replacing any referenced
-    # objects. Delete is idempotent when this is the first attempt.
+    # Remove the prior root publication point before validation or writes.
+    # If a retry is invalid or interrupted, an old manifest cannot advertise it.
     storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+
+    try:
+        report = validate_package(
+            directory=directory,
+            package_type=protocol,
+            expected_renditions=expected_renditions,
+            manifest_path=manifest_path,
+        )
+        report.require_valid()
+        files = ordered_package_files(
+            directory=directory,
+            manifest_name=manifest_relative,
+            protocol=protocol,
+        )
+        total_size = sum(file_size for _, _, file_size in files)
+        total_files = len(files)
 
     try:
         for index, (file_path, relative_path, file_size) in enumerate(files):
