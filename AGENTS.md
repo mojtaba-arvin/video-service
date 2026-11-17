@@ -55,3 +55,9 @@ Use the relevant procedural guide under .agents/skills/:
 
 Skills are guidance, not evidence that the corresponding platform capability
 exists.
+
+GitHub Copilot specialist profiles are defined under .github/agents/: the
+media pipeline engineer can implement and test changes, the security auditor
+is read-only, and the orchestration/MCP architect focuses on contracts and
+state design. Keep reviewer profiles read-only and grant execute/edit access
+only to agents that must change code or run tests.
