@@ -36,23 +36,31 @@ def _non_empty_file(root: Path, reference: str) -> Path:
         )
 
     decoded = unquote(reference)
-    unresolved = root / decoded
-    if any(part.is_symlink() for part in [unresolved] + list(unresolved.parents) if part != root.parent):
-        raise StreamingPackageValidationError(
-            "Symlink references are not allowed in a streaming package: " + reference
-        )
     if "\\" in decoded:
         raise StreamingPackageValidationError(
             "Backslashes are not valid package references: " + reference
         )
 
-    candidate = (root / decoded).resolve()
+    unresolved = root / decoded
+    candidate = unresolved.resolve()
     try:
         candidate.relative_to(root.resolve())
     except ValueError:
         raise StreamingPackageValidationError(
             "Media reference escapes the package directory: " + reference
         )
+
+    current = root
+    for part in Path(decoded).parts:
+        if part == "..":
+            current = current.parent
+        elif part != ".":
+            current = current / part
+        if current.is_symlink():
+            raise StreamingPackageValidationError(
+                "Symlink references are not allowed in a streaming package: "
+                + reference
+            )
 
     if not candidate.is_file() or candidate.stat().st_size <= 0:
         raise StreamingPackageValidationError(
@@ -66,7 +74,7 @@ def _playlist_references(line: str):
     return _URI_ATTRIBUTE.findall(line)
 
 
-def _validate_hls_media_playlist(root: Path, playlist: Path) -> int:
+def _validate_hls_media_playlist(playlist: Path) -> int:
     try:
         lines = playlist.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
@@ -217,7 +225,7 @@ def validate_hls_package(root: Path, manifest: Path) -> dict:
         if rendition in seen:
             continue
         seen.add(rendition)
-        segment_count += _validate_hls_media_playlist(root, rendition)
+        segment_count += _validate_hls_media_playlist(rendition)
         rendition_count += 1
 
     if rendition_count == 0:
@@ -497,7 +505,12 @@ def validate_streaming_package(directory: str, manifest_path: str,
                                protocol: str) -> dict:
     """Validate an HLS or DASH VOD package rooted at directory."""
     root = Path(directory).resolve()
-    manifest = Path(manifest_path).resolve()
+    manifest_input = Path(manifest_path)
+    if manifest_input.is_symlink():
+        raise StreamingPackageValidationError(
+            "Manifest must not be a symlink"
+        )
+    manifest = manifest_input.resolve()
     if not root.is_dir():
         raise StreamingPackageValidationError(
             "Streaming package directory does not exist"
