@@ -3,6 +3,7 @@ from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
+from video_streaming.ffmpeg.package_validation import validate_streaming_package
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
@@ -149,6 +150,11 @@ def create_playlist(
             ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run)
+        validate_streaming_package(
+            directory=directory,
+            manifest_path=output_path,
+            protocol="hls" if is_hls else "dash",
+        )
     except Exception as e:
 
         if self.is_forced_to_stop(request_id):
