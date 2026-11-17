@@ -385,7 +385,7 @@ class CreateJobMixin(object):
         output_buckets: list[str] = []
         output_locations: list[tuple] = []
         for output in request_outputs:
-            if output.upload_to.key.isspace():
+            if not output.upload_to.key or output.upload_to.key.isspace():
                 continue
 
             self._validate_output_bucket(output)
