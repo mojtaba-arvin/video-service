@@ -201,6 +201,84 @@ class StreamingPackageValidationTests(unittest.TestCase):
                 str(directory), str(manifest), "hls"
             )
 
+    def test_rejects_manifest_resolution_mismatch_against_media_probe(self):
+        directory = self.root / "hls-resolution-mismatch"
+        manifest = self.make_hls_package(directory)
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "RESOLUTION=320x180", "RESOLUTION=1920x1080"
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "resolution_mismatch", [issue.code for issue in report.errors]
+        )
+
+    def test_rejects_manifest_codec_mismatch_against_media_probe(self):
+        directory = self.root / "hls-codec-mismatch"
+        manifest = self.make_hls_package(directory)
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "BANDWIDTH=300000",
+                'BANDWIDTH=300000,CODECS="vp09.00.10.08"',
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "codec_mismatch", [issue.code for issue in report.errors]
+        )
+
+    def test_rejects_manifest_bandwidth_below_probed_bitrate(self):
+        directory = self.root / "hls-bitrate-mismatch"
+        manifest = self.make_hls_package(directory)
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "BANDWIDTH=300000", "BANDWIDTH=1"
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "bitrate_mismatch", [issue.code for issue in report.errors]
+        )
+
+    def test_rejects_playlist_duration_mismatch_against_media_probe(self):
+        directory = self.root / "hls-duration-mismatch"
+        manifest = self.make_hls_package(directory)
+        variant = directory / "video_180p.m3u8"
+        variant.write_text(
+            variant.read_text(encoding="utf-8").replace(
+                "#EXTINF:1.000000,", "#EXTINF:5.000000,", 1
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "duration_mismatch", [issue.code for issue in report.errors]
+        )
+
     def test_validates_every_dash_representation(self):
         directory = self.root / "dash-valid"
         manifest = self.make_dash_package(directory)
