@@ -126,7 +126,7 @@ class CreatePlaylistMixin(BaseOutputMixin):
             try:
                 protocol.auto_generate_representations(
                     ffprobe_bin=settings.FFPROBE_BIN_PATH)
-                return
+                return protocol
             except RuntimeError as e:
                 # TODO capture error and notify developer
                 raise self.retry(exc=e)
