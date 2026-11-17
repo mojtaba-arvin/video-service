@@ -222,6 +222,42 @@ class S3Service:
         except Exception as e:
             return self._exception_handler(e)
 
+    def delete_object(self, key: str, bucket_name: str = None, **kwargs):
+        """Delete one object; deleting an absent key is idempotent."""
+        kwargs["Key"] = key
+        kwargs["Bucket"] = bucket_name or self.DEFAULT_BUCKET
+        try:
+            return self.client.delete_object(**kwargs)
+        except botocore_exceptions.ClientError as exc:
+            # A denied delete must not be mistaken for a successful withdrawal
+            # of the old manifest. S3 DeleteObject is idempotent for absent keys.
+            raise self.exceptions.S3BaseException(exc)
+        except Exception as exc:
+            return self._exception_handler(exc)
+
+    def read_range(
+            self,
+            key: str,
+            bucket_name: str = None,
+            start: int = 0,
+            end: int = 0):
+        """Read a bounded byte range to verify object readability cheaply."""
+        try:
+            response = self.client.get_object(
+                Bucket=bucket_name or self.DEFAULT_BUCKET,
+                Key=key,
+                Range="bytes={}-{}".format(start, end),
+            )
+            body = response.get("Body")
+            if body is None:
+                return None
+            try:
+                return body.read(end - start + 1)
+            finally:
+                body.close()
+        except Exception as exc:
+            return self._exception_handler(exc)
+
     def upload_file_by_path(
             self,
             key: str,
@@ -239,6 +275,10 @@ class S3Service:
                 ExtraArgs=extra_args,
                 Callback=callback,
                 Config=config or self.transfer_config)
+        except botocore_exceptions.ClientError as exc:
+            # Upload-side 403/404 responses are failures, never successful
+            # no-ops; callers must not publish a manifest after one.
+            raise self.exceptions.S3BaseException(exc)
         except Exception as e:
             return self._exception_handler(e)
 
