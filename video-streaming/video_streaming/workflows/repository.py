@@ -583,6 +583,18 @@ class WorkflowRepository:
             stage = self._find_stage(session, job_id, stage_key)
             return stage.status == StageState.FINISHED.value
 
+
+    def get_stage_snapshot(self, job_id, stage_key):
+        """Return one durable stage, its attempts and artifacts."""
+        snapshot = self.get_job_snapshot(job_id)
+        if snapshot is None:
+            return None
+        for stage in snapshot["stages"]:
+            if stage["key"] == stage_key:
+                return stage
+        return None
+
+
     def get_job_snapshot(self, job_id):
         with self._session() as session:
             job = session.get(JobRecord, job_id)
