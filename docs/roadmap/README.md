@@ -34,8 +34,8 @@ The canonical task status is tracked in [Issue #54](https://github.com/mojtaba-a
 |---|---|---|---|
 | P0 | Engineering foundation | Python 3.9 unit-test runner, settings regressions, and CI on PR/push | **Done** — PR #55; five tests pass |
 | P0 | Configuration and portability | Remove tracked local environment values, add safe template and enforce ignore rules in CI | **Done** — PR #56 |
-| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **In review** — PR #57; local seven-test run passed, CI is the merge gate |
-| P1 | Execution correctness | Probe and validate generated artifacts before status becomes complete; test non-zero FFmpeg exit and invalid/partial output | Next |
+| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 12 CI tests pass, including three FFmpeg/FFprobe render integrations |
+| P1 | Execution correctness | Validate thumbnail/playlist artifacts before completion; test non-zero FFmpeg exit, invalid/partial output, and process cancellation | Next |
 | P1 | Process isolation | Supervise FFmpeg process groups/descendants; define timeout, termination, resource bounds, and cleanup semantics | Planned |
 | P1 | API and outbound security | Redacted structured logs; caller authentication/authorization; SSRF-safe webhook delivery with DNS/redirect controls | Planned |
 | P1 | Durable orchestration | Specify Job/Workflow/Stage/Attempt/Artifact states and idempotency; choose durable persistence through an ADR; test restart and cache loss | Planned |
