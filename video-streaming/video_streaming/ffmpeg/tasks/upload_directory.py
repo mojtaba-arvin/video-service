@@ -77,13 +77,26 @@ def upload_directory(self,
     )
 
     try:
+        local_proof = self.cache.get(
+            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+                request_id=request_id,
+                output_id=output_id,
+            ),
+            decode=False,
+        )
+        if local_proof != "1":
+            raise RuntimeError(
+                "Package upload refused because local validation has not passed"
+            )
+
         directory_size = self.upload_directory(
             directory,
             s3_output_key,
             s3_output_bucket,
             output_id,
             request_id,
-            protocol)
+            protocol,
+            kwargs.get("expected_renditions"))
     # except urllib3.exceptions.HeaderParsingError as e:
     #     # MissingHeaderBodySeparatorDefect
     #     # TODO notify developer
@@ -111,6 +124,17 @@ def upload_directory(self,
             output_id=output_id),
         directory_size)
 
+    self.cache.set(
+        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+            request_id=request_id,
+            output_id=output_id,
+        ),
+        "1",
+    )
+    self.save_output_status(
+        self.output_status.PROCESSING_FINISHED,
+        output_id,
+        request_id)
     self.save_output_status(
         self.output_status.UPLOADING_FINISHED,
         output_id,
