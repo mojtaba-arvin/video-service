@@ -1,6 +1,6 @@
 import re
 import os
-import traceback
+import logging
 import boto3
 from typing import Union
 from boto3.s3 import transfer
@@ -8,6 +8,9 @@ from botocore import exceptions as botocore_exceptions
 from botocore.config import Config
 from video_streaming import settings
 from video_streaming.core.exceptions import s3_exceptions
+
+
+logger = logging.getLogger(__name__)
 
 
 class S3Service:
@@ -97,25 +100,22 @@ class S3Service:
         returns None for 404 and 403 errors, raises other exceptions
         """
 
-        # handle ClientError
+        # Do not log ClientError.response: it may contain object identifiers,
+        # request metadata or other provider-controlled details.
         if isinstance(exc, botocore_exceptions.ClientError):
             exception = self.exceptions.S3BaseException(exc)
-            print(exception.response_object)
+            logger.warning(
+                "S3 request failed (%s)",
+                type(exc).__name__,
+            )
             if exception.is_404_error or exception.is_403_error:
                 return None
             raise exception
 
-        if isinstance(exc, self.DEVELOPER_ERRORS):
-            # TODO : notify the developer
-            pass
-
-        if isinstance(exc, botocore_exceptions.CapacityNotAvailableError):
-            # TODO : notify
-            pass
-
-        # TODO capture errors
-        print(traceback.format_exc())
-
+        logger.error(
+            "S3 operation failed (%s)",
+            type(exc).__name__,
+        )
         raise exc
 
     @staticmethod
