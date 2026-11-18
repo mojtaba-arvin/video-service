@@ -36,6 +36,7 @@ Do not set numeric performance or cost targets until a reproducible baseline exi
 6. **Replaceable adapters, not speculative microservices.** Keep a modular application core; introduce new infrastructure only when measured workload needs it.
 7. **Behavior and evidence ship together.** Every implementation PR includes tests, operational implications, docs, and rollback considerations.
 8. **Unknown is not zero.** Incomplete metrics, costs, QoE, and provider data remain explicitly incomplete.
+9. **Reliability and observability are release gates.** Every change defines failure/recovery behavior, stable correlation, structured telemetry, bounded metric cardinality, redaction, relevant failure tests and operator recovery. Set numeric SLOs only after representative baselines exist; follow the mandatory [engineering standard](../engineering/reliability-observability-standard.md).
 
 ## 3. Release sequence and exit gates
 
@@ -160,19 +161,19 @@ Baseline on `develop`:
 - PR #98 merged: roadmap/governance/runtime status corrected.
 - Current `develop` after PR #100 is `d4f8dd9`; CI passed (Python 3.9 and 3.12 regression, PostgreSQL repository, full VOD integration, Dependency Review and aggregate `Quality gates`).
 - PR #99 merged the product execution plan; PR #100 merged the first versioned execution-plan contract.
-- No open PRs at the time of this update.
+- PR #104 completed the pure VOD plan builder; PR #105 carries the cross-cutting reliability/observability standard and is pending CI at the time of this update.
 
 Next execution order:
 1. **#71 — complete VOD DAG builder (merged in PR #104).** The pure transport-neutral builder now represents preflight, input analysis, fan-in, watermark, HLS/DASH, thumbnails, uploads and callback references. Keep the live dispatch path unchanged.
 2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction.** Add secret-store reference resolution; do not copy raw webhook URLs or credentials into plan JSON or broker messages.
 3. **#71 — establish idempotent execution claims and broker-backed failure tests.** Cover commit-before-relay crash, relay crash after publish, concurrent duplicate delivery, broker outage, cancellation and poison messages. Enable the relay only after these pass.
 4. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
-3. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
-4. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
-5. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
-6. **#79/#84 — begin AI workflow state and incremental contracts after the durable plan model stabilizes.**
-7. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
-8. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
+5. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
+6. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
+7. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
+8. **#79/#84 — begin AI workflow state and incremental contracts after the durable plan model stabilizes.**
+9. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
+10. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
 
 The versioned execution-plan contract is merged in PR #100 and the pure complete-VOD graph builder is merged in PR #104. The next increment under #71 is transactional persistence of the immutable plan/version with Job/Workflow/Stage state, followed by complete durable Stage/Attempt claims, secret-reference resolution and broker-backed crash/replay tests. Do not add an outbox table that can dispatch an incompletely durable graph, and do not switch live dispatch until all failure and idempotency gates pass.
 
