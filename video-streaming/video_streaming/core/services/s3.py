@@ -222,6 +222,47 @@ class S3Service:
         except Exception as e:
             return self._exception_handler(e)
 
+    def read_object_bytes(self, key: str, bucket_name: str = None):
+        """Read a small service-owned object such as a package inventory."""
+        try:
+            response = self.client.get_object(
+                Bucket=bucket_name or self.DEFAULT_BUCKET,
+                Key=key,
+            )
+            body = response.get("Body")
+            if body is None:
+                return None
+            try:
+                return body.read()
+            finally:
+                body.close()
+        except botocore_exceptions.ClientError as exc:
+            code = str(
+                exc.response.get("Error", {}).get("Code", "")
+            )
+            if code in ("NoSuchKey", "NotFound", "404"):
+                return None
+            # In particular, AccessDenied is not equivalent to a missing
+            # inventory: fail closed rather than abandoning ownership data.
+            raise
+
+    def put_object_bytes(
+            self,
+            key: str,
+            content: bytes,
+            bucket_name: str = None,
+            content_type: str = "application/json"):
+        """Write service-owned metadata with an explicit content type."""
+        try:
+            return self.client.put_object(
+                Bucket=bucket_name or self.DEFAULT_BUCKET,
+                Key=key,
+                Body=content,
+                ContentType=content_type,
+            )
+        except botocore_exceptions.ClientError:
+            raise
+
     def delete_object(self, key: str, bucket_name: str = None, **kwargs):
         """Delete one object; deleting an absent key is idempotent."""
         kwargs["Key"] = key

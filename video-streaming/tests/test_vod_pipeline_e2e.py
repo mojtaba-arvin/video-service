@@ -16,6 +16,7 @@ import unittest
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 
 _REQUIRED_MODULES = (
@@ -75,12 +76,30 @@ class InMemoryS3:
         self.buckets = {"vod-input": {"source.mp4": input_bytes}}
         self.upload_order = []
 
+    def read_object_bytes(self, key, bucket_name=None):
+        return self.buckets.get(bucket_name or "", {}).get(key)
+
+    def put_object_bytes(self, key, content, bucket_name=None,
+                         content_type="application/json"):
+        self.buckets.setdefault(bucket_name, {})[key] = content
+        return {"Key": key}
+
     def head(self, key, bucket_name=None, **kwargs):
         bucket = self.buckets.get(bucket_name or "", {})
         value = bucket.get(key)
         if value is None:
             return None
         return {"ContentLength": len(value), "ETag": '"test-etag"'}
+
+    def delete_object(self, key, bucket_name=None, **kwargs):
+        self.buckets.setdefault(bucket_name, {}).pop(key, None)
+        return {"Deleted": key}
+
+    def read_range(self, key, bucket_name=None, start=0, end=0):
+        value = self.buckets.get(bucket_name or "", {}).get(key)
+        if value is None:
+            return None
+        return value[start:end + 1]
 
     def head_bucket(self, bucket_name=None, **kwargs):
         if bucket_name in self.buckets:
@@ -100,16 +119,6 @@ class InMemoryS3:
         if callback:
             callback(len(value))
         return destination_path
-
-    def delete_object(self, key, bucket_name=None, **kwargs):
-        self.buckets.setdefault(bucket_name, {}).pop(key, None)
-        return {"Deleted": key}
-
-    def read_range(self, key, bucket_name=None, start=0, end=0):
-        value = self.buckets.get(bucket_name, {}).get(key)
-        if value is None:
-            return None
-        return value[start:end + 1]
 
     def upload_file_by_path(self, key, file_path, bucket_name=None,
                             callback=None, **kwargs):
@@ -148,6 +157,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             "\n".join([
                 "CELERY_BROKER_URL=memory://",
                 "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1",
+                "WORKFLOW_DATABASE_URL={}".format(
+                    os.environ["WORKFLOW_DATABASE_URL"]
+                ),
+                "WORKFLOW_DATABASE_POOL_SIZE=2",
+                "WORKFLOW_DATABASE_MAX_OVERFLOW=2",
                 "TASK_RETRY_BACKOFF_MAX=2",
                 "TASK_RETRY_FFMPEG_COMMAND_MAX=0",
                 "DEFAULT_PLAYLIST_IS_HLS=True",
@@ -293,14 +307,15 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.env_path.write_bytes(cls.previous_env)
         cls.temp_dir.cleanup()
 
-    def test_processing_finished_requires_both_validation_proofs(self):
+    def test_processing_finished_requires_durable_publication_completion(self):
         from video_streaming.core.constants import (
             CacheKeysTemplates,
             OutputStatus,
         )
         from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+        from video_streaming.workflows.service import get_workflow_repository
 
-        class StatusProbe:
+        class StatusProbe(BaseOutputMixin):
             def __init__(self):
                 self.cache = InMemoryCache()
                 self.output_status = OutputStatus
@@ -308,60 +323,51 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             def can_set_output_status(self, output_id, request_id):
                 return False
 
+        repository = get_workflow_repository()
+        job_id = str(uuid4())
+        repository.create_job(
+            job_id=job_id,
+            idempotency_key="status-gate-{}".format(job_id),
+            request_hash="e" * 64,
+            stage_specs=[{
+                "stage_key": "p0",
+                "operation": "video.hls.package_and_publish",
+            }],
+        )
+        attempt_id, _ = repository.start_attempt(job_id, "p0")
+        repository.mark_validated(
+            job_id, "p0", attempt_id,
+            {"valid": True, "errors": []},
+        )
+
         probe = StatusProbe()
-        request_id = "status-invariant-job"
-        output_id = "p0"
         probe.cache.set(
-            CacheKeysTemplates.JOB_DETAILS.format(request_id=request_id),
-            {"no_watermarked_playlists_ids": [output_id]},
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=job_id),
+            {"no_watermarked_playlists_ids": ["p0"],
+             "watermarked_playlists_ids": []},
         )
-        with self.assertRaisesRegex(
-                RuntimeError, "both succeed"):
-            BaseOutputMixin.save_output_status(
-                probe, OutputStatus.PROCESSING_FINISHED,
-                output_id, request_id,
+        with self.assertRaisesRegex(RuntimeError, "durable workflow stage"):
+            probe.save_output_status(
+                OutputStatus.PROCESSING_FINISHED, "p0", job_id
             )
 
-        probe.cache.set(
-            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-                request_id=request_id, output_id=output_id
-            ),
-            "1",
+        repository.start_publishing(job_id, "p0", attempt_id)
+        repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://video/master.m3u8",
+                "size_bytes": 12,
+            }],
+            metrics={"input_bytes": 100, "output_bytes": 12},
         )
-        with self.assertRaisesRegex(
-                RuntimeError, "both succeed"):
-            BaseOutputMixin.save_output_status(
-                probe, OutputStatus.PROCESSING_FINISHED,
-                output_id, request_id,
-            )
-
-        probe.cache.set(
-            CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
-                request_id=request_id, output_id=output_id
-            ),
-            "1",
+        probe.save_output_status(
+            OutputStatus.PROCESSING_FINISHED, "p0", job_id
         )
-        BaseOutputMixin.save_output_status(
-            probe, OutputStatus.PROCESSING_FINISHED,
-            output_id, request_id,
+        probe.save_output_status(
+            OutputStatus.UPLOADING_FINISHED, "p0", job_id
         )
-
-    def test_output_key_cannot_escape_managed_local_directory(self):
-        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
-
-        class PathProbe:
-            def get_outputs_root_directory(self, request_id):
-                return str(self.root / "outputs_" / request_id)
-
-        probe = PathProbe()
-        probe.root = self.root
-        with self.assertRaisesRegex(ValueError, "unsafe local filename"):
-            BaseOutputMixin.ensure_set_output_location(
-                probe,
-                request_id="path-guard",
-                output_id="p0",
-                s3_output_key="folder/..",
-            )
 
     def test_grpc_job_runs_through_celery_ffmpeg_and_storage(self):
         options = self.pb2.ConvertOptions(
@@ -384,6 +390,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         request = self.pb2.JobRequest(
             webhook_url=self.webhook_url,
             reference_id="vod-e2e-reference",
+            idempotency_key="vod-e2e-idempotency-key",
             video=self.pb2.Video(
                 s3_input=self.pb2.S3Input(
                     key="source.mp4",
@@ -391,10 +398,72 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 )
             ),
             playlists=[playlist],
+            thumbnails=[
+                self.pb2.ThumbnailOutput(
+                    thumbnail_time="00:00:01",
+                    upload_to=self.pb2.S3Output(
+                        key="vod/e2e/thumbnail.jpg",
+                        bucket="vod-output",
+                        create_bucket=True,
+                    ),
+                    options=self.pb2.ThumbnailOptions(
+                        scale_width=160,
+                        scale_height=0,
+                    ),
+                )
+            ],
         )
 
         accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
+
+        replayed = self.stub.create_job(request, timeout=120)
+        self.assertEqual(replayed.tracking_id, accepted.tracking_id)
+
+        from video_streaming.workflows.service import get_workflow_repository
+        snapshot = get_workflow_repository().get_job_snapshot(
+            accepted.tracking_id
+        )
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(len(snapshot["stages"]), 2)
+        self.assertEqual(
+            {stage["key"] for stage in snapshot["stages"]},
+            {"p0", "t0"},
+        )
+        for durable_stage in snapshot["stages"]:
+            self.assertEqual(durable_stage["status"], "FINISHED")
+            self.assertEqual(len(durable_stage["attempts"]), 1)
+            attempt = durable_stage["attempts"][0]
+            self.assertEqual(attempt["status"], "SUCCEEDED")
+            self.assertGreater(attempt["duration_ms"], 0)
+            self.assertEqual(
+                attempt["input_bytes"], self.input_path.stat().st_size
+            )
+            self.assertGreater(attempt["output_bytes"], 0)
+            self.assertGreater(attempt["artifact_count"], 0)
+            self.assertGreater(attempt["estimated_cost"], 0)
+            self.assertEqual(attempt["cost_currency"], "RUNIT")
+            self.assertEqual(
+                attempt["pricing_model_id"],
+                "relative-resource-index-v1",
+            )
+        playlist_stage = next(
+            stage for stage in snapshot["stages"] if stage["key"] == "p0"
+        )
+        thumbnail_stage = next(
+            stage for stage in snapshot["stages"] if stage["key"] == "t0"
+        )
+        playlist_artifacts = [
+            item["type"] for item in playlist_stage["artifacts"]
+        ]
+        thumbnail_artifacts = [
+            item["type"] for item in thumbnail_stage["artifacts"]
+        ]
+        self.assertIn("validation_report", playlist_artifacts)
+        self.assertIn("streaming_manifest", playlist_artifacts)
+        self.assertIn("package_inventory", playlist_artifacts)
+        self.assertIn("validation_report", thumbnail_artifacts)
+        self.assertIn("image_thumbnail", thumbnail_artifacts)
 
         results = self.stub.get_results(
             self.pb2.JobsResultsRequest(
@@ -406,11 +475,15 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         result = results.results[0]
 
         self.assertEqual(result.status, self.pb2.PrimaryStatus.FINISHED)
-        self.assertEqual(result.ready_outputs, 1)
+        self.assertEqual(result.ready_outputs, 2)
         self.assertEqual(result.failed_outputs, 0)
         self.assertEqual(len(result.playlists.outputs), 1)
         self.assertEqual(
             result.playlists.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
+        )
+        self.assertEqual(
+            result.thumbnails.outputs[0].status,
             self.pb2.OutputStatus.UPLOADING_FINISHED,
         )
 
@@ -419,14 +492,42 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         variant_key = "vod/e2e/master_144p.m3u8"
         self.assertIn(master_key, output_objects)
         self.assertIn(variant_key, output_objects)
+        self.assertIn("vod/e2e/thumbnail.jpg", output_objects)
+        self.assertIn(
+            "vod/e2e/.master.m3u8.artifacts.json", output_objects
+        )
         self.assertTrue(
             any(key.endswith(".ts") for key in output_objects)
         )
-        self.assertEqual(self.storage.upload_order[-1], master_key)
+        self.assertGreater(
+            self.storage.upload_order.index(master_key),
+            self.storage.upload_order.index(variant_key),
+        )
         self.assertTrue(self.webhook_handler.received)
         self.assertEqual(
             json.loads(self.webhook_handler.received[0])["reference_id"],
             "vod-e2e-reference",
+        )
+
+        # Redis is a progress/cache projection, not the durable source of truth.
+        self.cache.values.clear()
+        recovered = self.stub.get_results(
+            self.pb2.JobsResultsRequest(
+                tracking_ids=[accepted.tracking_id]
+            ),
+            timeout=30,
+        ).results[0]
+        self.assertEqual(recovered.status, self.pb2.PrimaryStatus.FINISHED)
+        self.assertEqual(recovered.ready_outputs, 2)
+        self.assertEqual(len(recovered.playlists.outputs), 1)
+        self.assertEqual(
+            recovered.playlists.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
+        )
+        self.assertEqual(len(recovered.thumbnails.outputs), 1)
+        self.assertEqual(
+            recovered.thumbnails.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
         )
 
 

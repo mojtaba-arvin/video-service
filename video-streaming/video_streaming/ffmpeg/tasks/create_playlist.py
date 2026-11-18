@@ -9,7 +9,7 @@ from video_streaming.ffmpeg.package_validation import (
     validate_package,
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
-from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.workflows.service import get_workflow_repository
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -113,59 +113,60 @@ def create_playlist(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
-    # save primary status using request_id
-    self.save_primary_status(
-        self.primary_status.OUTPUTS_PROGRESSING,
-        request_id)
-
-    # Clear proofs from any earlier attempt; only this attempt may authorize
-    # the later PROCESSING_FINISHED transition.
-    self.cache.delete(
-        CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-            request_id=request_id, output_id=output_id
-        ),
-        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
-            request_id=request_id, output_id=output_id
-        ),
+    workflow_repository = get_workflow_repository()
+    attempt_id, attempt_number = workflow_repository.start_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        execution_backend="celery",
+        execution_ref=self.request.id.__str__(),
     )
-
-    # save output status using output_id and request_id
-    self.save_output_status(
-        self.output_status.PREPARATION_PROCESSING,
-        output_id,
-        request_id)
-
-    # get output directory and set output_path if is None
-    managed_output_directory = output_path is None
-    output_path, directory = self.ensure_set_output_location(
-       request_id,
-       output_id,
-       output_path=output_path,
-       s3_output_key=s3_output_key)
-
-    if managed_output_directory:
-        directory = reset_package_directory(
-            directory,
-            self.get_outputs_root_directory(request_id),
-        )
-
-    playlist = self.initial_protocol(
-        video_path,
-        output_id,
-        request_id,
-        encode_format,
-        video_codec=video_codec,
-        audio_codec=audio_codec,
-        is_hls=is_hls,
-        fragmented=fragmented,
-        custom_qualities=custom_qualities,
-        quality_names=quality_names)
+    input_bytes = 0
+    expected_renditions = []
+    validation_report = None
 
     try:
-        expected_renditions = []
+        input_bytes = os.path.getsize(video_path)
+
+        self.save_primary_status(
+            self.primary_status.OUTPUTS_PROGRESSING,
+            request_id)
+        self.save_output_status(
+            self.output_status.PREPARATION_PROCESSING,
+            output_id,
+            request_id)
+
+        managed_output_directory = output_path is None
+        output_path, directory = self.ensure_set_output_location(
+            request_id,
+            output_id,
+            output_path=output_path,
+            s3_output_key=s3_output_key,
+        )
+
+        if managed_output_directory:
+            directory = reset_package_directory(
+                directory,
+                self.get_outputs_root_directory(request_id),
+            )
+
+        playlist = self.initial_protocol(
+            video_path,
+            output_id,
+            request_id,
+            encode_format,
+            video_codec=video_codec,
+            audio_codec=audio_codec,
+            is_hls=is_hls,
+            fragmented=fragmented,
+            custom_qualities=custom_qualities,
+            quality_names=quality_names,
+        )
+
         representations = list(playlist.reps)
         if is_hls:
-            manifest_stem = os.path.splitext(os.path.basename(output_path))[0]
+            manifest_stem = os.path.splitext(
+                os.path.basename(output_path)
+            )[0]
             expected_renditions = [
                 "{}_{}p.m3u8".format(manifest_stem, rep.size.height)
                 for rep in representations
@@ -175,17 +176,18 @@ def create_playlist(
                 str(index) for index, _ in enumerate(representations)
             ]
 
-        # self.output_path includes the file name
         playlist.output(
             output_path,
             monitor=FfmpegCallback(
                 task=self,
                 task_id=self.request.id.__str__(),
                 output_id=output_id,
-                request_id=request_id
+                request_id=request_id,
             ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
-            async_run=async_run)
+            async_run=async_run,
+        )
+
         validation_report = validate_package(
             directory=directory,
             manifest_path=output_path,
@@ -197,40 +199,63 @@ def create_playlist(
             ),
         )
         validation_report.require_valid()
-        self.cache.set(
-            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-                request_id=request_id,
-                output_id=output_id,
-            ),
-            "1",
+        workflow_repository.mark_validated(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report.as_dict(),
         )
-    except Exception as e:
 
-        if self.is_forced_to_stop(request_id):
-            raise self.raise_revoke(request_id)
-        if self.is_output_forced_to_stop(request_id, output_id):
+    except Exception as exc:
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            workflow_repository.cancel_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=attempt_id,
+                reason="CANCELLED_DURING_PACKAGE_CREATION_OR_VALIDATION",
+            )
+            if self.is_forced_to_stop(request_id):
+                raise self.raise_revoke(request_id)
             raise self.raise_revoke_output(request_id, output_id)
 
-        # TODO handle possible Runtime Errors
-        # notice : video processing has cost to retry
-        raise self.retry(
-            exc=e,
-            max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX)
+        retryable = (
+            self.request.retries < settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+        )
+        workflow_repository.fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=retryable,
+            error_code="PACKAGE_CREATION_OR_VALIDATION_FAILED",
+            error_message=str(exc),
+            metrics={"input_bytes": input_bytes},
+        )
+        if retryable:
+            raise self.retry(
+                exc=exc,
+                max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX,
+            )
+        raise
 
-    # TODO check ffmpeg is really finished successfully,
-    #  Sometimes FfmpegCallback has an error but the Ffmpeg stops
-    #  without error and returns 'ffmpeg executed command successfully'
-
-    # it's possible process killed in FfmpegCallback
-    # so, checking the force stop before continuing
-    if self.is_forced_to_stop(request_id):
-        raise self.raise_revoke(request_id)
-    if self.is_output_forced_to_stop(request_id, output_id):
+    if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+            request_id, output_id):
+        workflow_repository.cancel_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            reason="CANCELLED_AFTER_PACKAGE_VALIDATION",
+        )
+        if self.is_forced_to_stop(request_id):
+            raise self.raise_revoke(request_id)
         raise self.raise_revoke_output(request_id, output_id)
 
-    # PROCESSING_FINISHED is intentionally deferred until the upload task
-    # independently verifies every storage dependency and the root manifest.
+    # Processing completion is deferred until publication has been verified.
     return dict(
         directory=directory,
         expected_renditions=expected_renditions,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        input_bytes=input_bytes,
+        validation_report=validation_report.as_dict(),
     )

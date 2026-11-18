@@ -13,6 +13,8 @@ This documentation describes both the **verified current implementation** and th
 
 7. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
 
+8. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
+
 ## Documentation rules
 
 - **Evidence before claims:** distinguish repository facts, measured results, assumptions, and proposals.

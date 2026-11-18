@@ -1,14 +1,21 @@
+import os
 import subprocess
 import time
 import ffmpeg
 from abc import ABC
 from pathlib import Path
+from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback, get_time, \
     time_left
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.metrics import (
+    capture_child_cpu_seconds,
+    child_cpu_seconds_since,
+)
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
 
@@ -70,72 +77,151 @@ def add_watermark(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
-    # save output status using output_id and request_id
+    repository = get_workflow_repository()
+    attempt_id, attempt_number = repository.start_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        execution_backend="celery",
+        execution_ref=self.request.id.__str__(),
+    )
+    input_bytes = (
+        os.path.getsize(video_path) + os.path.getsize(watermark_path)
+    )
+    cpu_started = capture_child_cpu_seconds()
+
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
         output_id,
         request_id)
 
-    # get output directory and set output_path if is None
     output_path, directory = self.ensure_set_output_location(
-       request_id,
-       output_id,
-       output_path=output_path,
-       s3_output_key=s3_output_key)
-
-    # create directory with all parents, to prevent ffmpeg error
+        request_id,
+        output_id,
+        output_path=output_path,
+        s3_output_key=s3_output_key)
     Path(directory).mkdir(parents=True, exist_ok=True)
 
-    main = ffmpeg.input(video_path)
-    watermark = ffmpeg.input(watermark_path)
-    callback: callable = FfmpegCallback(
-                task=self,
-                task_id=self.request.id.__str__(),
-                output_id=output_id,
-                request_id=request_id
-            ).progress
+    try:
+        main = ffmpeg.input(video_path)
+        watermark = ffmpeg.input(watermark_path)
+        callback = FfmpegCallback(
+            task=self,
+            task_id=self.request.id.__str__(),
+            output_id=output_id,
+            request_id=request_id,
+        ).progress
 
-    stream = ffmpeg.filter(
-        [main, watermark], 'overlay', 0, 0
+        stream = ffmpeg.filter(
+            [main, watermark], "overlay", 0, 0
         ).output(output_path)
 
-    with subprocess.Popen(
-            stream.compile(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            # bufsize=1,
-            universal_newlines=True) as process:
+        with subprocess.Popen(
+                stream.compile(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True) as process:
+            duration = 1
+            current_time = 0
+            start_time = time.time()
+            while True:
+                line = process.stdout.readline().strip()
+                duration = get_time("Duration: ", line, duration)
+                current_time = get_time("time=", line, current_time)
+                if process.poll() is not None:
+                    break
+                callback(
+                    line,
+                    duration,
+                    current_time,
+                    time_left(start_time, current_time, duration),
+                    process,
+                )
 
-        duration = 1
-        time_ = 0
-        start_time = time.time()
-        while True:
-            line = process.stdout.readline().strip()
-            duration = get_time('Duration: ', line, duration)
-            time_ = get_time('time=', line, time_)
-            if process.poll() is not None:
-                break
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                process.returncode, process.args
+            )
 
-            callback(
-                line,
-                duration,
-                time_,
-                time_left(start_time, time_, duration),
-                process)
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+            raise RuntimeError("Watermarked output is missing or empty")
 
-    if process.returncode != 0:
-        raise subprocess.CalledProcessError(
-            process.returncode,
-            process.args)
+        probe = ffmpeg.probe(output_path, cmd=settings.FFPROBE_BIN_PATH)
+        video_stream = next(
+            (item for item in probe.get("streams", [])
+             if item.get("codec_type") == "video"),
+            None,
+        )
+        if video_stream is None:
+            raise RuntimeError("Watermarked output contains no video stream")
 
-    self.save_output_status(
-        self.output_status.PROCESSING_FINISHED,
-        output_id,
-        request_id)
+        validation_report = {
+            "valid": True,
+            "artifact_type": "video_file",
+            "width": int(video_stream.get("width") or 0),
+            "height": int(video_stream.get("height") or 0),
+            "size_bytes": os.path.getsize(output_path),
+            "video_codec": video_stream.get("codec_name"),
+            "errors": [],
+        }
+        repository.mark_validated(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report,
+        )
+    except Exception as exc:
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            repository.cancel_attempt(
+                request_id, output_id, attempt_id,
+                reason="CANCELLED_DURING_WATERMARK_PROCESSING",
+            )
+            if self.is_forced_to_stop(request_id):
+                raise self.raise_revoke(request_id)
+            raise self.raise_revoke_output(request_id, output_id)
+
+        retryable = (
+            self.request.retries < settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+        )
+        repository.fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=retryable,
+            error_code="WATERMARK_PROCESSING_OR_VALIDATION_FAILED",
+            error_message=str(exc),
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+            },
+        )
+        if retryable:
+            raise self.retry(
+                exc=exc,
+                max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX,
+            )
+        raise
+
+    if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+            request_id, output_id):
+        repository.cancel_attempt(
+            request_id, output_id, attempt_id,
+            reason="CANCELLED_AFTER_WATERMARK_VALIDATION",
+        )
+        if self.is_forced_to_stop(request_id):
+            raise self.raise_revoke(request_id)
+        raise self.raise_revoke_output(request_id, output_id)
+
 
     return dict(
-        # to use in create_playlist or generate_thumbnail task
         video_path=output_path,
-        # to use in upload_file task
-        file_path=output_path)
+        file_path=output_path,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        input_bytes=input_bytes,
+        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        validation_report=validation_report,
+        artifact_type="video_file",
+        media_type="video/mp4",
+    )

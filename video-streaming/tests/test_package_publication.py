@@ -1,5 +1,6 @@
 """Adversarial tests for manifest-last package publication and retries."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,8 +16,19 @@ class FakeObjectStorage:
         self.objects = {}
         self.upload_order = []
         self.fail_upload_key = None
+        self.partial_fail_upload_key = None
         self.unreadable_key = None
         self.events = []
+
+    def read_object_bytes(self, key, bucket_name=None):
+        value = self.objects.get(key)
+        return value
+
+    def put_object_bytes(self, key, content, bucket_name=None,
+                         content_type="application/json"):
+        self.objects[key] = content
+        self.events.append(("put", key))
+        return {"Key": key}
 
     def delete_object(self, key, bucket_name=None, **kwargs):
         self.events.append(("delete", key))
@@ -26,6 +38,9 @@ class FakeObjectStorage:
     def upload_file_by_path(self, key, file_path, bucket_name=None,
                             callback=None, **kwargs):
         self.events.append(("upload", key))
+        if key == self.partial_fail_upload_key:
+            self.objects[key] = b"partial-upload"
+            raise IOError("simulated partial object upload failure")
         if key == self.fail_upload_key:
             raise IOError("simulated object upload failure")
         value = Path(file_path).read_bytes()
@@ -107,6 +122,7 @@ class PackagePublicationTests(unittest.TestCase):
                 "vod/segment_001.ts",
                 "vod/variant.m3u8",
                 self.root_key,
+                "vod/.master.m3u8.artifacts.json",
             },
         )
         self.assertEqual(self.storage.objects[self.root_key],
@@ -139,6 +155,15 @@ class PackagePublicationTests(unittest.TestCase):
         self.assertNotIn("vod/master.m3u8", self.storage.objects)
         self.assertNotIn("vod/variant.m3u8", self.storage.objects)
 
+    def test_partial_segment_upload_is_removed_after_failure(self):
+        self.storage.partial_fail_upload_key = "vod/segment_000.ts"
+        with self.assertRaises(IOError):
+            self.publish()
+        self.assertNotIn("vod/segment_000.ts", self.storage.objects)
+        self.assertNotIn("vod/segment_001.ts", self.storage.objects)
+        self.assertNotIn("vod/variant.m3u8", self.storage.objects)
+        self.assertNotIn(self.root_key, self.storage.objects)
+
     def test_unreadable_segment_prevents_variant_and_master_publication(self):
         self.storage.unreadable_key = "vod/segment_000.ts"
         with self.assertRaises(PackagePublicationError):
@@ -150,7 +175,7 @@ class PackagePublicationTests(unittest.TestCase):
         first = self.publish()
         second = self.publish()
         self.assertEqual(first["files"], second["files"])
-        self.assertEqual(len(self.storage.objects), 4)
+        self.assertEqual(len(self.storage.objects), 5)
         self.assertEqual(
             len([key for key in self.storage.upload_order
                  if key.endswith(".ts")]),
@@ -159,9 +184,8 @@ class PackagePublicationTests(unittest.TestCase):
         self.assertEqual(self.storage.upload_order[-1], self.root_key)
         self.assertEqual(self.storage.objects["vod/segment_000.ts"], b"segment-a")
 
-    def test_invalid_retry_removes_stale_master_before_rejecting(self):
-        self.storage.objects[self.root_key] = b"stale-master"
-        self.storage.fail_upload_key = "vod/segment_000.ts"
+    def test_invalid_local_retry_preserves_last_known_good_publication(self):
+        self.storage.objects[self.root_key] = b"last-known-good"
         self.master.write_text(
             "#EXTM3U\n"
             "#EXT-X-STREAM-INF:BANDWIDTH=100000\n"
@@ -170,7 +194,25 @@ class PackagePublicationTests(unittest.TestCase):
         )
         with self.assertRaises(Exception):
             self.publish()
-        self.assertNotIn(self.root_key, self.storage.objects)
+        self.assertEqual(self.storage.objects[self.root_key], b"last-known-good")
+
+    def test_retry_cleans_only_objects_owned_by_its_previous_inventory(self):
+        first = self.publish()
+        inventory_key = first["inventory_key"]
+        payload = json.loads(self.storage.objects[inventory_key].decode("utf-8"))
+        payload["artifacts"].append("orphan-from-failed-attempt.ts")
+        self.storage.objects[inventory_key] = json.dumps(payload).encode("utf-8")
+        self.storage.objects["vod/orphan-from-failed-attempt.ts"] = b"orphan"
+
+        self.publish()
+
+        self.assertNotIn(
+            "vod/orphan-from-failed-attempt.ts", self.storage.objects
+        )
+        self.assertEqual(
+            self.storage.objects["vod/segment_000.ts"], b"segment-a"
+        )
+        self.assertIn(inventory_key, self.storage.objects)
 
 
 if __name__ == "__main__":
