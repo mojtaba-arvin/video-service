@@ -84,7 +84,9 @@ idle workers, provider storage retention or provider invoices. Therefore it
 cannot produce a complete cloud-cost figure.
 
 The workflow's versioned price card separately estimates attempt-level CPU,
-measured peak-RSS GiB-seconds and published output GiB. Each attempt persists
+measured peak-RSS GiB-seconds and published output GiB. Memory GiB-seconds use
+the measured encoder-processing interval when available; otherwise the whole
+durable Attempt interval is a conservative fallback. Each attempt persists
 the exact card ID/version/rates and component coverage. Partial amounts remain
 diagnostic; an aggregate total is reported only when every attempt is fully
 priced under a consistent card version and currency. RUNIT is a relative
