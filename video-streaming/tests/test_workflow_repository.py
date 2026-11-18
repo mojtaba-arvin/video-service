@@ -393,6 +393,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             report = self.repository.get_playback_qoe_report(job_id, "p0")
 
         self.assertEqual(report["total_buffering_ms"], 5000)
+        self.assertEqual(report["rebuffer_count"], 1)
         self.assertAlmostEqual(
             report["buffering_ratio_percent"], 100.0 / 3.0, places=2
         )
