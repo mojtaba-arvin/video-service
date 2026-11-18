@@ -169,6 +169,11 @@ def add_watermark(
             attempt_id=attempt_id,
             validation_report=validation_report,
         )
+        peak_memory_bytes = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
     except Exception as exc:
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
                 request_id, output_id):
@@ -178,6 +183,9 @@ def add_watermark(
                 metrics={
                     "input_bytes": input_bytes,
                     "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                    "peak_memory_bytes": (
+                        int(peak_memory_bytes) if peak_memory_bytes else None
+                    ),
                 },
                 pricing=configured_pricing(settings),
             )
@@ -198,6 +206,9 @@ def add_watermark(
             metrics={
                 "input_bytes": input_bytes,
                 "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "peak_memory_bytes": (
+                    int(peak_memory_bytes) if peak_memory_bytes else None
+                ),
             },
             pricing=configured_pricing(settings),
         )
@@ -231,6 +242,9 @@ def add_watermark(
         attempt_number=attempt_number,
         input_bytes=input_bytes,
         cpu_seconds=child_cpu_seconds_since(cpu_started),
+        peak_memory_bytes=(
+            int(peak_memory_bytes) if peak_memory_bytes else None
+        ),
         validation_report=validation_report,
         artifact_type="video_file",
         media_type="video/mp4",
