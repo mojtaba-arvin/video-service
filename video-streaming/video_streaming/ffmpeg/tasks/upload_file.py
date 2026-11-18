@@ -85,6 +85,7 @@ def upload_file(self,
                     "input_bytes": int(kwargs.get("input_bytes") or 0),
                     "cpu_seconds": kwargs.get("cpu_seconds"),
                     "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                    "memory_duration_ms": kwargs.get("memory_duration_ms"),
                 },
                 pricing=configured_pricing(settings),
             )
@@ -213,6 +214,7 @@ def upload_file(self,
                             )
                         )
                     ),
+                    "memory_duration_ms": kwargs.get("memory_duration_ms"),
                     "input_bytes": int(kwargs.get("input_bytes") or 0),
                     "output_bytes": file_size,
                     "artifact_count": 1,
