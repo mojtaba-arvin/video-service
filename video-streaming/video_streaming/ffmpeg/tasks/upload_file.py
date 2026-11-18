@@ -186,7 +186,8 @@ def upload_file(self,
                 metrics={
                     "cpu_seconds": kwargs.get("cpu_seconds"),
                     "peak_memory_bytes": (
-                        self.cache.get(
+                        kwargs.get("peak_memory_bytes")
+                        or self.cache.get(
                             CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
                                 request_id=request_id,
                                 output_id=output_id,
@@ -220,6 +221,7 @@ def upload_file(self,
                     "input_bytes": int(kwargs.get("input_bytes") or 0),
                     "output_bytes": file_size,
                     "cpu_seconds": kwargs.get("cpu_seconds"),
+                    "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
                 },
                 pricing=configured_pricing(settings),
             )
