@@ -18,6 +18,7 @@ import math
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import List, Optional
 import xml.etree.ElementTree as ET
@@ -1049,6 +1050,74 @@ def _hls_extinf_summary(playlist):
     return durations, target_duration
 
 
+
+def _hls_segment_paths(playlist, package_root):
+    """Return the validated standalone media segment paths in an HLS rendition."""
+    paths = []
+    pending_extinf = False
+    for raw_line in playlist.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXTINF:"):
+            pending_extinf = True
+            continue
+        if line.startswith("#"):
+            continue
+        if pending_extinf:
+            paths.append(_non_empty_file(playlist.parent, line))
+            pending_extinf = False
+    return paths
+
+
+def _probe_hls_media_duration(
+        playlist, package_root, ffprobe_bin_path, timeout_seconds):
+    """Probe actual standalone media segments, not EXTINF-derived playlist duration.
+
+    Fragmented MP4 media fragments require their initialization section and are
+    not independently duration-probeable; in that case duration comparison is
+    omitted rather than treating the manifest's own EXTINF values as evidence.
+    """
+    segments = _hls_segment_paths(playlist, package_root)
+    if not segments or any(path.suffix.lower() == ".m4s" for path in segments):
+        return None
+
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".ffconcat", encoding="utf-8",
+                delete=False) as concat_file:
+            temporary_path = concat_file.name
+            concat_file.write("ffconcat version 1.0\\n")
+            for segment in segments:
+                escaped = str(segment).replace("\\\\", "\\\\\\\\").replace("'", "\\\\'")
+                concat_file.write("file '{}'\\n".format(escaped))
+
+        command = [
+            ffprobe_bin_path,
+            "-v", "error",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", temporary_path,
+            "-show_entries", "format=duration",
+            "-of", "json",
+        ]
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        duration = (json.loads(result.stdout or "{}").get("format") or {}).get(
+            "duration"
+        )
+        return float(duration) if duration is not None else None
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
 def _probe_package_metadata(
         directory,
         package_type,
@@ -1135,7 +1204,12 @@ def _probe_package_metadata(
                         )
 
                 durations, target_duration = _hls_extinf_summary(local_path)
-                measured_duration = (metadata.get("format") or {}).get("duration")
+                measured_duration = _probe_hls_media_duration(
+                    local_path,
+                    root,
+                    ffprobe_bin_path,
+                    timeout_seconds,
+                )
                 if durations and measured_duration:
                     manifest_duration = sum(durations)
                     actual_duration = float(measured_duration)
