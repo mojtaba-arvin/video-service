@@ -276,12 +276,12 @@ class StreamingPackageValidationTests(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
         variant.write_text(
-            "#EXTM3U\\n"
-            "#EXT-X-VERSION:3\\n"
-            "#EXT-X-TARGETDURATION:30\\n"
-            "#EXTINF:30.000000,\\n"
-            "duration-check.ts\\n"
-            "#EXT-X-ENDLIST\\n",
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-TARGETDURATION:30\n"
+            "#EXTINF:30.000000,\n"
+            "duration-check.ts\n"
+            "#EXT-X-ENDLIST\n",
             encoding="utf-8",
         )
         report = validate_package(
