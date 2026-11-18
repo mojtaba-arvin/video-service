@@ -296,7 +296,11 @@ def publish_package(
     except Exception:
         cleanup_ok = True
         # Do not leave playlists advertising an incomplete package.
-        for key in sorted(set(uploaded_keys + manifest_keys + [root_key])):
+        attempt_keys = [
+            _object_key(prefix, relative)
+            for relative in new_relatives
+        ]
+        for key in sorted(set(attempt_keys + uploaded_keys + manifest_keys + [root_key])):
             try:
                 storage.delete_object(key=key, bucket_name=s3_output_bucket)
             except Exception:
