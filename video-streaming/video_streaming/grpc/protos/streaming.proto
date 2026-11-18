@@ -421,7 +421,7 @@ message StartPlaybackSessionRequest {
 message StartPlaybackSessionResponse {
   string session_id = 1;
   string session_token = 2;
-  string manifest_uri = 3;
+  string manifest_artifact_id = 3;
 }
 
 message RecordPlaybackEventRequest {
