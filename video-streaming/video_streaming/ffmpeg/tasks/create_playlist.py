@@ -2,6 +2,7 @@ from abc import ABC
 import os
 from video_streaming import settings
 from video_streaming.celery import celery_app
+from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
 from video_streaming.ffmpeg.package_validation import (
@@ -211,6 +212,11 @@ def create_playlist(
             attempt_id=attempt_id,
             validation_report=validation_report.as_dict(),
         )
+        peak_memory_bytes = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
 
     except Exception as exc:
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
@@ -220,7 +226,13 @@ def create_playlist(
                 stage_key=output_id,
                 attempt_id=attempt_id,
                 reason="CANCELLED_DURING_PACKAGE_CREATION_OR_VALIDATION",
-                metrics={"input_bytes": input_bytes, "cpu_seconds": child_cpu_seconds_since(cpu_started)},
+                metrics={
+                    "input_bytes": input_bytes,
+                    "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                    "peak_memory_bytes": (
+                        int(peak_memory_bytes) if peak_memory_bytes else None
+                    ),
+                },
                 pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
@@ -237,7 +249,13 @@ def create_playlist(
             retryable=retryable,
             error_code="PACKAGE_CREATION_OR_VALIDATION_FAILED",
             error_message=str(exc),
-            metrics={"input_bytes": input_bytes},
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "peak_memory_bytes": (
+                    int(peak_memory_bytes) if peak_memory_bytes else None
+                ),
+            },
             pricing=configured_pricing(settings),
         )
         if retryable:
@@ -269,5 +287,8 @@ def create_playlist(
         attempt_number=attempt_number,
         input_bytes=input_bytes,
         cpu_seconds=child_cpu_seconds_since(cpu_started),
+        peak_memory_bytes=(
+            int(peak_memory_bytes) if peak_memory_bytes else None
+        ),
         validation_report=validation_report.as_dict(),
     )
