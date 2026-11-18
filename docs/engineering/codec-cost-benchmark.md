@@ -57,10 +57,11 @@ python scripts/benchmark_codecs.py \
 For each source and software encoder, the harness searches the encoder's CRF
 range for the highest CRF that still reaches the target VMAF, then repeats the
 selected CRF. Search and repetition records contain source ID/hash, encoder,
-preset, CRF, VMAF, encode wall time, child CPU seconds, output size/bitrate and
-source duration. The summary reports medians and population standard
-deviations. Outputs are temporary; their hashes and measurement metadata are
-recorded in the raw JSONL stream/report, not retained as media deliverables.
+preset, CRF, VMAF, encode wall time, process-tree CPU seconds, sampled peak RSS,
+output SHA-256/size/bitrate and source duration. The summary reports medians and
+population standard deviations. Outputs are temporary; their hashes and
+measurement metadata are recorded in the raw JSONL stream/report, not retained
+as media deliverables.
 
 ## Outputs
 
