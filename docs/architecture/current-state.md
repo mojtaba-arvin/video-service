@@ -248,18 +248,22 @@ infrastructure; it is not a player SDK, a CDN integration, or an SLA.
 An engineering review found three measurement/correctness gaps on the PR branch:
 active buffering was omitted from live reports, partially priced attempts could
 be presented as a total, and duplicate event IDs did not compare semantic
-payloads. A follow-up commit on the PR branch adds active-interval aggregation,
-explicit cost-coverage fields and a canonical payload fingerprint with regression
-tests. These fixes are not considered accepted until all CI checks pass and the
-PR is reviewed and merged.
+payloads. Follow-up commits on the PR branch add active-buffering duration and rebuffer
+count aggregation, explicit cost-coverage fields and a canonical payload
+fingerprint with regression tests. CI run #101 passed all five jobs; a later
+small correction to include the active interval in the rebuffer count has its
+own CI run in progress. These fixes are not considered accepted until the PR
+is reviewed and merged.
 
 ### Current priority gaps
 
 1. Transactional outbox/dispatcher for the Job-to-Celery dual-write window.
-2. FFmpeg process-group supervision, deadlines, CPU/memory/PID/disk limits,
-   termination and cleanup under failure.
-3. Authentication, authorization, tenant isolation and quotas; SSRF-safe
-   webhook delivery with DNS/IP/redirect controls; structured redacted logging.
+2. FFmpeg process-tree cancellation has an initial implementation in open
+   PR #78; process-group coverage for every execution path, deadlines,
+   CPU/memory/PID/disk limits and cleanup under failure remain open.
+3. Sensitive log redaction has an initial implementation in open PR #77;
+   authentication, authorization, tenant isolation and quotas, plus SSRF-safe
+   webhook delivery with DNS/IP/redirect controls, remain open.
 4. Full failure-path integration: worker loss, non-zero FFmpeg exit, retry,
    cancellation, duplicate delivery and watermark output.
 5. Supported Python runtime and reproducible container migration. Python 3.9
