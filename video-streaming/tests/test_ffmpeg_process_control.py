@@ -241,6 +241,9 @@ class ProcessTreeTerminationTests(unittest.TestCase):
 
         self.assertTrue(samples)
         self.assertGreater(max(item["cpu_seconds"] for item in samples), 0)
+        self.assertGreater(
+            max(item["memory_duration_ms"] for item in samples), 0
+        )
         self.assertGreaterEqual(
             max(item["peak_memory_bytes"] for item in samples),
             16 * 1024 * 1024,
