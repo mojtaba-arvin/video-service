@@ -63,7 +63,11 @@ def upload_directory(self,
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
-            metrics={"input_bytes": int(kwargs.get("input_bytes") or 0)},
+            metrics={
+                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "cpu_seconds": kwargs.get("cpu_seconds"),
+                "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+            },
             pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
@@ -124,12 +128,20 @@ def upload_directory(self,
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
+            metrics={
+                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "cpu_seconds": kwargs.get("cpu_seconds"),
+                "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
         raise self.raise_revoke_output(request_id, output_id)
 
     repository.start_publishing(request_id, output_id, attempt_id)
+    cpu_seconds = kwargs.get("cpu_seconds")
+    peak_memory_bytes = kwargs.get("peak_memory_bytes")
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
@@ -155,17 +167,18 @@ def upload_directory(self,
                 request_id=request_id, output_id=output_id
             )
         ) or []
-        cpu_seconds = 0.0
         if len(start_cpu) >= 2 and len(end_cpu) >= 2:
             cpu_seconds = max(
                 0.0,
                 sum(float(value) for value in end_cpu[:2])
                 - sum(float(value) for value in start_cpu[:2]),
             )
-        peak_memory_bytes = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
-                request_id=request_id, output_id=output_id
-            )
+        peak_memory_bytes = (
+            self.cache.get(
+                CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                    request_id=request_id, output_id=output_id
+                )
+            ) or peak_memory_bytes
         )
 
         repository.finish_stage(
