@@ -682,8 +682,8 @@ class WorkflowRepository:
             attempt.metrics_json = metrics
             attempt.error_code = error_code
             attempt.error_message = error_message
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
             if not retryable:
-                workflow = session.get(WorkflowRecord, stage.workflow_id)
                 workflow.state = WorkflowState.FAILED.value
                 workflow.updated_at = utcnow()
                 job = session.get(JobRecord, job_id)
@@ -802,7 +802,7 @@ class WorkflowRepository:
                 workflow = session.get(WorkflowRecord, stage.workflow_id)
                 _record_event(
                     session,
-                    job_id,
+                    workflow.job_id,
                     workflow.id,
                     "ATTEMPT_RECOVERED",
                     from_state=previous_status,
