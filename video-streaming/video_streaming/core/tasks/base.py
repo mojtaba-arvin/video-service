@@ -1,6 +1,10 @@
 from abc import ABC
 from celery import Task, states
 from celery.exceptions import Ignore
+from celery.utils.log import get_task_logger
+
+
+logger = get_task_logger(__name__)
 
 
 __all__ = [
@@ -11,7 +15,15 @@ __all__ = [
 class BaseTask(Task, ABC):
 
     def __call__(self, *args, **kwargs):
-        print(f"task name: {self.name}, args: {args}, kwargs: {kwargs}")
+        # Task arguments may contain signed URLs, webhook credentials or
+        # storage identifiers. Log execution identity, never raw arguments.
+        logger.info(
+            "Executing Celery task",
+            extra={
+                "task_name": self.name,
+                "task_id": getattr(self.request, "id", None),
+            },
+        )
         return super().__call__(*args, **kwargs)
 
     def raise_ignore(self,
