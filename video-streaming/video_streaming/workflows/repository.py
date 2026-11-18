@@ -676,7 +676,11 @@ class WorkflowRepository:
         if memory_rate > 0:
             required_dimensions.append("memory")
             peak_memory = metrics.get("peak_memory_bytes")
-            duration_ms = metrics.get("duration_ms")
+            # Prefer measured encoder wall time; fall back to full attempt
+            # duration as a conservative upper-bound approximation.
+            duration_ms = metrics.get(
+                "memory_duration_ms", metrics.get("duration_ms")
+            )
             if peak_memory is None or duration_ms is None:
                 missing_dimensions.append("memory")
                 quantity = None
