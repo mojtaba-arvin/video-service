@@ -108,6 +108,56 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 3600)
 
+    def test_custom_price_card_requires_an_explicit_version(self):
+        from video_streaming.workflows.metrics import configured_pricing
+
+        settings = load_settings({
+            "WORKFLOW_PRICING_MODEL_ID": "infra-us-east",
+            "WORKFLOW_CPU_COST_PER_SECOND": "0.001",
+        })
+        with self.assertRaisesRegex(ValueError, "MODEL_VERSION"):
+            configured_pricing(settings)
+
+    def test_custom_price_card_is_versioned_and_preserves_rates(self):
+        from video_streaming.workflows.metrics import configured_pricing
+
+        settings = load_settings({
+            "WORKFLOW_PRICING_MODEL_ID": "infra-us-east",
+            "WORKFLOW_PRICING_MODEL_VERSION": "2026-11-01",
+            "WORKFLOW_COST_CURRENCY": "USD",
+            "WORKFLOW_CPU_COST_PER_SECOND": "0.001",
+            "WORKFLOW_MEMORY_GB_SECOND_COST": "0.0002",
+            "WORKFLOW_STORAGE_GB_COST": "0.03",
+        })
+        pricing = configured_pricing(settings)
+
+        self.assertEqual(pricing["model_id"], "infra-us-east")
+        self.assertEqual(pricing["model_version"], "2026-11-01")
+        self.assertEqual(pricing["currency"], "USD")
+        self.assertEqual(pricing["cpu_per_second"], 0.001)
+        self.assertEqual(pricing["memory_gb_second"], 0.0002)
+        self.assertEqual(pricing["storage_gb"], 0.03)
+
+    def test_custom_price_card_rejects_negative_rates(self):
+        from video_streaming.workflows.metrics import configured_pricing
+
+        settings = load_settings({
+            "WORKFLOW_PRICING_MODEL_ID": "infra-us-east",
+            "WORKFLOW_PRICING_MODEL_VERSION": "2026-11-01",
+            "WORKFLOW_CPU_COST_PER_SECOND": "-0.1",
+        })
+        with self.assertRaisesRegex(ValueError, "finite and non-negative"):
+            configured_pricing(settings)
+
+    def test_unconfigured_price_card_uses_versioned_non_monetary_runit(self):
+        from video_streaming.workflows.metrics import configured_pricing
+
+        pricing = configured_pricing(load_settings({}))
+
+        self.assertEqual(pricing["model_id"], "relative-resource-index-v1")
+        self.assertEqual(pricing["model_version"], "1")
+        self.assertEqual(pricing["currency"], "RUNIT")
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 
