@@ -10,6 +10,7 @@ from video_streaming.ffmpeg.package_validation import (
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.metrics import configured_pricing
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -214,6 +215,8 @@ def create_playlist(
                 stage_key=output_id,
                 attempt_id=attempt_id,
                 reason="CANCELLED_DURING_PACKAGE_CREATION_OR_VALIDATION",
+                metrics={"input_bytes": input_bytes},
+                pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -230,6 +233,7 @@ def create_playlist(
             error_code="PACKAGE_CREATION_OR_VALIDATION_FAILED",
             error_message=str(exc),
             metrics={"input_bytes": input_bytes},
+            pricing=configured_pricing(settings),
         )
         if retryable:
             raise self.retry(
@@ -245,6 +249,8 @@ def create_playlist(
             stage_key=output_id,
             attempt_id=attempt_id,
             reason="CANCELLED_AFTER_PACKAGE_VALIDATION",
+            metrics={"input_bytes": input_bytes},
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
