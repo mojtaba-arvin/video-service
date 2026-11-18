@@ -16,6 +16,7 @@ import unittest
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 
 _REQUIRED_MODULES = (
@@ -297,6 +298,68 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         else:
             cls.env_path.write_bytes(cls.previous_env)
         cls.temp_dir.cleanup()
+
+    def test_processing_finished_requires_durable_publication_completion(self):
+        from video_streaming.core.constants import (
+            CacheKeysTemplates,
+            OutputStatus,
+        )
+        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+        from video_streaming.workflows.service import get_workflow_repository
+
+        class StatusProbe(BaseOutputMixin):
+            def __init__(self):
+                self.cache = InMemoryCache()
+                self.output_status = OutputStatus
+
+            def can_set_output_status(self, output_id, request_id):
+                return False
+
+        repository = get_workflow_repository()
+        job_id = str(uuid4())
+        repository.create_job(
+            job_id=job_id,
+            idempotency_key="status-gate-{}".format(job_id),
+            request_hash="e" * 64,
+            stage_specs=[{
+                "stage_key": "p0",
+                "operation": "video.hls.package_and_publish",
+            }],
+        )
+        attempt_id, _ = repository.start_attempt(job_id, "p0")
+        repository.mark_validated(
+            job_id, "p0", attempt_id,
+            {"valid": True, "errors": []},
+        )
+
+        probe = StatusProbe()
+        probe.cache.set(
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=job_id),
+            {"no_watermarked_playlists_ids": ["p0"],
+             "watermarked_playlists_ids": []},
+        )
+        with self.assertRaisesRegex(RuntimeError, "durable workflow stage"):
+            probe.save_output_status(
+                OutputStatus.PROCESSING_FINISHED, "p0", job_id
+            )
+
+        repository.start_publishing(job_id, "p0", attempt_id)
+        repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://video/master.m3u8",
+                "size_bytes": 12,
+            }],
+            metrics={"input_bytes": 100, "output_bytes": 12},
+        )
+        probe.save_output_status(
+            OutputStatus.PROCESSING_FINISHED, "p0", job_id
+        )
+        probe.save_output_status(
+            OutputStatus.UPLOADING_FINISHED, "p0", job_id
+        )
 
     def test_grpc_job_runs_through_celery_ffmpeg_and_storage(self):
         options = self.pb2.ConvertOptions(
