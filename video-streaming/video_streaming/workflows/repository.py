@@ -151,6 +151,64 @@ class ArtifactRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class WorkflowEventRecord(Base):
+    __tablename__ = "workflow_events"
+    __table_args__ = (
+        Index("ix_workflow_events_job_time", "job_id", "occurred_at"),
+        Index("ix_workflow_events_stage_time", "stage_id", "occurred_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    job_id = Column(
+        String(36), ForeignKey("workflow_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_id = Column(
+        String(36), ForeignKey("workflow_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    stage_id = Column(
+        String(36), ForeignKey("workflow_stages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    attempt_id = Column(
+        String(36), ForeignKey("workflow_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_type = Column(String(80), nullable=False)
+    from_state = Column(String(24), nullable=True)
+    to_state = Column(String(24), nullable=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    payload_json = Column(JSON, nullable=False, default=dict)
+
+
+def _record_event(
+        session,
+        job_id,
+        workflow_id,
+        event_type,
+        from_state=None,
+        to_state=None,
+        stage_id=None,
+        attempt_id=None,
+        payload=None):
+    """Append a small immutable event inside the caller's state transaction."""
+    session.add(WorkflowEventRecord(
+        id=new_id(),
+        job_id=job_id,
+        workflow_id=workflow_id,
+        stage_id=stage_id,
+        attempt_id=attempt_id,
+        event_type=event_type,
+        from_state=from_state,
+        to_state=to_state,
+        occurred_at=utcnow(),
+        payload_json=payload or {},
+    ))
+
+
+
+
 class WorkflowRepository:
     """Persistent repository; Celery IDs are optional execution metadata only."""
 
@@ -226,6 +284,15 @@ class WorkflowRepository:
                     state=WorkflowState.QUEUED.value,
                 )
                 session.add_all([job, workflow])
+                _record_event(
+                    session,
+                    job_id,
+                    workflow_id,
+                    "JOB_CREATED",
+                    from_state=None,
+                    to_state=JobState.QUEUED.value,
+                    payload={"workflow_name": workflow_name},
+                )
                 for index, spec in enumerate(stage_specs):
                     session.add(StageRecord(
                         id=new_id(),
@@ -307,6 +374,7 @@ class WorkflowRepository:
                     "Cannot start stage {} from {}".format(stage_key, current.value)
                 )
 
+            previous_status = stage.status
             next_number = session.execute(
                 select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
                 .where(AttemptRecord.stage_id == stage.id)
@@ -331,6 +399,22 @@ class WorkflowRepository:
             job.state = JobState.RUNNING.value
             job.updated_at = utcnow()
             job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_ATTEMPT_STARTED",
+                from_state=previous_status,
+                to_state=StageState.PROCESSING.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "stage_key": stage_key,
+                    "attempt_number": next_number,
+                    "execution_backend": execution_backend,
+                    "execution_ref": execution_ref,
+                },
+            )
             return attempt_id, next_number
 
     def _transition(self, stage, target):
@@ -367,6 +451,7 @@ class WorkflowRepository:
                 ).scalar_one_or_none()
                 if existing is not None:
                     return False
+            previous_status = stage.status
             self._transition(stage, StageState.VALIDATED)
             stage.output_contract_json = {
                 "validation": validation_report,
@@ -385,6 +470,21 @@ class WorkflowRepository:
                 status="AVAILABLE",
                 metadata_json=validation_report,
             ))
+            _record_event(
+                session,
+                job_id,
+                stage.workflow_id,
+                "STAGE_VALIDATED",
+                from_state=previous_status,
+                to_state=StageState.VALIDATED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "report_valid": validation_report.get("valid"),
+                    "error_count": len(validation_report.get("errors", [])),
+                },
+            )
+            return True
 
     def start_publishing(self, job_id, stage_key, attempt_id):
         with self._session.begin() as session:
@@ -401,7 +501,18 @@ class WorkflowRepository:
                 )
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Attempt is not running")
+            previous_status = stage.status
             self._transition(stage, StageState.PUBLISHING)
+            _record_event(
+                session,
+                job_id,
+                stage.workflow_id,
+                "STAGE_PUBLISHING",
+                from_state=previous_status,
+                to_state=StageState.PUBLISHING.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+            )
 
     @staticmethod
     def _estimate_cost(metrics, pricing):
@@ -444,6 +555,7 @@ class WorkflowRepository:
                         stage.status == StageState.FINISHED.value:
                     return False
                 raise InvalidStateTransition("Attempt is not running")
+            previous_status = stage.status
             self._transition(stage, StageState.FINISHED)
             finished_at = utcnow()
             attempt.state = AttemptState.SUCCEEDED.value
@@ -503,6 +615,28 @@ class WorkflowRepository:
                 job.state = JobState.FINISHED.value
                 job.updated_at = finished_at
                 job.version += 1
+                _record_event(
+                    session,
+                    job_id,
+                    workflow.id,
+                    "JOB_FINISHED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FINISHED.value,
+                )
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_FINISHED",
+                from_state=previous_status,
+                to_state=StageState.FINISHED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "artifact_count": len(artifacts),
+                    "output_bytes": metrics.get("output_bytes"),
+                },
+            )
         return True
 
     def fail_attempt(
@@ -531,6 +665,7 @@ class WorkflowRepository:
                     StageState.FAILED.value,
                     StageState.CANCELLED.value):
                 return False
+            previous_status = stage.status
             self._transition(stage, target)
             attempt.state = attempt_state.value
             attempt.finished_at = utcnow()
@@ -555,6 +690,28 @@ class WorkflowRepository:
                 job.state = JobState.FAILED.value
                 job.updated_at = utcnow()
                 job.version += 1
+                _record_event(
+                    session,
+                    job_id,
+                    workflow.id,
+                    "JOB_FAILED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FAILED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    payload={"error_code": error_code},
+                )
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "ATTEMPT_RETRYABLE" if retryable else "STAGE_FAILED",
+                from_state=previous_status,
+                to_state=target.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={"error_code": error_code},
+            )
         return True
 
     def cancel_attempt(
@@ -579,6 +736,7 @@ class WorkflowRepository:
                     )
                 )
             now = utcnow()
+            previous_status = stage.status
             self._transition(stage, StageState.CANCELLED)
             started = attempt.started_at
             if started.tzinfo is None:
@@ -597,6 +755,17 @@ class WorkflowRepository:
             job.state = JobState.CANCELLED.value
             job.updated_at = now
             job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_CANCELLED",
+                from_state=previous_status,
+                to_state=StageState.CANCELLED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={"reason": reason},
+            )
         return True
 
 
@@ -618,6 +787,7 @@ class WorkflowRepository:
                         StageState.VALIDATED.value,
                         StageState.PUBLISHING.value):
                     continue
+                previous_status = stage.status
                 self._transition(stage, StageState.RETRY_WAIT)
                 attempt.state = AttemptState.RETRYABLE.value
                 attempt.finished_at = now
@@ -629,6 +799,18 @@ class WorkflowRepository:
                 )
                 attempt.error_code = "WORKER_LOST"
                 attempt.error_message = "Recovered stale running attempt"
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                _record_event(
+                    session,
+                    job_id,
+                    workflow.id,
+                    "ATTEMPT_RECOVERED",
+                    from_state=previous_status,
+                    to_state=StageState.RETRY_WAIT.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt.id,
+                    payload={"reason": "WORKER_LOST"},
+                )
                 recovered += 1
         return recovered
 
@@ -664,6 +846,11 @@ class WorkflowRepository:
                     StageRecord.workflow_id == workflow.id
                 ).order_by(StageRecord.ordinal)
             ).scalars().all()
+            events = session.execute(
+                select(WorkflowEventRecord).where(
+                    WorkflowEventRecord.job_id == job_id
+                ).order_by(WorkflowEventRecord.occurred_at, WorkflowEventRecord.id)
+            ).scalars().all()
             snapshot = {
                 "id": job.id,
                 "idempotency_key": job.idempotency_key,
@@ -677,6 +864,16 @@ class WorkflowRepository:
                     "status": workflow.state,
                 },
                 "stages": [],
+                "events": [{
+                    "id": event.id,
+                    "type": event.event_type,
+                    "from_state": event.from_state,
+                    "to_state": event.to_state,
+                    "occurred_at": event.occurred_at.isoformat(),
+                    "stage_id": event.stage_id,
+                    "attempt_id": event.attempt_id,
+                    "payload": event.payload_json,
+                } for event in events],
             }
             for stage in stages:
                 attempts = session.execute(
