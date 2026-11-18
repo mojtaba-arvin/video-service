@@ -3,6 +3,7 @@ from celery import states, Task
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class BaseOutputMixin(object):
@@ -87,29 +88,34 @@ class BaseOutputMixin(object):
             # JOB_DETAILS has not been set
             return None
 
-        # Playlist completion is projected from durable workflow state.
-        # PROCESSING_FINISHED and UPLOADING_FINISHED are forbidden until the
-        # Stage has reached FINISHED after successful package publication.
-        playlist_output_ids = set(
+        # Completion status for every workflow-managed output is projected
+        # from durable state. Legacy jobs without a configured state store keep
+        # their existing Redis status behavior.
+        managed_output_ids = set(
             job_details.get("no_watermarked_playlists_ids", [])
             + job_details.get("watermarked_playlists_ids", [])
+            + job_details.get("no_watermarked_thumbnails_ids", [])
+            + job_details.get("watermarked_thumbnails_ids", [])
+            + job_details.get("watermarked_outputs_ids", [])
         )
         if (
                 status_name in (
                     self.output_status.PROCESSING_FINISHED,
                     self.output_status.UPLOADING_FINISHED,
                 )
-                and output_id in playlist_output_ids):
-            stage = get_workflow_repository().get_stage_snapshot(
-                request_id, output_id
-            )
-            if stage is None or stage["status"] != "FINISHED":
-                raise RuntimeError(
-                    "{} is forbidden until the durable workflow stage "
-                    "has completed validation and publication".format(
-                        status_name
-                    )
+                and output_id in managed_output_ids):
+            repository = get_workflow_repository(required=False)
+            if repository is not None:
+                stage = repository.get_stage_snapshot(
+                    request_id, output_id
                 )
+                if stage is None or stage["status"] != "FINISHED":
+                    raise RuntimeError(
+                        "{} is forbidden until the durable workflow stage "
+                        "has completed validation and publication".format(
+                            status_name
+                        )
+                    )
 
         current_status = self.cache.get(
             CacheKeysTemplates.OUTPUT_STATUS.format(
