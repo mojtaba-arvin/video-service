@@ -19,7 +19,7 @@ When a caller supplies a validated execution plan, persist the following in the 
 - Stage projection rows derived from the plan nodes;
 - the JOB_CREATED lifecycle event, containing the plan version and fingerprint but not the full plan.
 
-The complete DAG remains the authoritative execution definition. Stage rows are query-friendly projections and must match the plan's ordered stage keys and operation identifiers.
+The complete DAG remains the authoritative execution definition. Stage rows are thin query-friendly projections and must match the plan's ordered stage keys and operation identifiers. Plan parameters are not duplicated into Stage input/output JSON or public status snapshots; the full validated plan is retrieved only through the dedicated repository method and its fingerprint is verified.
 
 The repository verifies the canonical fingerprint whenever a plan or Job snapshot is read. Plan JSON must pass the versioned validator, including cycle, operation, resource-profile, JSON-safety and sensitive-field checks. A plan's job identity must match the newly submitted Job. Replays with a generated replacement Job ID rebind only that identity to the already accepted Job before comparing fingerprints.
 
