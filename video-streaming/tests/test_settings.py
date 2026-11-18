@@ -96,6 +96,18 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS, 300)
 
+    def test_watermark_execution_timeout_is_configurable(self):
+        settings = load_settings({
+            "FFMPEG_WATERMARK_TIMEOUT_SECONDS": "5400",
+        })
+
+        self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 5400)
+
+    def test_watermark_execution_timeout_has_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 3600)
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 
