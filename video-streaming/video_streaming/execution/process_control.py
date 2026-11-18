@@ -23,7 +23,10 @@ def terminate_process_tree(process, grace_period=1.0):
         psutil.AccessDenied: The worker lacks permission to stop a process.
     """
     pid = getattr(process, "pid", process)
-    root = psutil.Process(int(pid))
+    try:
+        root = psutil.Process(int(pid))
+    except psutil.NoSuchProcess:
+        return
 
     try:
         descendants = root.children(recursive=True)
