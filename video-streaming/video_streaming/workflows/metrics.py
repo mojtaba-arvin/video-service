@@ -1,5 +1,7 @@
 """Low-overhead worker resource measurements and transparent cost estimates."""
 
+import math
+import re
 import resource
 
 
@@ -18,14 +20,21 @@ def child_cpu_seconds_since(start_value):
 
 
 def configured_pricing(settings):
-    """Return explicit provider rates or a clearly non-monetary resource index.
+    """Return a validated immutable price card or the non-monetary RUNIT model.
 
-    The default is a normalized comparison unit, not money or a provider bill.
-    It makes resource consumption cost-shaped from the first stage while
-    avoiding a fabricated USD estimate before an operator configures a rate
-    card.
+    An operator-supplied price card must have an explicit model ID, version,
+    ISO-style currency code and at least one positive finite rate. Partially
+    configured cards fail closed instead of silently falling back to RUNIT.
     """
-    model_id = getattr(settings, "WORKFLOW_PRICING_MODEL_ID", "")
+    model_id = str(
+        getattr(settings, "WORKFLOW_PRICING_MODEL_ID", "") or ""
+    ).strip()
+    model_version = str(
+        getattr(settings, "WORKFLOW_PRICING_MODEL_VERSION", "") or ""
+    ).strip()
+    currency = str(
+        getattr(settings, "WORKFLOW_COST_CURRENCY", "USD") or ""
+    ).strip().upper()
     rates = {
         "cpu_per_second": float(
             getattr(settings, "WORKFLOW_CPU_COST_PER_SECOND", 0.0)
@@ -37,15 +46,36 @@ def configured_pricing(settings):
             getattr(settings, "WORKFLOW_STORAGE_GB_COST", 0.0)
         ),
     }
-    if model_id and any(value > 0 for value in rates.values()):
+    custom_card_configured = bool(
+        model_id or model_version or any(value != 0 for value in rates.values())
+    )
+    if custom_card_configured:
+        if not model_id or not model_version:
+            raise ValueError(
+                "A custom price card requires WORKFLOW_PRICING_MODEL_ID "
+                "and WORKFLOW_PRICING_MODEL_VERSION"
+            )
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            raise ValueError(
+                "WORKFLOW_COST_CURRENCY must be an uppercase three-letter code"
+            )
+        if not any(value > 0 for value in rates.values()):
+            raise ValueError("At least one custom price-card rate must be positive")
+        for name, value in rates.items():
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    "{} must be finite and non-negative".format(name)
+                )
         return {
             "model_id": model_id,
-            "currency": getattr(settings, "WORKFLOW_COST_CURRENCY", "USD"),
+            "model_version": model_version,
+            "currency": currency,
             **rates,
         }
 
     return {
         "model_id": "relative-resource-index-v1",
+        "model_version": "1",
         "currency": "RUNIT",
         "cpu_per_second": 1.0,
         "memory_gb_second": 0.25,
