@@ -243,6 +243,7 @@ def upload_file(self,
                     "output_bytes": file_size,
                     "cpu_seconds": kwargs.get("cpu_seconds"),
                     "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                    "memory_duration_ms": kwargs.get("memory_duration_ms"),
                 },
                 pricing=configured_pricing(settings),
             )
