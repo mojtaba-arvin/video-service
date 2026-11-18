@@ -148,7 +148,8 @@ def run_cancellable_process(
         timeout_seconds,
         should_cancel=None,
         poll_interval=0.2,
-        terminate_grace_period=1.0):
+        terminate_grace_period=1.0,
+        on_usage=None):
     """Run a command with a deadline and cooperative process-group cancellation.
 
     Both stdout and stderr are drained while polling. Dedicated process groups
@@ -174,9 +175,36 @@ def run_cancellable_process(
     )
     started_at = time.monotonic()
     terminated = False
+    peak_memory_bytes = 0
+    sampled_cpu_seconds = 0.0
+
+    def capture_usage():
+        nonlocal peak_memory_bytes, sampled_cpu_seconds
+        try:
+            root = psutil.Process(process.pid)
+            processes = [root] + root.children(recursive=True)
+            cpu_seconds = 0.0
+            current_rss = 0
+            for child in processes:
+                try:
+                    cpu = child.cpu_times()
+                    cpu_seconds += float(cpu.user + cpu.system)
+                    current_rss += int(child.memory_info().rss)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
+            peak_memory_bytes = max(peak_memory_bytes, current_rss)
+            if on_usage is not None:
+                on_usage({
+                    "cpu_seconds": sampled_cpu_seconds,
+                    "peak_memory_bytes": peak_memory_bytes,
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
 
     try:
         while True:
+            capture_usage()
             if should_cancel is not None and should_cancel():
                 terminate_process_tree(process, grace_period=terminate_grace_period)
                 terminated = True
