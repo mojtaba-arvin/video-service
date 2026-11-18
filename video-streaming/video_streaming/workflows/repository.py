@@ -1153,7 +1153,11 @@ class WorkflowRepository:
                 int(item.startup_ms)
                 for item in sessions if item.startup_ms is not None
             ]
-            rebuffer_count = sum(item.rebuffer_count for item in sessions)
+            rebuffer_count = sum(
+                item.rebuffer_count
+                + (1 if item.buffering_started_at is not None else 0)
+                for item in sessions
+            )
             buffering_ms = sum(
                 item.total_buffering_ms
                 + (
