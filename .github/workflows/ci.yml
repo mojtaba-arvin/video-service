@@ -118,16 +118,6 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-test-py39.txt
 
-      - name: Ensure FFmpeg is available
-        run: |
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            ffmpeg -version | head -n 1
-            ffprobe -version | head -n 1
-          else
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y ffmpeg
-          fi
-
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-test-py39.txt
 
@@ -144,11 +134,6 @@ jobs:
           fi
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env.local
-
-      - name: Generate and validate synthetic VOD corpus
-        run: |
-          python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py \
-            --output-dir "$RUNNER_TEMP/synthetic-vod-v1"
 
       - name: Run regression suite
         env:
@@ -172,23 +157,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-test-py312.txt
 
-      - name: Ensure FFmpeg is available
-        run: |
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            ffmpeg -version | head -n 1
-            ffprobe -version | head -n 1
-          else
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y ffmpeg
-          fi
-
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-test-py312.txt
-
-      - name: Generate and validate synthetic VOD corpus
-        run: |
-          python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py \
-            --output-dir "$RUNNER_TEMP/synthetic-vod-v1"
 
       - name: Run regression suite
         env:
@@ -247,6 +217,24 @@ jobs:
 
       - name: Install isolated integration dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-integration-py39.txt
+
+      - name: Run real FFmpeg thumbnail regression tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_thumbnail_rendering.py' \
+            -v
+
+      - name: Run synthetic HLS/DASH package harness
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_synthetic_vod_package_harness.py' \
+            -v
 
       - name: Generate gRPC Python modules
         run: |
