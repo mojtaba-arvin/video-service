@@ -189,8 +189,8 @@ Edge should be an optional execution backend, not a special domain model or mand
 | Lane | Scope | Parallel output | Shared boundary / merge dependency |
 |---|---|---|---|
 | A — durable dispatch | Outbox, relay, retry and recovery | PostgreSQL outbox + relay + crash tests | Own outbox migration/repository/dispatcher files; integrate with Workflow repository through a small explicit interface |
-| B — process execution | FFmpeg supervisor, limits, cleanup | Local ExecutionBackend + process-tree tests | Own execution adapter and FFmpeg process wrapper; do not change domain state schema without a contract |
-| C — security | redacted logs, webhook SSRF, auth/tenant/quotas | threat model + adversarial tests + boundary middleware | Coordinate identity/tenant contract before changing gRPC/protobuf |
+| B — process execution | FFmpeg supervisor, limits, cleanup | Open PR #78 adds bounded process-tree termination and a parent/child test | Own execution adapter and FFmpeg process wrapper; next add cgroup/container limits and per-attempt quotas |
+| C — security | redacted logs, webhook SSRF, auth/tenant/quotas | Open PR #77 removes raw task/request/provider/webhook values from logs | Coordinate identity/tenant contract before changing gRPC/protobuf; next add SSRF and authorization controls |
 | D — economics | price cards and benchmark harness | raw dataset + reproducible report + coverage-aware API | Do not modify attempt persistence fields until usage schema is agreed |
 | E — agent interface | typed contracts + MCP adapter | MCP tool manifest + client contract tests | Depends on app service contracts and authorization, not on Celery signatures |
 | F — QoE | playback event correctness and player integration | session metrics + client example/SDK later | Own playback migration/events; avoid unrelated workflow domain edits |
