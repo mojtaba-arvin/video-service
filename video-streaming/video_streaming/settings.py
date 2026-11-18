@@ -45,6 +45,22 @@ TASK_RETRY_FFMPEG_COMMAND_MAX = env_config.get(
     default=1,
     cast=int)
 
+# Bound webhook delivery network waits. Retries remain owned by Celery.
+WEBHOOK_CONNECT_TIMEOUT_SECONDS = env_config.get(
+    "WEBHOOK_CONNECT_TIMEOUT_SECONDS",
+    default=3.0,
+    cast=float)
+
+WEBHOOK_READ_TIMEOUT_SECONDS = env_config.get(
+    "WEBHOOK_READ_TIMEOUT_SECONDS",
+    default=10.0,
+    cast=float)
+
+if WEBHOOK_CONNECT_TIMEOUT_SECONDS <= 0:
+    raise ValueError("WEBHOOK_CONNECT_TIMEOUT_SECONDS must be greater than zero")
+if WEBHOOK_READ_TIMEOUT_SECONDS <= 0:
+    raise ValueError("WEBHOOK_READ_TIMEOUT_SECONDS must be greater than zero")
+
 ##################################################
 #    Tasks Default Parameters                    #
 ##################################################

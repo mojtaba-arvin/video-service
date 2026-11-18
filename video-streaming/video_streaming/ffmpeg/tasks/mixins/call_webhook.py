@@ -1,6 +1,7 @@
 import json
 import urllib3
 from celery import Task
+from video_streaming import settings
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import BaseTask
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
@@ -41,25 +42,37 @@ class CallWebhookMixin(object):
                 http_method,
                 webhook_url,
                 headers=headers,
-                body=encoded_body)
+                body=encoded_body,
+                timeout=urllib3.Timeout(
+                    connect=settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS,
+                    read=settings.WEBHOOK_READ_TIMEOUT_SECONDS,
+                ),
+                # A redirect can turn a public callback into an internal request.
+                # Reject it at the transport layer; do not follow it first.
+                redirect=False,
+                retries=False,
+                # The response body is not part of the callback contract.
+                preload_content=False,
+            )
         except Exception as e:
-            # urllib3.exceptions.NewConnectionError
+            http_pool.clear()
             raise self.retry(exc=e)
 
-        # Webhook URLs can contain bearer material or signed query values.
-        self.logger.info(
-            "Webhook response received",
-            extra={
-                "http_status": http_response.status,
-                "request_id": request_id,
-            },
-        )
+        try:
+            # Webhook URLs can contain bearer material or signed query values.
+            self.logger.info(
+                "Webhook response received",
+                extra={
+                    "http_status": http_response.status,
+                    "request_id": request_id,
+                },
+            )
 
-        # check the HTTP status code to raise ignore/retry
-        is_delivered = self.check_http_status(
-            http_response,
-            request_id)
-        return is_delivered
+            # check the HTTP status code to raise ignore/retry
+            return self.check_http_status(http_response, request_id)
+        finally:
+            http_response.close()
+            http_pool.clear()
 
     def check_http_status(
             self,

@@ -81,6 +81,43 @@ class SensitiveLoggingTests(unittest.TestCase):
         self.assertNotIn(secret, rendered)
         self.assertNotIn(url, rendered)
 
+    def test_webhook_transport_is_bounded_and_does_not_follow_redirects(self):
+        url = "https://callback.invalid/hook"
+        pool = Mock()
+        response = Mock()
+        response.status = 302
+        pool.request.return_value = response
+
+        with patch(
+                "video_streaming.ffmpeg.tasks.mixins.call_webhook.urllib3.PoolManager",
+                return_value=pool):
+            with patch(
+                    "video_streaming.ffmpeg.tasks.mixins.call_webhook."
+                    "settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS",
+                    2.0):
+                with patch(
+                        "video_streaming.ffmpeg.tasks.mixins.call_webhook."
+                        "settings.WEBHOOK_READ_TIMEOUT_SECONDS",
+                        4.0):
+                    with patch.object(
+                            _WebhookTask,
+                            "check_http_status",
+                            side_effect=ValueError("redirect rejected")):
+                        with self.assertRaisesRegex(
+                                ValueError, "redirect rejected"):
+                            _WebhookTask().call_webhook(
+                                "job-456", webhook_url=url
+                            )
+
+        kwargs = pool.request.call_args.kwargs
+        self.assertFalse(kwargs["redirect"])
+        self.assertFalse(kwargs["retries"])
+        self.assertFalse(kwargs["preload_content"])
+        self.assertEqual(kwargs["timeout"]._connect, 2.0)
+        self.assertEqual(kwargs["timeout"]._read, 4.0)
+        response.close.assert_called_once_with()
+        pool.clear.assert_called_once_with()
+
     def test_s3_exception_log_omits_provider_exception_message(self):
         secret = "provider-secret-value"
         service = S3Service.__new__(S3Service)
