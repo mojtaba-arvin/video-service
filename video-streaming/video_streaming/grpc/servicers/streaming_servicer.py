@@ -1,4 +1,4 @@
-import pprint
+import logging
 import traceback
 from video_streaming.cache import RedisCache
 from video_streaming.core.constants import ErrorMessages
@@ -12,6 +12,9 @@ from .mixins import (
     RevokeJobsMixin,
     RevokeOutputsMixin,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class Streaming(
@@ -34,13 +37,20 @@ class Streaming(
     def _exception_handler(exc: Exception):
         if isinstance(exc, exceptions.GrpcBaseException):
             raise exc
-        print(traceback.format_exc())
-        print(exc)
+        # Request and exception values may contain secrets or signed URLs.
+        # Keep stack context without interpolating untrusted values.
+        logger.error(
+            "Unhandled gRPC service failure",
+            extra={
+                "error_type": type(exc).__name__,
+                "traceback": traceback.format_tb(exc.__traceback__),
+            },
+        )
         raise exceptions.GrpcBaseException(
             ErrorMessages.INTERNAL_ERROR)
 
     def create_job(self, request, context):
-        pprint.pprint(request)
+        # The request can contain private storage and callback information.
         try:
             return self._create_job(request, context)
         except Exception as exc:
