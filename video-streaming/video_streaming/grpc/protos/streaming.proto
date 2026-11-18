@@ -467,4 +467,7 @@ message PlaybackQoEReportResponse {
   double total_estimated_cost = 12;
   string cost_currency = 13;
   string pricing_model_id = 14;
+  bool cost_estimate_complete = 15;
+  int32 priced_attempt_count = 16;
+  int32 total_attempt_count = 17;
 }
