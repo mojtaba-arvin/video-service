@@ -2,6 +2,7 @@ import os
 from celery import states, Task
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class BaseOutputMixin(object):
@@ -86,31 +87,43 @@ class BaseOutputMixin(object):
             # JOB_DETAILS has not been set
             return None
 
-        # A playlist may report PROCESSING_FINISHED only after both boundary
-        # proofs exist: local package validation and remote publication/readback.
+        # Playlist completion is projected from durable workflow state.
+        # PROCESSING_FINISHED and UPLOADING_FINISHED are forbidden until the
+        # Stage has reached FINISHED after successful package publication.
         playlist_output_ids = set(
             job_details.get("no_watermarked_playlists_ids", [])
             + job_details.get("watermarked_playlists_ids", [])
         )
-        if status_name == self.output_status.PROCESSING_FINISHED and \
-                output_id in playlist_output_ids:
-            local_proof = self.cache.get(
-                CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
-                    request_id=request_id, output_id=output_id
-                ),
-                decode=False,
-            )
-            remote_proof = self.cache.get(
-                CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
-                    request_id=request_id, output_id=output_id
-                ),
-                decode=False,
-            )
-            if local_proof != "1" or remote_proof != "1":
-                raise RuntimeError(
-                    "PROCESSING_FINISHED is forbidden until local validation "
-                    "and storage publication verification both succeed"
+        if (
+                status_name in (
+                    self.output_status.PROCESSING_FINISHED,
+                    self.output_status.UPLOADING_FINISHED,
                 )
+                and output_id in playlist_output_ids):
+            stage = get_workflow_repository().get_stage_snapshot(
+                request_id, output_id
+            )
+            if stage is None or stage["status"] != "FINISHED":
+                raise RuntimeError(
+                    "{} is forbidden until the durable workflow stage "
+                    "has completed validation and publication".format(
+                        status_name
+                    )
+                )
+
+        current_status = self.cache.get(
+            CacheKeysTemplates.OUTPUT_STATUS.format(
+                request_id=request_id, output_id=output_id
+            ),
+            decode=False,
+        )
+        if current_status == status_name:
+            return None
+        if current_status in (
+                self.output_status.UPLOADING_FINISHED,
+                self.output_status.OUTPUT_FAILED,
+                self.output_status.OUTPUT_REVOKED):
+            return None
 
         # to prevent set output status after it was set to
         # in 'OUTPUT_FAILED' and 'OUTPUT_REVOKED'
