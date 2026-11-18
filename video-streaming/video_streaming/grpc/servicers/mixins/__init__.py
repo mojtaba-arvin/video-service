@@ -8,5 +8,6 @@ __all__ = [
     'GetResultsMixin',
     'CreateJobMixin',
     'RevokeJobsMixin',
-    'RevokeOutputsMixin'
+    'RevokeOutputsMixin',
+    'PlaybackQoEMixin'
 ]
