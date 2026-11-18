@@ -169,9 +169,48 @@ def publish_package(
             )
         raise
 
+    published_artifacts = []
+    for file_path, relative_path, file_size in files:
+        suffix = Path(relative_path).suffix.lower()
+        if suffix == ".m3u8":
+            artifact_type = (
+                "streaming_manifest"
+                if relative_path == manifest_relative
+                else "streaming_playlist"
+            )
+            media_type = "application/vnd.apple.mpegurl"
+        elif suffix == ".mpd":
+            artifact_type = "streaming_manifest"
+            media_type = "application/dash+xml"
+        elif suffix == ".ts":
+            artifact_type = "media_segment"
+            media_type = "video/mp2t"
+        elif suffix == ".m4s":
+            artifact_type = "media_segment"
+            media_type = "video/iso.segment"
+        elif suffix in (".mp4", ".m4a"):
+            artifact_type = "media_initialization"
+            media_type = "video/mp4" if suffix == ".mp4" else "audio/mp4"
+        else:
+            artifact_type = "media_artifact"
+            media_type = None
+        key = _object_key(prefix, relative_path)
+        published_artifacts.append({
+            "artifact_type": artifact_type,
+            "logical_name": relative_path,
+            "uri": "s3://{}/{}".format(s3_output_bucket, key),
+            "media_type": media_type,
+            "size_bytes": file_size,
+            "metadata": {
+                "protocol": protocol,
+                "readback_verified": True,
+            },
+        })
+
     return {
         "directory_size": total_size,
         "files": total_files,
         "manifest_key": root_key,
         "validation_report": report.as_dict(),
+        "artifacts": published_artifacts,
     }
