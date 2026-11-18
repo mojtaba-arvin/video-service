@@ -349,6 +349,9 @@ class WorkflowRepository:
             if plan["workflow_name"] != workflow_name:
                 raise ValueError("execution plan workflow_name must match workflow_name")
             plan_fingerprint = execution_plan_sha256(plan)
+            plan_stage_keys = [node["stage_key"] for node in plan["nodes"]]
+            if len(plan_stage_keys) != len(set(plan_stage_keys)):
+                raise ValueError("execution plan stage_key values must be unique")
             plan_stage_specs = [{
                 "stage_key": node["stage_key"],
                 "operation": node["operation"],
@@ -492,6 +495,13 @@ class WorkflowRepository:
                 return None
             if workflow.execution_plan_json is None:
                 return None
+            actual_fingerprint = execution_plan_sha256(
+                workflow.execution_plan_json
+            )
+            if not hmac.compare_digest(
+                    actual_fingerprint,
+                    workflow.execution_plan_fingerprint or ""):
+                raise RuntimeError("Persisted execution plan fingerprint mismatch")
             return {
                 "workflow_id": workflow.id,
                 "workflow_version": workflow.workflow_version,
@@ -1623,6 +1633,16 @@ class WorkflowRepository:
                     WorkflowEventRecord.job_id == job_id
                 ).order_by(WorkflowEventRecord.occurred_at, WorkflowEventRecord.id)
             ).scalars().all()
+            if workflow.execution_plan_json is not None:
+                actual_fingerprint = execution_plan_sha256(
+                    workflow.execution_plan_json
+                )
+                if not hmac.compare_digest(
+                        actual_fingerprint,
+                        workflow.execution_plan_fingerprint or ""):
+                    raise RuntimeError(
+                        "Persisted execution plan fingerprint mismatch"
+                    )
             snapshot = {
                 "id": job.id,
                 "idempotency_key": job.idempotency_key,
