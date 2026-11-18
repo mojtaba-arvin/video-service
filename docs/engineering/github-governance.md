@@ -17,10 +17,19 @@ Create one repository branch ruleset, set enforcement to Active, and target
 develop. Configure:
 
 - Require pull requests before merging.
-- Require the Unit tests (Python 3.9) status check.
-- After it has passed on several normal and fork-originated PRs, consider also
-  requiring Regression suite (Python 3.12). That job validates tests only;
-  it does not certify the full legacy service runtime.
+- Require the single aggregate `Quality gates` status check from the CI workflow.
+  Do not require conditional leaf jobs individually: docs-only changes
+  intentionally skip runtime jobs, and the aggregate fails whenever a required
+  job for the detected change class is not successful.
+- For runtime changes, `Quality gates` requires the Python 3.9 regression
+  suite, Python 3.12 regression suite, PostgreSQL repository tests on Python
+  3.12, and the gRPC → Celery → FFmpeg → storage integration path. The Python
+  3.9 PostgreSQL repository tests run inside that same integration job to
+  avoid a second identical database container.
+- For documentation-only changes, it requires the offline local-link validator
+  and does not start Python/FFmpeg/PostgreSQL test runners.
+- Keep Dependency Review as a separate security signal; require it only after
+  confirming its behavior for both same-repository and fork-originated PRs.
 - Require all PR conversations to be resolved.
 - Require linear history.
 - Block force pushes.
@@ -81,6 +90,36 @@ Merged PR branches, abandoned experiments superseded by merged changes, and
 historical branches with zero unique commits are candidates. Never delete
 develop, an open PR head, or a branch with unique unreviewed work. Prefer the
 GitHub automatic head-branch deletion setting for future merges.
+
+## CI execution policy and cost controls
+
+The CI workflow uses an always-running change-classification job and one stable
+aggregate status check named `Quality gates`.
+
+- Documentation-only updates run the local Markdown-link validator and skip
+  media/database/runtime jobs. If any non-documentation path is included, the
+  complete runtime suite still runs.
+- Runtime changes run Python 3.9 and Python 3.12 regression suites in parallel,
+  the VOD integration path, and PostgreSQL repository tests on Python 3.12.
+  The Python 3.9 PostgreSQL repository suite is part of the integration job,
+  reusing its existing database service.
+- FFmpeg is installed only in the VOD integration job. The Python regression
+  and PostgreSQL-only jobs do not install media binaries; the real thumbnail
+  and HLS/DASH package suites run once in the FFmpeg job.
+- The standalone synthetic-corpus generation step is omitted because the
+  HLS/DASH harness creates and validates its own temporary fixtures.
+- FFmpeg/FFprobe are checked before installation; apt update/install occurs
+  only when the integration runner does not already provide both binaries.
+- Pip caching remains keyed to the corresponding pinned requirement file.
+- The change classifier fails closed: an unknown/empty diff runs all checks.
+- Concurrency cancels superseded commits for the same PR/ref. Independent PRs
+  and workflows remain isolated.
+- The aggregate check is the branch-protection contract. Individual conditional
+  jobs should not be required directly because a skipped job is expected for
+  unrelated change classes.
+
+Avoid reducing runtime coverage to make CI faster. Optimize duplicated setup,
+redundant services and irrelevant test categories first.
 
 ## Workflow security and cost
 
