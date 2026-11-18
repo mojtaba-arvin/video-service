@@ -220,12 +220,16 @@ def publish_package(
         relative for relative in combined_relatives
         if Path(relative).suffix.lower() in (".m3u8", ".mpd")
     ]
-    for relative in old_manifest_relatives:
-        storage.delete_object(
-            key=_object_key(prefix, relative),
-            bucket_name=s3_output_bucket,
-        )
+    # Withdraw the root first. If this fails, preserve the previous package
+    # intact; never delete child manifests while the old root is visible.
     storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+    for relative in old_manifest_relatives:
+        key = _object_key(prefix, relative)
+        if key != root_key:
+            storage.delete_object(
+                key=key,
+                bucket_name=s3_output_bucket,
+            )
 
     for relative in combined_relatives:
         storage.delete_object(
