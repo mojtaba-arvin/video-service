@@ -530,6 +530,104 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             self.pb2.OutputStatus.UPLOADING_FINISHED,
         )
 
+        # QoE events are session-scoped, idempotent, and correlated to the
+        # same durable playlist stage and its measured resource-cost record.
+        playback = self.stub.start_playback_session(
+            self.pb2.StartPlaybackSessionRequest(
+                tracking_id=accepted.tracking_id,
+                output_id="p0",
+                client_version="synthetic-player/1.0",
+            ),
+            timeout=30,
+        )
+        self.assertTrue(playback.session_id)
+        self.assertTrue(playback.session_token)
+        self.assertTrue(playback.manifest_artifact_id)
+
+        started_event = self.pb2.RecordPlaybackEventRequest(
+            session_id=playback.session_id,
+            session_token=playback.session_token,
+            event_id="e2e-playback-start",
+            event_type=self.pb2.PlaybackEventType.PLAYBACK_STARTED,
+            startup_ms=640,
+            client_version="synthetic-player/1.0",
+        )
+        started = self.stub.record_playback_event(
+            started_event, timeout=30
+        )
+        self.assertTrue(started.accepted)
+        self.assertFalse(started.duplicate)
+        replayed_start = self.stub.record_playback_event(
+            started_event, timeout=30
+        )
+        self.assertTrue(replayed_start.duplicate)
+
+        self.stub.record_playback_event(
+            self.pb2.RecordPlaybackEventRequest(
+                session_id=playback.session_id,
+                session_token=playback.session_token,
+                event_id="e2e-buffering-start",
+                event_type=self.pb2.PlaybackEventType.BUFFERING_STARTED,
+            ),
+            timeout=30,
+        )
+        buffering_end = self.stub.record_playback_event(
+            self.pb2.RecordPlaybackEventRequest(
+                session_id=playback.session_id,
+                session_token=playback.session_token,
+                event_id="e2e-buffering-end",
+                event_type=self.pb2.PlaybackEventType.BUFFERING_ENDED,
+            ),
+            timeout=30,
+        )
+        self.assertEqual(buffering_end.rebuffer_count, 1)
+
+        decoder_error = self.stub.record_playback_event(
+            self.pb2.RecordPlaybackEventRequest(
+                session_id=playback.session_id,
+                session_token=playback.session_token,
+                event_id="e2e-decoder-error",
+                event_type=self.pb2.PlaybackEventType.DECODER_ERROR,
+                error_code="SYNTHETIC_DECODE_FAILURE",
+                decoder="synthetic-decoder",
+            ),
+            timeout=30,
+        )
+        self.assertEqual(decoder_error.decoder_error_count, 1)
+
+        ended_event = self.pb2.RecordPlaybackEventRequest(
+            session_id=playback.session_id,
+            session_token=playback.session_token,
+            event_id="e2e-playback-ended",
+            event_type=self.pb2.PlaybackEventType.PLAYBACK_ENDED,
+        )
+        ended = self.stub.record_playback_event(ended_event, timeout=30)
+        self.assertTrue(ended.ended)
+        self.assertTrue(
+            self.stub.record_playback_event(
+                ended_event, timeout=30
+            ).duplicate
+        )
+
+        qoe = self.stub.get_playback_qoe_report(
+            self.pb2.GetPlaybackQoEReportRequest(
+                tracking_id=accepted.tracking_id,
+                output_id="p0",
+            ),
+            timeout=30,
+        )
+        self.assertEqual(qoe.session_count, 1)
+        self.assertEqual(qoe.playback_started_count, 1)
+        self.assertEqual(qoe.average_startup_ms, 640)
+        self.assertEqual(qoe.rebuffer_count, 1)
+        self.assertEqual(qoe.decoder_error_count, 1)
+        self.assertGreaterEqual(qoe.total_cpu_seconds, 0)
+        self.assertGreater(qoe.total_estimated_cost, 0)
+        self.assertEqual(qoe.cost_currency, "RUNIT")
+        self.assertEqual(
+            qoe.pricing_model_id, "relative-resource-index-v1"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

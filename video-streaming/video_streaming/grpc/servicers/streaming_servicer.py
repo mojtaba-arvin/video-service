@@ -5,8 +5,13 @@ from video_streaming.core.constants import ErrorMessages
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2_grpc, \
     streaming_pb2
-from .mixins import CreateJobMixin, GetResultsMixin, RevokeJobsMixin, \
-    RevokeOutputsMixin
+from .mixins import (
+    CreateJobMixin,
+    GetResultsMixin,
+    PlaybackQoEMixin,
+    RevokeJobsMixin,
+    RevokeOutputsMixin,
+)
 
 
 class Streaming(
@@ -14,6 +19,7 @@ class Streaming(
         RevokeJobsMixin,
         GetResultsMixin,
         CreateJobMixin,
+        PlaybackQoEMixin,
         streaming_pb2_grpc.StreamingServicer):
 
     cache = RedisCache()

@@ -5,6 +5,9 @@ service Streaming{
   rpc get_results(JobsResultsRequest) returns (JobsResultsResponse) {}
   rpc revoke_jobs(RevokeJobsRequest) returns (RevokeJobsResponse) {}
   rpc revoke_job_outputs(RevokeOutputsRequest) returns (RevokeOutputsResponse) {}
+  rpc start_playback_session(StartPlaybackSessionRequest) returns (StartPlaybackSessionResponse) {}
+  rpc record_playback_event(RecordPlaybackEventRequest) returns (RecordPlaybackEventResponse) {}
+  rpc get_playback_qoe_report(GetPlaybackQoEReportRequest) returns (PlaybackQoEReportResponse) {}
 }
 
 message JobRequest {
@@ -397,4 +400,74 @@ enum signalFailedReason{
   OUTPUT_HAS_BEEN_FAILED = 1; // when output status is OUTPUT_FAILED
   OUTPUT_HAS_BEEN_UPLOADED = 2; // when output status is UPLOADING_FINISHED
   OUTPUT_UPLOADING_COULD_NOT_BE_STOPPED = 3; // sometimes when output status is PLAYLIST_UPLOADING
+}
+
+
+enum PlaybackEventType {
+  PLAYBACK_EVENT_UNSPECIFIED = 0;
+  PLAYBACK_STARTED = 1;
+  BUFFERING_STARTED = 2;
+  BUFFERING_ENDED = 3;
+  DECODER_ERROR = 4;
+  PLAYBACK_ENDED = 5;
+}
+
+message StartPlaybackSessionRequest {
+  string tracking_id = 1;
+  string output_id = 2;
+  string client_version = 3;
+}
+
+message StartPlaybackSessionResponse {
+  string session_id = 1;
+  string session_token = 2;
+  string manifest_artifact_id = 3;
+}
+
+message RecordPlaybackEventRequest {
+  string session_id = 1;
+  string session_token = 2;
+  // Caller-generated stable key so network retries do not double count events.
+  string event_id = 3;
+  PlaybackEventType event_type = 4;
+  // Required only for PLAYBACK_STARTED; buffering durations use server time.
+  int64 startup_ms = 5;
+  // Required only for DECODER_ERROR.
+  string error_code = 6;
+  string decoder = 7;
+  string client_version = 8;
+}
+
+message RecordPlaybackEventResponse {
+  bool accepted = 1;
+  bool duplicate = 2;
+  int32 rebuffer_count = 3;
+  int64 total_buffering_ms = 4;
+  int32 decoder_error_count = 5;
+  bool ended = 6;
+}
+
+message GetPlaybackQoEReportRequest {
+  string tracking_id = 1;
+  string output_id = 2;
+}
+
+message PlaybackQoEReportResponse {
+  string tracking_id = 1;
+  string output_id = 2;
+  string stage_status = 3;
+  int32 session_count = 4;
+  int32 playback_started_count = 5;
+  int64 average_startup_ms = 6;
+  int32 rebuffer_count = 7;
+  int64 total_buffering_ms = 8;
+  int32 decoder_error_count = 9;
+  float buffering_ratio_percent = 10;
+  double total_cpu_seconds = 11;
+  double total_estimated_cost = 12;
+  string cost_currency = 13;
+  string pricing_model_id = 14;
+  bool cost_estimate_complete = 15;
+  int32 priced_attempt_count = 16;
+  int32 total_attempt_count = 17;
 }

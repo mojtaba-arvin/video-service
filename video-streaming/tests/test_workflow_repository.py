@@ -195,6 +195,254 @@ class WorkflowRepositoryTests(unittest.TestCase):
             event_types.count("STAGE_ATTEMPT_STARTED"), 3
         )
 
+    def test_playback_qoe_events_are_idempotent_and_correlate_with_stage_cost(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        self.repository.finish_stage(
+            job_id,
+            "p0",
+            attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/qoe/master.m3u8",
+                "media_type": "application/vnd.apple.mpegurl",
+                "size_bytes": 128,
+            }],
+            metrics={
+                "cpu_seconds": 3.0,
+                "duration_ms": 4200,
+                "peak_memory_bytes": 128 * 1024 * 1024,
+                "input_bytes": 4096,
+                "output_bytes": 8192,
+                "artifact_count": 1,
+            },
+            pricing={
+                "model_id": "relative-resource-index-v1",
+                "currency": "RUNIT",
+                "cpu_per_second": 1.0,
+                "memory_gb_second": 0.25,
+                "storage_gb": 0.01,
+            },
+        )
+
+        session = self.repository.start_playback_session(
+            job_id, "p0", client_version="player-test/1.0"
+        )
+        self.assertTrue(session["session_id"])
+        self.assertTrue(session["session_token"])
+        snapshot = self.repository.get_job_snapshot(job_id)
+        manifest_artifact = next(
+            artifact
+            for artifact in snapshot["stages"][0]["artifacts"]
+            if artifact["type"] == "streaming_manifest"
+        )
+        self.assertEqual(
+            session["manifest_artifact_id"], manifest_artifact["id"]
+        )
+
+        with self.assertRaises(PermissionError):
+            self.repository.record_playback_event(
+                session["session_id"],
+                "incorrect-session-token",
+                "bad-token-event",
+                "PLAYBACK_STARTED",
+                startup_ms=700,
+            )
+        with self.assertRaises(ValueError):
+            self.repository.record_playback_event(
+                session["session_id"],
+                session["session_token"],
+                "buffer-end-without-start",
+                "BUFFERING_ENDED",
+            )
+
+        started = self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-1",
+            "PLAYBACK_STARTED",
+            startup_ms=700,
+            client_version="player-test/1.0",
+        )
+        self.assertFalse(started["duplicate"])
+        replayed = self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-1",
+            "PLAYBACK_STARTED",
+            startup_ms=700,
+            client_version="player-test/1.0",
+        )
+        self.assertTrue(replayed["duplicate"])
+        with self.assertRaises(ValueError):
+            self.repository.record_playback_event(
+                session["session_id"],
+                session["session_token"],
+                "player-event-1",
+                "PLAYBACK_STARTED",
+                startup_ms=701,
+                client_version="player-test/1.0",
+            )
+        with self.assertRaises(ValueError):
+            self.repository.record_playback_event(
+                session["session_id"],
+                session["session_token"],
+                "player-event-1",
+                "DECODER_ERROR",
+                error_code="TEST_ERROR",
+            )
+
+        self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-2",
+            "BUFFERING_STARTED",
+        )
+        buffering = self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-3",
+            "BUFFERING_ENDED",
+        )
+        self.assertEqual(buffering["rebuffer_count"], 1)
+
+        decoder = self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-4",
+            "DECODER_ERROR",
+            error_code="DECODE_H264_REFERENCE",
+            decoder="test-decoder",
+        )
+        self.assertEqual(decoder["decoder_error_count"], 1)
+
+        ended = self.repository.record_playback_event(
+            session["session_id"],
+            session["session_token"],
+            "player-event-5",
+            "PLAYBACK_ENDED",
+        )
+        self.assertEqual(ended["status"], "ENDED")
+        self.assertTrue(
+            self.repository.record_playback_event(
+                session["session_id"],
+                session["session_token"],
+                "player-event-5",
+                "PLAYBACK_ENDED",
+            )["duplicate"]
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertEqual(report["session_count"], 1)
+        self.assertEqual(report["playback_started_count"], 1)
+        self.assertEqual(report["average_startup_ms"], 700)
+        self.assertEqual(report["rebuffer_count"], 1)
+        self.assertGreaterEqual(report["total_buffering_ms"], 0)
+        self.assertEqual(report["decoder_error_count"], 1)
+        self.assertEqual(report["total_cpu_seconds"], 3.0)
+        self.assertGreater(report["total_estimated_cost"], 0)
+        self.assertEqual(report["cost_currency"], "RUNIT")
+        self.assertEqual(
+            report["pricing_model_id"], "relative-resource-index-v1"
+        )
+
+
+    def test_active_buffering_interval_is_included_in_live_qoe_report(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        self.repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/live-qoe/master.m3u8",
+                "media_type": "application/vnd.apple.mpegurl",
+                "size_bytes": 128,
+            }],
+        )
+        playback = self.repository.start_playback_session(job_id, "p0")
+        base = utcnow() + timedelta(seconds=5)
+
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base):
+            self.repository.record_playback_event(
+                playback["session_id"], playback["session_token"],
+                "live-start", "PLAYBACK_STARTED", startup_ms=400,
+            )
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base + timedelta(seconds=10)):
+            self.repository.record_playback_event(
+                playback["session_id"], playback["session_token"],
+                "live-buffer-start", "BUFFERING_STARTED",
+            )
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base + timedelta(seconds=15)):
+            report = self.repository.get_playback_qoe_report(job_id, "p0")
+
+        self.assertEqual(report["total_buffering_ms"], 5000)
+        self.assertEqual(report["rebuffer_count"], 1)
+        self.assertAlmostEqual(
+            report["buffering_ratio_percent"], 100.0 / 3.0, places=2
+        )
+
+    def test_cost_total_is_unknown_when_any_attempt_is_unpriced(self):
+        job_id = self.create_job("p0")
+        first_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.fail_attempt(
+            job_id, "p0", first_attempt, retryable=True,
+            error_code="WORKER_LOST",
+            metrics={"cpu_seconds": 2.0},
+        )
+        second_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", second_attempt, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", second_attempt)
+        self.repository.finish_stage(
+            job_id, "p0", second_attempt,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/partial-cost/master.m3u8",
+                "media_type": "application/vnd.apple.mpegurl",
+                "size_bytes": 128,
+            }],
+            metrics={"cpu_seconds": 3.0, "duration_ms": 4000},
+            pricing={
+                "model_id": "test-price-v1",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0.0,
+                "storage_gb": 0.0,
+            },
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertEqual(report["priced_attempt_count"], 1)
+        self.assertEqual(report["total_attempt_count"], 2)
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertIsNone(report["cost_currency"])
+        self.assertIsNone(report["pricing_model_id"])
+
+    def test_playback_session_requires_a_published_manifest(self):
+        job_id = self.create_job("p0")
+        with self.assertRaises(ValueError):
+            self.repository.start_playback_session(job_id, "p0")
+
     def test_concurrent_idempotency_key_creates_only_one_job(self):
         candidate_ids = [str(uuid4()), str(uuid4())]
         key = "idem-concurrent-{}".format(uuid4())
