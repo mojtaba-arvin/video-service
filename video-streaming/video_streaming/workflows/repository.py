@@ -3,6 +3,8 @@
 import hashlib
 import hmac
 import json
+import math
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -116,6 +118,8 @@ class AttemptRecord(Base):
     estimated_cost = Column(Numeric(18, 8), nullable=True)
     cost_currency = Column(String(8), nullable=True)
     pricing_model_id = Column(String(128), nullable=True)
+    pricing_model_version = Column(String(64), nullable=True)
+    pricing_snapshot_json = Column(JSON, nullable=True)
     metrics_json = Column(JSON, nullable=False, default=dict)
     error_code = Column(String(128), nullable=True)
     error_message = Column(Text, nullable=True)
@@ -581,24 +585,196 @@ class WorkflowRepository:
             )
 
     @staticmethod
-    def _estimate_cost(metrics, pricing):
+    def _build_cost_accounting(metrics, pricing):
+        """Build an immutable price-card snapshot and coverage-aware estimate."""
         if not pricing:
             return None
-        cpu_rate = float(pricing.get("cpu_per_second", 0))
-        memory_rate = float(pricing.get("memory_gb_second", 0))
-        storage_rate = float(pricing.get("storage_gb", 0))
-        cpu_seconds = float(metrics.get("cpu_seconds") or 0)
-        duration_seconds = float(metrics.get("duration_ms") or 0) / 1000.0
-        memory_gb_seconds = (
-            float(metrics.get("peak_memory_bytes") or 0)
-            / (1024.0 ** 3) * duration_seconds
+
+        model_id = str(pricing.get("model_id") or "").strip()
+        if not model_id:
+            raise ValueError("A priced attempt requires a non-empty model_id")
+
+        model_version = str(
+            pricing.get("model_version") or pricing.get("version") or ""
+        ).strip()
+        if not model_version:
+            match = re.search(r"-v([0-9]+)$", model_id)
+            if match:
+                model_version = match.group(1)
+            else:
+                raise ValueError(
+                    "A price card requires model_version; use immutable versions"
+                )
+
+        currency = str(pricing.get("currency") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}|RUNIT", currency):
+            raise ValueError("Pricing currency must be a three-letter code or RUNIT")
+
+        rates = {}
+        for key in ("cpu_per_second", "memory_gb_second", "storage_gb"):
+            try:
+                value = float(pricing.get(key, 0.0))
+            except (TypeError, ValueError):
+                raise ValueError("Invalid price-card rate: {}".format(key))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    "Price-card rates must be finite and non-negative: {}".format(key)
+                )
+            rates[key] = value
+        if not any(value > 0 for value in rates.values()):
+            raise ValueError("At least one price-card rate must be greater than zero")
+
+        snapshot = {
+            "schema_version": 1,
+            "model_id": model_id,
+            "model_version": model_version,
+            "currency": currency,
+            "rates": rates,
+            "rate_basis": {
+                "cpu_per_second": "CPU-second",
+                "memory_gb_second": "GiB-second at measured peak RSS",
+                "storage_gb": "GiB of published output bytes",
+            },
+            "excluded_dimensions": [
+                "gpu_compute",
+                "network_ingress",
+                "network_egress",
+                "provider_invoice_reconciliation",
+                "worker_idle_and_control_plane",
+                "power_and_cooling",
+            ],
+        }
+
+        components = {}
+        missing_dimensions = []
+        required_dimensions = []
+        measured_dimensions = []
+
+        cpu_rate = rates["cpu_per_second"]
+        if cpu_rate > 0:
+            required_dimensions.append("cpu_compute")
+            cpu_seconds = metrics.get("cpu_seconds")
+            if cpu_seconds is None:
+                missing_dimensions.append("cpu_compute")
+                quantity = None
+            else:
+                quantity = float(cpu_seconds)
+                if not math.isfinite(quantity) or quantity < 0:
+                    raise ValueError("cpu_seconds must be finite and non-negative")
+                measured_dimensions.append("cpu_compute")
+            components["cpu_compute"] = {
+                "quantity": quantity,
+                "unit": "CPU-second",
+                "rate": cpu_rate,
+                "amount": (
+                    round(quantity * cpu_rate, 8)
+                    if quantity is not None else None
+                ),
+            }
+
+        memory_rate = rates["memory_gb_second"]
+        if memory_rate > 0:
+            required_dimensions.append("memory")
+            peak_memory = metrics.get("peak_memory_bytes")
+            duration_ms = metrics.get("duration_ms")
+            if peak_memory is None or duration_ms is None:
+                missing_dimensions.append("memory")
+                quantity = None
+            else:
+                peak_memory = float(peak_memory)
+                duration_ms = float(duration_ms)
+                if (
+                    not math.isfinite(peak_memory)
+                    or peak_memory < 0
+                    or not math.isfinite(duration_ms)
+                    or duration_ms < 0
+                ):
+                    raise ValueError(
+                        "Memory and duration metrics must be finite and non-negative"
+                    )
+                quantity = (peak_memory / (1024.0 ** 3)) * (duration_ms / 1000.0)
+                measured_dimensions.append("memory")
+            components["memory"] = {
+                "quantity": quantity,
+                "unit": "GiB-second",
+                "rate": memory_rate,
+                "amount": (
+                    round(quantity * memory_rate, 8)
+                    if quantity is not None else None
+                ),
+            }
+
+        storage_rate = rates["storage_gb"]
+        if storage_rate > 0:
+            required_dimensions.append("storage")
+            output_bytes = metrics.get("output_bytes")
+            if output_bytes is None:
+                missing_dimensions.append("storage")
+                quantity = None
+            else:
+                output_bytes = float(output_bytes)
+                if not math.isfinite(output_bytes) or output_bytes < 0:
+                    raise ValueError("output_bytes must be finite and non-negative")
+                quantity = output_bytes / (1024.0 ** 3)
+                measured_dimensions.append("storage")
+            components["storage"] = {
+                "quantity": quantity,
+                "unit": "GiB",
+                "rate": storage_rate,
+                "amount": (
+                    round(quantity * storage_rate, 8)
+                    if quantity is not None else None
+                ),
+            }
+
+        known_amounts = [
+            item["amount"] for item in components.values()
+            if item["amount"] is not None
+        ]
+        estimated_cost = (
+            round(sum(known_amounts), 8) if known_amounts else None
         )
-        output_gb = float(metrics.get("output_bytes") or 0) / (1024.0 ** 3)
-        return (
-            cpu_seconds * cpu_rate
-            + memory_gb_seconds * memory_rate
-            + output_gb * storage_rate
+        coverage = {
+            "complete": not missing_dimensions,
+            "required_dimensions": required_dimensions,
+            "measured_dimensions": measured_dimensions,
+            "missing_dimensions": missing_dimensions,
+            "excluded_dimensions": list(snapshot["excluded_dimensions"]),
+            "not_priced_dimensions": [
+                key for key, value in rates.items() if value == 0
+            ],
+        }
+        return {
+            "snapshot": snapshot,
+            "breakdown": {
+                "schema_version": 1,
+                "components": components,
+                "coverage": coverage,
+                "partial_estimated_cost": estimated_cost,
+            },
+            "estimated_cost": estimated_cost,
+            "complete": coverage["complete"],
+        }
+
+    @staticmethod
+    def _apply_attempt_accounting(attempt, metrics, pricing):
+        """Persist usage, a frozen price-card snapshot and explicit coverage."""
+        metrics = dict(metrics or {})
+        accounting = WorkflowRepository._build_cost_accounting(
+            metrics, pricing
         )
+        if accounting is None:
+            attempt.metrics_json = metrics
+            return metrics
+
+        attempt.estimated_cost = accounting["estimated_cost"]
+        attempt.cost_currency = accounting["snapshot"]["currency"]
+        attempt.pricing_model_id = accounting["snapshot"]["model_id"]
+        attempt.pricing_model_version = accounting["snapshot"]["model_version"]
+        attempt.pricing_snapshot_json = accounting["snapshot"]
+        metrics["cost_accounting"] = accounting["breakdown"]
+        attempt.metrics_json = metrics
+        return metrics
 
     def finish_stage(
             self,
@@ -632,11 +808,12 @@ class WorkflowRepository:
             attempt.duration_ms = max(
                 0, int((finished_at - started).total_seconds() * 1000)
             )
+            metrics["duration_ms"] = attempt.duration_ms
             attempt.cpu_seconds = metrics.get("cpu_seconds")
             attempt.peak_memory_bytes = metrics.get("peak_memory_bytes")
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
-            attempt.metrics_json = metrics
+            self._apply_attempt_accounting(attempt, metrics, pricing)
             prior_artifact_count = session.execute(
                 select(func.count()).select_from(ArtifactRecord).where(
                     ArtifactRecord.stage_id == stage.id,
@@ -644,12 +821,6 @@ class WorkflowRepository:
                 )
             ).scalar_one()
             attempt.artifact_count = prior_artifact_count + len(artifacts)
-            estimate = self._estimate_cost(metrics, pricing)
-            if estimate is not None:
-                attempt.estimated_cost = estimate
-                attempt.cost_currency = pricing.get("currency", "USD")
-                attempt.pricing_model_id = pricing.get("model_id")
-
             for item in artifacts:
                 session.add(ArtifactRecord(
                     id=item.get("id") or new_id(),
@@ -713,7 +884,8 @@ class WorkflowRepository:
             retryable,
             error_code=None,
             error_message=None,
-            metrics=None):
+            metrics=None,
+            pricing=None):
         metrics = dict(metrics or {})
         target = StageState.RETRY_WAIT if retryable else StageState.FAILED
         attempt_state = (
@@ -741,11 +913,12 @@ class WorkflowRepository:
             attempt.duration_ms = max(
                 0, int((attempt.finished_at - started).total_seconds() * 1000)
             )
+            metrics["duration_ms"] = attempt.duration_ms
             attempt.cpu_seconds = metrics.get("cpu_seconds")
             attempt.peak_memory_bytes = metrics.get("peak_memory_bytes")
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
-            attempt.metrics_json = metrics
+            self._apply_attempt_accounting(attempt, metrics, pricing)
             attempt.error_code = error_code
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -785,7 +958,9 @@ class WorkflowRepository:
             job_id,
             stage_key,
             attempt_id,
-            reason="CANCELLED"):
+            reason="CANCELLED",
+            metrics=None,
+            pricing=None):
         """Persist cancellation of a running attempt and its workflow stage."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
@@ -812,6 +987,13 @@ class WorkflowRepository:
             attempt.duration_ms = max(
                 0, int((now - started).total_seconds() * 1000)
             )
+            metrics = dict(metrics or {})
+            metrics["duration_ms"] = attempt.duration_ms
+            attempt.cpu_seconds = metrics.get("cpu_seconds")
+            attempt.peak_memory_bytes = metrics.get("peak_memory_bytes")
+            attempt.input_bytes = metrics.get("input_bytes")
+            attempt.output_bytes = metrics.get("output_bytes")
+            self._apply_attempt_accounting(attempt, metrics, pricing)
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason
             workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -835,7 +1017,7 @@ class WorkflowRepository:
         return True
 
 
-    def recover_stale_attempts(self, older_than):
+    def recover_stale_attempts(self, older_than, pricing=None):
         """Move abandoned running attempts to RETRY_WAIT without Redis TTL."""
         recovered = 0
         now = utcnow()
@@ -863,6 +1045,11 @@ class WorkflowRepository:
                 attempt.duration_ms = max(
                     0, int((now - started).total_seconds() * 1000)
                 )
+                metrics = {
+                    "duration_ms": attempt.duration_ms,
+                    "usage_capture": "incomplete_worker_lost",
+                }
+                self._apply_attempt_accounting(attempt, metrics, pricing)
                 attempt.error_code = "WORKER_LOST"
                 attempt.error_message = "Recovered stale running attempt"
                 workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -1197,14 +1384,58 @@ class WorkflowRepository:
             ]
             cost_currencies = {item.cost_currency for item in priced_attempts}
             pricing_models = {item.pricing_model_id for item in priced_attempts}
+            pricing_versions = {
+                item.pricing_model_version for item in priced_attempts
+            }
+            complete_attempts = [
+                item for item in attempts
+                if item.estimated_cost is not None
+                and item.pricing_snapshot_json is not None
+                and item.metrics_json.get("cost_accounting", {})
+                    .get("coverage", {}).get("complete") is True
+            ]
+            missing_dimension_counts = {}
+            for item in attempts:
+                coverage = item.metrics_json.get(
+                    "cost_accounting", {}
+                ).get("coverage", {})
+                for dimension in coverage.get("missing_dimensions", []):
+                    missing_dimension_counts[dimension] = (
+                        missing_dimension_counts.get(dimension, 0) + 1
+                    )
+            excluded_dimensions = sorted({
+                dimension
+                for item in attempts
+                for dimension in item.metrics_json.get(
+                    "cost_accounting", {}
+                ).get("coverage", {}).get("excluded_dimensions", [])
+            })
             cost_estimate_complete = (
                 bool(attempts)
                 and len(priced_attempts) == len(attempts)
+                and len(complete_attempts) == len(attempts)
                 and len(cost_currencies) == 1
                 and None not in cost_currencies
                 and len(pricing_models) == 1
                 and None not in pricing_models
+                and len(pricing_versions) == 1
+                and None not in pricing_versions
             )
+            partial_estimated_cost = (
+                sum(float(item.estimated_cost) for item in priced_attempts)
+                if priced_attempts else None
+            )
+            cost_coverage = {
+                "complete": cost_estimate_complete,
+                "priced_attempt_count": len(priced_attempts),
+                "complete_attempt_count": len(complete_attempts),
+                "total_attempt_count": len(attempts),
+                "missing_dimensions_by_attempt": missing_dimension_counts,
+                "excluded_dimensions": excluded_dimensions,
+                "pricing_model_versions": sorted(
+                    str(value) for value in pricing_versions if value is not None
+                ),
+            }
             report = {
                 "job_id": job_id,
                 "stage_key": stage_key,
@@ -1221,10 +1452,11 @@ class WorkflowRepository:
                 "buffering_ratio_percent": buffering_ratio,
                 "total_cpu_seconds": cpu_seconds,
                 "total_estimated_cost": (
-                    sum(float(item.estimated_cost) for item in priced_attempts)
-                    if cost_estimate_complete else None
+                    partial_estimated_cost if cost_estimate_complete else None
                 ),
+                "partial_estimated_cost": partial_estimated_cost,
                 "cost_estimate_complete": cost_estimate_complete,
+                "cost_coverage": cost_coverage,
                 "priced_attempt_count": len(priced_attempts),
                 "total_attempt_count": len(attempts),
                 "cost_currency": (
@@ -1335,6 +1567,11 @@ class WorkflowRepository:
                         ),
                         "cost_currency": item.cost_currency,
                         "pricing_model_id": item.pricing_model_id,
+                        "pricing_model_version": item.pricing_model_version,
+                        "pricing_snapshot": item.pricing_snapshot_json,
+                        "cost_accounting": item.metrics_json.get(
+                            "cost_accounting"
+                        ),
                         "metrics": item.metrics_json,
                         "error_code": item.error_code,
                     } for item in attempts],
