@@ -632,7 +632,11 @@ class WorkflowRepository:
             "rates": rates,
             "rate_basis": {
                 "cpu_per_second": "CPU-second",
-                "memory_gb_second": "GiB-second at measured peak RSS",
+                "memory_gb_second": (
+                    "GiB-second estimated as measured peak RSS multiplied by "
+                    "encoder processing duration; full attempt duration is a "
+                    "conservative fallback when encoder duration is unavailable"
+                ),
                 "storage_gb": "GiB of published output bytes",
             },
             "excluded_dimensions": [
