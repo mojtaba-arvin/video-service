@@ -129,7 +129,12 @@ def generate_thumbnail(
             scale_width=scale_width,
             scale_height=scale_height,
             ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
-            ffprobe_bin_path=settings.FFPROBE_BIN_PATH
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+            timeout_seconds=settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS,
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
         )
         dimensions = validate_thumbnail_output(
             output_path=output_path,

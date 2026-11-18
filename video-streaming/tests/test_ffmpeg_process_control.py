@@ -62,6 +62,86 @@ class ProcessTreeTerminationTests(unittest.TestCase):
 
         terminate_process_tree(process, grace_period=0.1)
 
+    def test_deadline_terminates_parent_and_child_processes(self):
+        import tempfile
+        from pathlib import Path
+
+        from video_streaming.execution.process_control import (
+            run_cancellable_process,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "child.pid"
+            child_code = (
+                "import os, time; "
+                "open({!r}, 'w').write(str(os.getpid())); "
+                "time.sleep(60)"
+            ).format(str(pid_path))
+            parent_code = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', {!r}]); "
+                "time.sleep(60)"
+            ).format(child_code)
+
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_cancellable_process(
+                    [sys.executable, "-c", parent_code],
+                    timeout_seconds=0.5,
+                    poll_interval=0.02,
+                    terminate_grace_period=0.2,
+                )
+
+            self.assertTrue(pid_path.exists(), "child process did not start")
+            child_pid = int(pid_path.read_text())
+            self.assertFalse(self._is_running(child_pid))
+
+    def test_cooperative_cancellation_terminates_process_tree(self):
+        import tempfile
+        from pathlib import Path
+
+        from video_streaming.execution.process_control import (
+            ProcessExecutionCancelled,
+            run_cancellable_process,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "child.pid"
+            child_code = (
+                "import os, time; "
+                "open({!r}, 'w').write(str(os.getpid())); "
+                "time.sleep(60)"
+            ).format(str(pid_path))
+            parent_code = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', {!r}]); "
+                "time.sleep(60)"
+            ).format(child_code)
+
+            with self.assertRaises(ProcessExecutionCancelled):
+                run_cancellable_process(
+                    [sys.executable, "-c", parent_code],
+                    timeout_seconds=5,
+                    poll_interval=0.02,
+                    should_cancel=pid_path.exists,
+                    terminate_grace_period=0.2,
+                )
+
+            self.assertTrue(pid_path.exists(), "child process did not start")
+            child_pid = int(pid_path.read_text())
+            self.assertFalse(self._is_running(child_pid))
+
+    def test_non_zero_exit_preserves_command_error(self):
+        from video_streaming.execution.process_control import run_cancellable_process
+
+        with self.assertRaises(subprocess.CalledProcessError) as context:
+            run_cancellable_process(
+                [sys.executable, "-c", "import sys; print('bad'); sys.exit(7)"],
+                timeout_seconds=2,
+            )
+
+        self.assertEqual(context.exception.returncode, 7)
+        self.assertIn(b"bad", context.exception.output)
+
     @staticmethod
     def _is_running(pid):
         try:

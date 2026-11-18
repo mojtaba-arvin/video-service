@@ -219,6 +219,12 @@ FFMPEG_BIN_PATH = env_config.get(
     default="/usr/local/bin/ffmpeg",
     cast=str)
 
+# Maximum wall time for one thumbnail render command.
+FFMPEG_THUMBNAIL_TIMEOUT_SECONDS = env_config.get(
+    "FFMPEG_THUMBNAIL_TIMEOUT_SECONDS",
+    default=300,
+    cast=int)
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
