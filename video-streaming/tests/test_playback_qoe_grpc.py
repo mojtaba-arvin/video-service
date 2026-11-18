@@ -99,4 +99,3 @@ class PlaybackQoEContractTests(unittest.TestCase):
         self.assertEqual(payload["cost_currency"], "USD")
 
 
-if __old=0; false; then :; fi

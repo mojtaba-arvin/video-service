@@ -95,35 +95,4 @@ class PlaybackQoEMixin:
             context.abort(grpc.StatusCode.NOT_FOUND, str(exc))
         return self.pb2.PlaybackQoEReportResponse(
             **playback_qoe_report_payload(report)
-        ),
-            total_cpu_seconds=report["total_cpu_seconds"],
-            total_estimated_cost=(
-                report["total_estimated_cost"] or 0.0
-            ),
-            cost_currency=report["cost_currency"] or "",
-            pricing_model_id=report["pricing_model_id"] or "",
-            cost_estimate_complete=report["cost_estimate_complete"],
-            priced_attempt_count=report["priced_attempt_count"],
-            total_attempt_count=report["total_attempt_count"],
-            total_estimated_cost_available=(
-                report["cost_estimate_complete"]
-            ),
-            partial_estimated_cost=(
-                report["partial_estimated_cost"] or 0.0
-            ),
-            partial_estimated_cost_available=(
-                report["partial_estimated_cost"] is not None
-            ),
-            complete_attempt_count=report["cost_coverage"][
-                "complete_attempt_count"
-            ],
-            missing_cost_dimensions_by_attempt=report["cost_coverage"][
-                "missing_dimensions_by_attempt"
-            ],
-            excluded_cost_dimensions=report["cost_coverage"][
-                "excluded_dimensions"
-            ],
-            pricing_model_versions=report["cost_coverage"][
-                "pricing_model_versions"
-            ],
         )
