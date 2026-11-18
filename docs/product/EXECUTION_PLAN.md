@@ -158,12 +158,15 @@ Baseline on `develop`:
 - PR #96 merged: public QoE cost-coverage fields and generated-Protobuf integration coverage.
 - PR #97 merged: bounded webhook connect/read waits, no automatic redirect/retry, deterministic cleanup.
 - PR #98 merged: roadmap/governance/runtime status corrected.
-- Current `develop` CI after PR #98 passed; docs-only runtime skips were expected and aggregate `Quality gates` passed.
-- No open PRs at the time this plan was written.
+- Current `develop` after PR #100 is `d4f8dd9`; CI passed (Python 3.9 and 3.12 regression, PostgreSQL repository, full VOD integration, Dependency Review and aggregate `Quality gates`).
+- PR #99 merged the product execution plan; PR #100 merged the first versioned execution-plan contract.
+- No open PRs at the time of this update.
 
 Next execution order:
-1. **#71 — finish the versioned execution-plan contract first.** Model every current Celery graph node, dependency/fan-in rule, retry/resource policy, and secret reference. Add contract tests and prove the plan contains no secret values.
-2. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
+1. **#71 — build the complete VOD DAG.** Translate input preflight/download/analysis, output bucket/key checks, fan-in, playlist/thumbnail/watermark, uploads and notification references into stable plan nodes and dependency edges. Keep the live dispatch path unchanged.
+2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction.** Add secret-store reference resolution; do not copy raw webhook URLs or credentials into plan JSON or broker messages.
+3. **#71 — establish idempotent execution claims and broker-backed failure tests.** Cover commit-before-relay crash, relay crash after publish, concurrent duplicate delivery, broker outage, cancellation and poison messages. Enable the relay only after these pass.
+4. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
 3. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
 4. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
 5. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
@@ -171,7 +174,7 @@ Next execution order:
 7. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
 8. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
 
-The first next PR should be the smallest safe **versioned execution-plan contract** under #71, not an outbox table that could replay an incomplete legacy Celery graph. Its success is measured by complete graph round-tripping, schema-version validation, redaction/secret-reference tests, and deterministic dependency/fan-in reconstruction. The relay is a later increment behind consumer-idempotency gates.
+The versioned execution-plan contract is merged in PR #100. The next PR should implement the **pure complete-VOD graph builder** under #71, not an outbox table and not a live-dispatch switch. Its success is measured by a round-trip of every legacy request path (including optional watermark branches), explicit fan-in/dependency coverage, stable IDs, and rejection of raw webhook credentials. Persistence, idempotent consumer claims, crash/replay tests and relay activation remain separate gates.
 
 ## 7. Explicit no-go decisions for now
 
