@@ -82,6 +82,16 @@ class InMemoryS3:
             return None
         return {"ContentLength": len(value), "ETag": '"test-etag"'}
 
+    def delete_object(self, key, bucket_name=None, **kwargs):
+        self.buckets.setdefault(bucket_name, {}).pop(key, None)
+        return {"Deleted": key}
+
+    def read_range(self, key, bucket_name=None, start=0, end=0):
+        value = self.buckets.get(bucket_name or "", {}).get(key)
+        if value is None:
+            return None
+        return value[start:end + 1]
+
     def head_bucket(self, bucket_name=None, **kwargs):
         if bucket_name in self.buckets:
             return {"Bucket": bucket_name}
@@ -138,6 +148,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             "\n".join([
                 "CELERY_BROKER_URL=memory://",
                 "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1",
+                "WORKFLOW_DATABASE_URL={}".format(
+                    os.environ["WORKFLOW_DATABASE_URL"]
+                ),
+                "WORKFLOW_DATABASE_POOL_SIZE=2",
+                "WORKFLOW_DATABASE_MAX_OVERFLOW=2",
                 "TASK_RETRY_BACKOFF_MAX=2",
                 "TASK_RETRY_FFMPEG_COMMAND_MAX=0",
                 "DEFAULT_PLAYLIST_IS_HLS=True",
@@ -326,6 +341,21 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         self.assertIsNotNone(snapshot)
         self.assertEqual(len(snapshot["stages"]), 1)
+        durable_stage = snapshot["stages"][0]
+        self.assertEqual(durable_stage["status"], "FINISHED")
+        self.assertEqual(len(durable_stage["attempts"]), 1)
+        self.assertEqual(durable_stage["attempts"][0]["status"], "SUCCEEDED")
+        self.assertGreater(durable_stage["attempts"][0]["duration_ms"], 0)
+        self.assertEqual(
+            durable_stage["attempts"][0]["input_bytes"],
+            self.input_path.stat().st_size,
+        )
+        self.assertGreater(durable_stage["attempts"][0]["output_bytes"], 0)
+        self.assertGreater(durable_stage["attempts"][0]["artifact_count"], 0)
+        self.assertIsNone(durable_stage["attempts"][0]["estimated_cost"])
+        artifact_types = [item["type"] for item in durable_stage["artifacts"]]
+        self.assertIn("validation_report", artifact_types)
+        self.assertIn("streaming_manifest", artifact_types)
 
         results = self.stub.get_results(
             self.pb2.JobsResultsRequest(
