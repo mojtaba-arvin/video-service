@@ -3,6 +3,7 @@
 import grpc
 
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.qoe import playback_qoe_report_payload
 
 
 class PlaybackQoEMixin:
@@ -93,25 +94,5 @@ class PlaybackQoEMixin:
         except KeyError as exc:
             context.abort(grpc.StatusCode.NOT_FOUND, str(exc))
         return self.pb2.PlaybackQoEReportResponse(
-            tracking_id=report["job_id"],
-            output_id=report["stage_key"],
-            stage_status=report["stage_status"],
-            session_count=report["session_count"],
-            playback_started_count=report["playback_started_count"],
-            average_startup_ms=int(round(report["average_startup_ms"] or 0)),
-            rebuffer_count=report["rebuffer_count"],
-            total_buffering_ms=report["total_buffering_ms"],
-            decoder_error_count=report["decoder_error_count"],
-            buffering_ratio_percent=(
-                report["buffering_ratio_percent"] or 0.0
-            ),
-            total_cpu_seconds=report["total_cpu_seconds"],
-            total_estimated_cost=(
-                report["total_estimated_cost"] or 0.0
-            ),
-            cost_currency=report["cost_currency"] or "",
-            pricing_model_id=report["pricing_model_id"] or "",
-            cost_estimate_complete=report["cost_estimate_complete"],
-            priced_attempt_count=report["priced_attempt_count"],
-            total_attempt_count=report["total_attempt_count"],
+            **playback_qoe_report_payload(report)
         )
