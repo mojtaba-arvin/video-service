@@ -189,6 +189,29 @@ class VODPlanBuilderTests(unittest.TestCase):
                 "job-123", request, webhook_secret_ref="https://example.test/hook"
             )
 
+    def test_watermarked_video_output_alone_still_runs_watermark_operation(self):
+        request = {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "watermark": {
+                "input_bucket": "assets", "input_key": "logo.png",
+                "output_bucket": "output", "output_key": "watermarked.mp4",
+            },
+            "playlists": [],
+            "thumbnails": [],
+        }
+        plan = build_vod_execution_plan("job-watermark", request)
+        nodes = {node["node_id"]: node for node in plan["nodes"]}
+        self.assertEqual(nodes["watermark-apply"]["depends_on"], ["inputs-funnel"])
+        self.assertEqual(nodes["watermarked-video-upload"]["depends_on"], ["watermark-apply"])
+
+    def test_watermark_output_key_check_is_in_preflight(self):
+        request = request_with_all_branches()
+        plan = build_vod_execution_plan("job-123", request)
+        nodes = {node["node_id"]: node for node in plan["nodes"]}
+        self.assertIn(
+            "output-watermarked-video-key-check",
+            nodes["input-video-download"]["depends_on"],
+        )
 
 if __name__ == "__main__":
     unittest.main()
