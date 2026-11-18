@@ -466,6 +466,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             metrics={
                 "cpu_seconds": 4.0,
                 "peak_memory_bytes": 512 * 1024 * 1024,
+                "memory_duration_ms": 2000,
                 "input_bytes": 4096,
                 "output_bytes": 1024 * 1024 * 1024,
             },
@@ -493,6 +494,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(
             set(accounting["components"]),
             {"cpu_compute", "memory", "storage"},
+        )
+        self.assertAlmostEqual(
+            accounting["components"]["memory"]["quantity"], 1.0, places=6
+        )
+        self.assertAlmostEqual(
+            accounting["components"]["memory"]["amount"], 0.02, places=6
         )
         self.assertGreater(attempt["estimated_cost"], 0)
         self.assertIn("network_egress", snapshot["excluded_dimensions"])
