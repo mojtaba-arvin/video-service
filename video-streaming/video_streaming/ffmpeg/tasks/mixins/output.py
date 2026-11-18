@@ -3,7 +3,6 @@ from celery import states, Task
 from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.workflows.service import get_workflow_repository
-from video_streaming.workflows.service import get_workflow_repository
 
 
 class BaseOutputMixin(object):
