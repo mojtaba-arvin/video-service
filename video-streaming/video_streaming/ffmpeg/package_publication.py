@@ -27,7 +27,11 @@ def _object_key(prefix, relative_path):
 
 
 def _safe_inventory_path(value):
-    if not isinstance(value, str) or not value or "\\" in value:
+    if (
+            not isinstance(value, str)
+            or value in ("", ".", "..")
+            or "\\" in value
+    ):
         raise PackagePublicationError("Invalid package inventory path")
     path = Path(value)
     if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
@@ -109,7 +113,7 @@ def _write_inventory(storage, bucket, key, protocol, manifest, relatives):
 
 
 def _artifact_record(bucket, prefix, file_path, relative_path, file_size,
-                     root_manifest):
+                     root_manifest, protocol):
     suffix = Path(relative_path).suffix.lower()
     if suffix == ".m3u8":
         artifact_type = (
@@ -142,7 +146,7 @@ def _artifact_record(bucket, prefix, file_path, relative_path, file_size,
         "media_type": media_type,
         "size_bytes": file_size,
         "metadata": {
-            "protocol": Path(root_manifest).suffix.lower().lstrip("."),
+            "protocol": protocol,
             "readback_verified": True,
         },
     }
@@ -223,7 +227,7 @@ def publish_package(
         )
     storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
 
-    for relative in old_relatives:
+    for relative in combined_relatives:
         storage.delete_object(
             key=_object_key(prefix, relative),
             bucket_name=s3_output_bucket,
@@ -310,7 +314,7 @@ def publish_package(
     published_artifacts = [
         _artifact_record(
             s3_output_bucket, prefix, file_path, relative_path,
-            file_size, manifest_relative,
+            file_size, manifest_relative, protocol,
         )
         for file_path, relative_path, file_size in files
     ]
