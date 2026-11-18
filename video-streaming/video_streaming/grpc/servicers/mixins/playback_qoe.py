@@ -32,7 +32,7 @@ class PlaybackQoEMixin:
         return self.pb2.StartPlaybackSessionResponse(
             session_id=result["session_id"],
             session_token=result["session_token"],
-            manifest_uri=result["manifest_uri"],
+            manifest_artifact_id=result["manifest_artifact_id"],
         )
 
     def record_playback_event(self, request, context):
