@@ -277,8 +277,18 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "player-event-1",
             "PLAYBACK_STARTED",
             startup_ms=700,
+            client_version="player-test/1.0",
         )
         self.assertTrue(replayed["duplicate"])
+        with self.assertRaises(ValueError):
+            self.repository.record_playback_event(
+                session["session_id"],
+                session["session_token"],
+                "player-event-1",
+                "PLAYBACK_STARTED",
+                startup_ms=701,
+                client_version="player-test/1.0",
+            )
         with self.assertRaises(ValueError):
             self.repository.record_playback_event(
                 session["session_id"],
@@ -341,6 +351,91 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(
             report["pricing_model_id"], "relative-resource-index-v1"
         )
+
+
+    def test_active_buffering_interval_is_included_in_live_qoe_report(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        self.repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/live-qoe/master.m3u8",
+                "media_type": "application/vnd.apple.mpegurl",
+                "size_bytes": 128,
+            }],
+        )
+        playback = self.repository.start_playback_session(job_id, "p0")
+        base = utcnow() + timedelta(seconds=5)
+
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base):
+            self.repository.record_playback_event(
+                playback["session_id"], playback["session_token"],
+                "live-start", "PLAYBACK_STARTED", startup_ms=400,
+            )
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base + timedelta(seconds=10)):
+            self.repository.record_playback_event(
+                playback["session_id"], playback["session_token"],
+                "live-buffer-start", "BUFFERING_STARTED",
+            )
+        with patch("video_streaming.workflows.repository.utcnow",
+                   return_value=base + timedelta(seconds=15)):
+            report = self.repository.get_playback_qoe_report(job_id, "p0")
+
+        self.assertEqual(report["total_buffering_ms"], 5000)
+        self.assertAlmostEqual(
+            report["buffering_ratio_percent"], 100.0 / 3.0, places=2
+        )
+
+    def test_cost_total_is_unknown_when_any_attempt_is_unpriced(self):
+        job_id = self.create_job("p0")
+        first_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.fail_attempt(
+            job_id, "p0", first_attempt, retryable=True,
+            error_code="WORKER_LOST",
+            metrics={"cpu_seconds": 2.0},
+        )
+        second_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", second_attempt, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", second_attempt)
+        self.repository.finish_stage(
+            job_id, "p0", second_attempt,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/partial-cost/master.m3u8",
+                "media_type": "application/vnd.apple.mpegurl",
+                "size_bytes": 128,
+            }],
+            metrics={"cpu_seconds": 3.0, "duration_ms": 4000},
+            pricing={
+                "model_id": "test-price-v1",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0.0,
+                "storage_gb": 0.0,
+            },
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertEqual(report["priced_attempt_count"], 1)
+        self.assertEqual(report["total_attempt_count"], 2)
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertIsNone(report["cost_currency"])
+        self.assertIsNone(report["pricing_model_id"])
 
     def test_playback_session_requires_a_published_manifest(self):
         job_id = self.create_job("p0")
