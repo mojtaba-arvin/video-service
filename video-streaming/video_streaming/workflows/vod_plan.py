@@ -265,6 +265,10 @@ def build_vod_execution_plan(
         _required_text(webhook_secret_ref, "webhook_secret_ref")
         if len(webhook_secret_ref) > 512:
             raise VODPlanBuildError("webhook_secret_ref exceeds 512 characters")
+        if webhook_secret_ref.lower().startswith(("http://", "https://")):
+            raise VODPlanBuildError(
+                "webhook_secret_ref must be an opaque secret reference, not a URL"
+            )
 
     nodes = []
     input_checks = []
