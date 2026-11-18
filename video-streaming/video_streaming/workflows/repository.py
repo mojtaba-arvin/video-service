@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -235,6 +236,7 @@ class PlaybackEventRecord(Base):
     )
     event_id = Column(String(128), nullable=False)
     event_type = Column(String(32), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
     received_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     duration_ms = Column(BigInteger, nullable=True)
     startup_ms = Column(BigInteger, nullable=True)
@@ -983,6 +985,30 @@ class WorkflowRepository:
         if error_code and len(error_code) > 128:
             raise ValueError("error_code must be at most 128 characters")
 
+        metadata = {}
+        if decoder:
+            metadata["decoder"] = str(decoder)[:128]
+        if client_version:
+            metadata["client_version"] = str(client_version)[:64]
+        canonical_payload = {
+            "event_type": event_type,
+            "startup_ms": (
+                int(startup_ms)
+                if event_type == "PLAYBACK_STARTED" and startup_ms is not None
+                else None
+            ),
+            "error_code": error_code or None,
+            "metadata": metadata,
+        }
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                canonical_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
         now = utcnow()
         token_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
         expired = False
@@ -1009,6 +1035,11 @@ class WorkflowRepository:
                     raise ValueError(
                         "event_id was already used for a different event type"
                     )
+                if not hmac.compare_digest(
+                        duplicate.payload_hash, payload_hash):
+                    raise ValueError(
+                        "event_id was already used with a different payload"
+                    )
                 return {
                     **self._playback_session_summary(playback),
                     "duplicate": True,
@@ -1023,13 +1054,8 @@ class WorkflowRepository:
                 expired = True
             else:
                 duration_ms = None
-                metadata = {}
-                if decoder:
-                    metadata["decoder"] = str(decoder)[:128]
-                if client_version:
-                    metadata["client_version"] = str(client_version)[:64]
-                    if not playback.client_version:
-                        playback.client_version = str(client_version)[:64]
+                if client_version and not playback.client_version:
+                    playback.client_version = metadata["client_version"]
 
                 if event_type == "PLAYBACK_STARTED":
                     if playback.startup_ms is not None:
@@ -1088,6 +1114,7 @@ class WorkflowRepository:
                     session_id=session_id,
                     event_id=event_id,
                     event_type=event_type,
+                    payload_hash=payload_hash,
                     received_at=now,
                     duration_ms=duration_ms,
                     startup_ms=(
@@ -1128,7 +1155,16 @@ class WorkflowRepository:
             ]
             rebuffer_count = sum(item.rebuffer_count for item in sessions)
             buffering_ms = sum(
-                item.total_buffering_ms for item in sessions
+                item.total_buffering_ms
+                + (
+                    max(
+                        0,
+                        int((now - item.buffering_started_at)
+                            .total_seconds() * 1000),
+                    )
+                    if item.buffering_started_at is not None else 0
+                )
+                for item in sessions
             )
             decoder_errors = sum(
                 item.decoder_error_count for item in sessions
@@ -1157,6 +1193,14 @@ class WorkflowRepository:
             ]
             cost_currencies = {item.cost_currency for item in priced_attempts}
             pricing_models = {item.pricing_model_id for item in priced_attempts}
+            cost_estimate_complete = (
+                bool(attempts)
+                and len(priced_attempts) == len(attempts)
+                and len(cost_currencies) == 1
+                and None not in cost_currencies
+                and len(pricing_models) == 1
+                and None not in pricing_models
+            )
             report = {
                 "job_id": job_id,
                 "stage_key": stage_key,
@@ -1174,16 +1218,18 @@ class WorkflowRepository:
                 "total_cpu_seconds": cpu_seconds,
                 "total_estimated_cost": (
                     sum(float(item.estimated_cost) for item in priced_attempts)
-                    if priced_attempts and len(cost_currencies) == 1
-                    and len(pricing_models) == 1 else None
+                    if cost_estimate_complete else None
                 ),
+                "cost_estimate_complete": cost_estimate_complete,
+                "priced_attempt_count": len(priced_attempts),
+                "total_attempt_count": len(attempts),
                 "cost_currency": (
                     next(iter(cost_currencies))
-                    if len(cost_currencies) == 1 else None
+                    if cost_estimate_complete else None
                 ),
                 "pricing_model_id": (
                     next(iter(pricing_models))
-                    if len(pricing_models) == 1 else None
+                    if cost_estimate_complete else None
                 ),
                 "sessions": [
                     self._playback_session_summary(item)
