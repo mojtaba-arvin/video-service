@@ -980,6 +980,8 @@ class WorkflowRepository:
 
         now = utcnow()
         token_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+        expired = False
+        result = None
         with self._session.begin() as session:
             playback = session.execute(
                 select(PlaybackSessionRecord).where(
@@ -990,12 +992,6 @@ class WorkflowRepository:
                 raise KeyError("Playback session was not found")
             if not hmac.compare_digest(playback.token_hash, token_hash):
                 raise PermissionError("Playback session token is invalid")
-            if playback.status != "ACTIVE":
-                raise ValueError("Playback session is already ended")
-            if now - playback.started_at > timedelta(hours=24):
-                playback.status = "EXPIRED"
-                playback.ended_at = now
-                raise ValueError("Playback session has expired")
 
             duplicate = session.execute(
                 select(PlaybackEventRecord).where(
@@ -1004,54 +1000,49 @@ class WorkflowRepository:
                 )
             ).scalar_one_or_none()
             if duplicate is not None:
+                if duplicate.event_type != event_type:
+                    raise ValueError(
+                        "event_id was already used for a different event type"
+                    )
                 return {
                     **self._playback_session_summary(playback),
                     "duplicate": True,
                 }
 
-            duration_ms = None
-            metadata = {}
-            if decoder:
-                metadata["decoder"] = str(decoder)[:128]
-            if client_version:
-                metadata["client_version"] = str(client_version)[:64]
-                if not playback.client_version:
-                    playback.client_version = str(client_version)[:64]
+            if playback.status != "ACTIVE":
+                raise ValueError("Playback session is already ended")
+            if now - playback.started_at > timedelta(hours=24):
+                playback.status = "EXPIRED"
+                playback.ended_at = now
+                playback.last_event_at = now
+                expired = True
+            else:
+                duration_ms = None
+                metadata = {}
+                if decoder:
+                    metadata["decoder"] = str(decoder)[:128]
+                if client_version:
+                    metadata["client_version"] = str(client_version)[:64]
+                    if not playback.client_version:
+                        playback.client_version = str(client_version)[:64]
 
-            if event_type == "PLAYBACK_STARTED":
-                if playback.startup_ms is not None:
-                    raise ValueError("PLAYBACK_STARTED was already recorded")
-                if startup_ms is None:
-                    raise ValueError("PLAYBACK_STARTED requires startup_ms")
-                playback.startup_ms = int(startup_ms)
+                if event_type == "PLAYBACK_STARTED":
+                    if playback.startup_ms is not None:
+                        raise ValueError("PLAYBACK_STARTED was already recorded")
+                    if startup_ms is None:
+                        raise ValueError("PLAYBACK_STARTED requires startup_ms")
+                    playback.startup_ms = int(startup_ms)
 
-            elif event_type == "BUFFERING_STARTED":
-                if playback.startup_ms is None:
-                    raise ValueError("Playback must start before buffering")
-                if playback.buffering_started_at is not None:
-                    raise ValueError("A buffering interval is already active")
-                playback.buffering_started_at = now
+                elif event_type == "BUFFERING_STARTED":
+                    if playback.startup_ms is None:
+                        raise ValueError("Playback must start before buffering")
+                    if playback.buffering_started_at is not None:
+                        raise ValueError("A buffering interval is already active")
+                    playback.buffering_started_at = now
 
-            elif event_type == "BUFFERING_ENDED":
-                if playback.buffering_started_at is None:
-                    raise ValueError("BUFFERING_ENDED has no matching start")
-                duration_ms = max(
-                    0,
-                    int((now - playback.buffering_started_at).total_seconds() * 1000),
-                )
-                playback.rebuffer_count += 1
-                playback.total_buffering_ms += duration_ms
-                playback.buffering_started_at = None
-
-            elif event_type == "DECODER_ERROR":
-                if not error_code:
-                    raise ValueError("DECODER_ERROR requires error_code")
-                playback.decoder_error_count += 1
-
-            elif event_type == "PLAYBACK_ENDED":
-                if playback.startup_ms is None:
-                    raise ValueError("Playback must start before it can end")
-                if playback.buffering_started_at is not None:
+                elif event_type == "BUFFERING_ENDED":
+                    if playback.buffering_started_at is None:
+                        raise ValueError("BUFFERING_ENDED has no matching start")
                     duration_ms = max(
                         0,
                         int(
@@ -1062,27 +1053,52 @@ class WorkflowRepository:
                     playback.rebuffer_count += 1
                     playback.total_buffering_ms += duration_ms
                     playback.buffering_started_at = None
-                playback.status = "ENDED"
-                playback.ended_at = now
 
-            playback.last_event_at = now
-            session.add(PlaybackEventRecord(
-                id=new_id(),
-                session_id=session_id,
-                event_id=event_id,
-                event_type=event_type,
-                received_at=now,
-                duration_ms=duration_ms,
-                startup_ms=(
-                    int(startup_ms) if event_type == "PLAYBACK_STARTED" else None
-                ),
-                error_code=(error_code or None),
-                metadata_json=metadata,
-            ))
-            return {
-                **self._playback_session_summary(playback),
-                "duplicate": False,
-            }
+                elif event_type == "DECODER_ERROR":
+                    if not error_code:
+                        raise ValueError("DECODER_ERROR requires error_code")
+                    playback.decoder_error_count += 1
+
+                elif event_type == "PLAYBACK_ENDED":
+                    if playback.startup_ms is None:
+                        raise ValueError("Playback must start before it can end")
+                    if playback.buffering_started_at is not None:
+                        duration_ms = max(
+                            0,
+                            int(
+                                (now - playback.buffering_started_at)
+                                .total_seconds() * 1000
+                            ),
+                        )
+                        playback.rebuffer_count += 1
+                        playback.total_buffering_ms += duration_ms
+                        playback.buffering_started_at = None
+                    playback.status = "ENDED"
+                    playback.ended_at = now
+
+                playback.last_event_at = now
+                session.add(PlaybackEventRecord(
+                    id=new_id(),
+                    session_id=session_id,
+                    event_id=event_id,
+                    event_type=event_type,
+                    received_at=now,
+                    duration_ms=duration_ms,
+                    startup_ms=(
+                        int(startup_ms)
+                        if event_type == "PLAYBACK_STARTED" else None
+                    ),
+                    error_code=(error_code or None),
+                    metadata_json=metadata,
+                ))
+                result = {
+                    **self._playback_session_summary(playback),
+                    "duplicate": False,
+                }
+
+        if expired:
+            raise ValueError("Playback session has expired")
+        return result
 
     def get_playback_qoe_report(self, job_id, stage_key):
         """Aggregate playback QoE beside the same stage's resource/cost data."""
