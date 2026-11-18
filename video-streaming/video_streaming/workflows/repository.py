@@ -669,6 +669,7 @@ class WorkflowRepository:
                 "idempotency_key": job.idempotency_key,
                 "request_hash": job.request_hash,
                 "reference_id": job.reference_id,
+                "metadata": job.metadata_json,
                 "status": job.state,
                 "workflow": {
                     "id": workflow.id,
