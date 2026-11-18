@@ -221,6 +221,35 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             self.assertTrue(pid_path.exists(), "child process did not start")
             self.assertFalse(self._is_running(int(pid_path.read_text())))
 
+    def test_cancellable_runner_reports_process_tree_cpu_and_peak_memory(self):
+        from video_streaming.execution.process_control import run_cancellable_process
+
+        samples = []
+        code = (
+            "import time\n"
+            "payload = bytearray(16 * 1024 * 1024)\n"
+            "deadline = time.monotonic() + 0.4\n"
+            "value = 0\n"
+            "while time.monotonic() < deadline:\n"
+            "    value += 1\n"
+        )
+        run_cancellable_process(
+            [sys.executable, "-c", code],
+            timeout_seconds=3,
+            poll_interval=0.05,
+            on_usage=samples.append,
+        )
+
+        self.assertTrue(samples)
+        self.assertGreater(max(item["cpu_seconds"] for item in samples), 0)
+        self.assertGreater(
+            max(item["memory_duration_ms"] for item in samples), 0
+        )
+        self.assertGreaterEqual(
+            max(item["peak_memory_bytes"] for item in samples),
+            16 * 1024 * 1024,
+        )
+
     @staticmethod
     def _is_running(pid):
         try:

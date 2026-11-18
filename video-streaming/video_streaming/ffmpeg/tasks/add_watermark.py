@@ -14,6 +14,7 @@ from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
+    configured_pricing,
 )
 from video_streaming.execution.process_control import run_streaming_process
 from .base import BaseStreamingTask
@@ -88,6 +89,37 @@ def add_watermark(
         os.path.getsize(video_path) + os.path.getsize(watermark_path)
     )
     cpu_started = capture_child_cpu_seconds()
+
+    def process_resource_metrics():
+        peak_memory_bytes = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        started_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        ended_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        memory_duration_ms = None
+        if started_at is not None and ended_at is not None:
+            try:
+                memory_duration_ms = max(
+                    0, int((float(ended_at) - float(started_at)) * 1000)
+                )
+            except (TypeError, ValueError):
+                memory_duration_ms = None
+        return {
+            "peak_memory_bytes": (
+                int(peak_memory_bytes) if peak_memory_bytes else None
+            ),
+            "memory_duration_ms": memory_duration_ms,
+        }
 
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
@@ -168,12 +200,19 @@ def add_watermark(
             attempt_id=attempt_id,
             validation_report=validation_report,
         )
+
     except Exception as exc:
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
                 request_id, output_id, attempt_id,
                 reason="CANCELLED_DURING_WATERMARK_PROCESSING",
+                metrics={
+                    "input_bytes": input_bytes,
+                    "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                    **process_resource_metrics(),
+                },
+                pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -192,7 +231,9 @@ def add_watermark(
             metrics={
                 "input_bytes": input_bytes,
                 "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                **process_resource_metrics(),
             },
+            pricing=configured_pricing(settings),
         )
         if retryable:
             raise self.retry(
@@ -206,6 +247,11 @@ def add_watermark(
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_AFTER_WATERMARK_VALIDATION",
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
@@ -219,6 +265,7 @@ def add_watermark(
         attempt_number=attempt_number,
         input_bytes=input_bytes,
         cpu_seconds=child_cpu_seconds_since(cpu_started),
+        **process_resource_metrics(),
         validation_report=validation_report,
         artifact_type="video_file",
         media_type="video/mp4",

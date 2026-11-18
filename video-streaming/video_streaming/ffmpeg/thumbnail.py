@@ -93,7 +93,8 @@ def render_thumbnail(
         ffmpeg_bin_path: str = "ffmpeg",
         ffprobe_bin_path: str = "ffprobe",
         timeout_seconds: int = 300,
-        should_cancel: Optional[Callable[[], bool]] = None
+        should_cancel: Optional[Callable[[], bool]] = None,
+        usage_callback: Optional[Callable[[Dict[str, float]], None]] = None
         ) -> str:
     """Render one frame and return only after FFprobe validates the artifact."""
     scale_width, scale_height = normalize_thumbnail_scale(
@@ -116,6 +117,7 @@ def render_thumbnail(
         command,
         timeout_seconds=timeout_seconds,
         should_cancel=should_cancel,
+        on_usage=usage_callback,
     )
 
     validate_thumbnail_output(

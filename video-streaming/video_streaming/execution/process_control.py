@@ -148,12 +148,15 @@ def run_cancellable_process(
         timeout_seconds,
         should_cancel=None,
         poll_interval=0.2,
-        terminate_grace_period=1.0):
+        terminate_grace_period=1.0,
+        on_usage=None):
     """Run a command with a deadline and cooperative process-group cancellation.
 
     Both stdout and stderr are drained while polling. Dedicated process groups
     ensure that descendants are terminated even if the root process has exited
-    but a child still holds an inherited pipe open.
+    but a child still holds an inherited pipe open. When requested, usage
+    callbacks receive sampled process-tree CPU, peak RSS and elapsed execution
+    time; elapsed time is distinct from the enclosing durable attempt duration.
 
     Raises:
         ProcessExecutionCancelled: when should_cancel returns True.
@@ -174,20 +177,59 @@ def run_cancellable_process(
     )
     started_at = time.monotonic()
     terminated = False
+    peak_memory_bytes = 0
+    sampled_cpu_seconds = 0.0
+
+    def emit_usage():
+        if on_usage is not None:
+            on_usage({
+                "cpu_seconds": sampled_cpu_seconds,
+                "peak_memory_bytes": peak_memory_bytes or None,
+                "memory_duration_ms": max(
+                    0, int((time.monotonic() - started_at) * 1000)
+                ),
+            })
+
+    def capture_usage():
+        nonlocal peak_memory_bytes, sampled_cpu_seconds
+        try:
+            root = psutil.Process(process.pid)
+            processes = [root] + root.children(recursive=True)
+            cpu_seconds = 0.0
+            current_rss = 0
+            for child in processes:
+                try:
+                    cpu = child.cpu_times()
+                    cpu_seconds += float(cpu.user + cpu.system)
+                    current_rss += int(child.memory_info().rss)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
+            peak_memory_bytes = max(peak_memory_bytes, current_rss)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        emit_usage()
 
     try:
         while True:
+            capture_usage()
             if should_cancel is not None and should_cancel():
-                terminate_process_tree(process, grace_period=terminate_grace_period)
+                terminate_process_tree(
+                    process, grace_period=terminate_grace_period
+                )
                 terminated = True
-                stdout, stderr = process.communicate()
+                process.communicate()
+                emit_usage()
                 raise ProcessExecutionCancelled("FFmpeg execution was cancelled")
 
             remaining = timeout_seconds - (time.monotonic() - started_at)
             if remaining <= 0:
-                terminate_process_tree(process, grace_period=terminate_grace_period)
+                terminate_process_tree(
+                    process, grace_period=terminate_grace_period
+                )
                 terminated = True
                 stdout, stderr = process.communicate()
+                emit_usage()
                 raise subprocess.TimeoutExpired(
                     command,
                     timeout_seconds,
@@ -199,6 +241,7 @@ def run_cancellable_process(
                 stdout, stderr = process.communicate(
                     timeout=min(poll_interval, remaining)
                 )
+                capture_usage()
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -214,7 +257,9 @@ def run_cancellable_process(
 
     except BaseException:
         if not terminated:
-            terminate_process_tree(process, grace_period=terminate_grace_period)
+            terminate_process_tree(
+                process, grace_period=terminate_grace_period
+            )
         if process.poll() is None:
             try:
                 process.communicate(timeout=terminate_grace_period)

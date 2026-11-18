@@ -4,21 +4,18 @@ This documentation describes both the **verified current implementation** and th
 
 ## Start here
 
-1. [Product vision and architecture principles](architecture/vision.md) — what this project is becoming, the problems it addresses, product boundaries, and measurable outcomes.
-2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop`, what the code demonstrates, and the concrete reliability and security gaps found during repository inspection.
-3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities, acceptance evidence, and explicit deferrals.
-4. [GitHub governance](engineering/github-governance.md) — recommended rulesets, security settings, and the verified public-repository plan constraints.
-5. [CI execution matrix](engineering/ci-execution-matrix.md) — change-aware job selection, required aggregate status, and safe CI performance measurement.
-
-6. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — research-backed decisions, market-claim verification, six-goal alignment and parallel engineering lanes.
-7. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
-8. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
-
-8. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch, at-least-once relay semantics, idempotent execution claims and worker-loss acceptance tests.
-
-9. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
-
-10. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
+1. [Product vision and architecture principles](architecture/vision.md) — product direction, problems, boundaries and measurable outcomes.
+2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop` and the verified reliability/security gaps.
+3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities and explicit deferrals.
+4. [GitHub governance](engineering/github-governance.md) — rulesets, security settings and repository-plan constraints.
+5. [CI execution matrix](engineering/ci-execution-matrix.md) — change-aware jobs, aggregate required check and CI cost controls.
+6. [Codec and cost benchmark](engineering/codec-cost-benchmark.md) — licensed source manifests, matched-VMAF runs, raw measurements and cost limitations.
+7. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — six-goal alignment, research evidence and parallel engineering lanes.
+8. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills.
+9. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
+10. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch and at-least-once/idempotent recovery semantics.
+11. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation, manifest-last publication and retry behavior.
+12. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, state transitions, resource/cost accounting and application contracts.
 
 ## Documentation rules
 

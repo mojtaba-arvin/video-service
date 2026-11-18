@@ -43,11 +43,13 @@ The repository enforces these transitions under a row lock and appends an immuta
 
 ### Resource and cost reporting
 
-Every completed attempt records elapsed time, CPU seconds, peak memory bytes, input/output bytes, artifact count, and an estimated resource cost.
+Every completed, failed, retryable, cancelled, or recovered worker-loss attempt can retain its measured duration, CPU seconds, peak memory bytes, input/output bytes, and accounting evidence.
 
-- If an operator configures a named price card, the estimate uses its explicitly configured CPU, memory, and storage rates/currency.
-- Otherwise, the default `relative-resource-index-v1` reports `RUNIT`: 1.0 per CPU-second, 0.25 per GB-second of peak-memory allocation, and 0.01 per GB of output. These are normalized weights, not money, a provider bill, or a claim of cost accuracy.
-- The price model ID and unit are persisted with every estimate so values from different models are not silently compared.
+- A custom infrastructure price card requires a stable model ID, explicit immutable model version, currency, and finite non-negative rates. Partial card configuration fails closed. The exact rates and their units are snapshotted on the attempt; later configuration changes cannot silently re-price historical work.
+- Without a custom card, `relative-resource-index-v1` version `1` reports `RUNIT`: 1.0 per CPU-second, 0.25 per GiB-second at measured peak RSS, and 0.01 per GiB of output bytes. These are normalized weights, not money, a provider bill, or a claim of cost accuracy.
+- Each component records quantity, unit, rate, amount, and measurement coverage. Unknown metrics are never coerced to zero. Memory is estimated as measured peak RSS multiplied by the encoder processing interval; when that interval is unavailable, the full Attempt duration is used as a conservative fallback and the metric source remains visible in the accounting metadata. A partial estimate is retained for investigation, but the aggregate `total_estimated_cost` remains null unless every attempt is priced completely with the same currency, model ID, and model version.
+- The snapshot explicitly excludes GPU compute, network ingress/egress, provider invoice reconciliation, idle/control-plane resources, power and cooling. Those dimensions must be instrumented and reconciled before a provider-bill total can be claimed.
+- Failed/retryable and cancelled attempts can record observed spend. Worker-loss recovery records elapsed time but marks unobserved CPU/memory/output usage incomplete rather than inventing measurements.
 
 ### Typed internal operations
 

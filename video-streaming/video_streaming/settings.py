@@ -264,6 +264,11 @@ WORKFLOW_PRICING_MODEL_ID = env_config.get(
     default="",
     cast=str)
 
+WORKFLOW_PRICING_MODEL_VERSION = env_config.get(
+    "WORKFLOW_PRICING_MODEL_VERSION",
+    default="",
+    cast=str)
+
 WORKFLOW_COST_CURRENCY = env_config.get(
     "WORKFLOW_COST_CURRENCY",
     default="USD",

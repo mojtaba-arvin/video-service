@@ -438,6 +438,234 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertIsNone(report["cost_currency"])
         self.assertIsNone(report["pricing_model_id"])
 
+    def test_versioned_price_card_snapshot_and_component_breakdown_are_persisted(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        pricing = {
+            "model_id": "infra-us-east",
+            "model_version": "2026-11-01",
+            "currency": "USD",
+            "cpu_per_second": 0.01,
+            "memory_gb_second": 0.02,
+            "storage_gb": 0.03,
+        }
+        self.repository.finish_stage(
+            job_id,
+            "p0",
+            attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/versioned-cost/master.m3u8",
+                "size_bytes": 1024,
+            }],
+            metrics={
+                "cpu_seconds": 4.0,
+                "peak_memory_bytes": 512 * 1024 * 1024,
+                "memory_duration_ms": 2000,
+                "input_bytes": 4096,
+                "output_bytes": 1024 * 1024 * 1024,
+            },
+            pricing=pricing,
+        )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        attempt = stage["attempts"][0]
+        snapshot = attempt["pricing_snapshot"]
+        accounting = attempt["cost_accounting"]
+
+        self.assertEqual(snapshot["model_id"], "infra-us-east")
+        self.assertEqual(snapshot["model_version"], "2026-11-01")
+        self.assertEqual(snapshot["currency"], "USD")
+        self.assertEqual(snapshot["rates"], {
+            "cpu_per_second": 0.01,
+            "memory_gb_second": 0.02,
+            "storage_gb": 0.03,
+        })
+        self.assertEqual(attempt["pricing_model_version"], "2026-11-01")
+        self.assertTrue(accounting["coverage"]["complete"])
+        self.assertEqual(
+            accounting["coverage"]["missing_dimensions"], []
+        )
+        self.assertEqual(
+            set(accounting["components"]),
+            {"cpu_compute", "memory", "storage"},
+        )
+        self.assertAlmostEqual(
+            accounting["components"]["memory"]["quantity"], 1.0, places=6
+        )
+        self.assertAlmostEqual(
+            accounting["components"]["memory"]["amount"], 0.02, places=6
+        )
+        self.assertGreater(attempt["estimated_cost"], 0)
+        self.assertIn("network_egress", snapshot["excluded_dimensions"])
+        self.assertIn("provider_invoice_reconciliation",
+                      snapshot["excluded_dimensions"])
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertTrue(report["cost_estimate_complete"])
+        self.assertEqual(report["pricing_model_id"], "infra-us-east")
+        self.assertEqual(report["cost_coverage"]["pricing_model_versions"],
+                         ["2026-11-01"])
+
+    def test_failed_attempt_retains_partial_spend_and_missing_metric_coverage(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        pricing = {
+            "model_id": "worker-cost",
+            "model_version": "2026-11-18",
+            "currency": "USD",
+            "cpu_per_second": 0.02,
+            "memory_gb_second": 0.01,
+            "storage_gb": 0.04,
+        }
+        self.repository.fail_attempt(
+            job_id,
+            "p0",
+            attempt_id,
+            retryable=True,
+            error_code="ENCODER_FAILED",
+            metrics={"cpu_seconds": 2.5, "input_bytes": 5000},
+            pricing=pricing,
+        )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        attempt = stage["attempts"][0]
+        coverage = attempt["cost_accounting"]["coverage"]
+        self.assertEqual(attempt["status"], "RETRYABLE")
+        self.assertGreater(attempt["estimated_cost"], 0)
+        self.assertFalse(coverage["complete"])
+        self.assertEqual(coverage["measured_dimensions"], ["cpu_compute"])
+        self.assertEqual(
+            set(coverage["missing_dimensions"]), {"memory", "storage"}
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertGreater(report["partial_estimated_cost"], 0)
+        self.assertEqual(
+            report["cost_coverage"]["missing_dimensions_by_attempt"],
+            {"memory": 1, "storage": 1},
+        )
+
+    def test_cancelled_attempt_accounts_for_measured_compute(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.cancel_attempt(
+            job_id,
+            "p0",
+            attempt_id,
+            reason="USER_CANCELLED",
+            metrics={"cpu_seconds": 1.25},
+            pricing={
+                "model_id": "cpu-only",
+                "model_version": "v2",
+                "currency": "USD",
+                "cpu_per_second": 0.1,
+                "memory_gb_second": 0,
+                "storage_gb": 0,
+            },
+        )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        attempt = stage["attempts"][0]
+        self.assertEqual(attempt["status"], "CANCELLED")
+        self.assertAlmostEqual(attempt["estimated_cost"], 0.125, places=6)
+        self.assertTrue(attempt["cost_accounting"]["coverage"]["complete"])
+        self.assertEqual(
+            attempt["cost_accounting"]["coverage"]["not_priced_dimensions"],
+            ["memory_gb_second", "storage_gb"],
+        )
+
+    def test_mixed_price_card_versions_never_produce_complete_total(self):
+        job_id = self.create_job("p0")
+        first_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.fail_attempt(
+            job_id,
+            "p0",
+            first_attempt,
+            retryable=True,
+            metrics={"cpu_seconds": 1.0},
+            pricing={
+                "model_id": "infra",
+                "model_version": "v1",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0,
+                "storage_gb": 0,
+            },
+        )
+        second_attempt, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", second_attempt, {"valid": True, "errors": []}
+        )
+        self.repository.start_publishing(job_id, "p0", second_attempt)
+        self.repository.finish_stage(
+            job_id,
+            "p0",
+            second_attempt,
+            metrics={"cpu_seconds": 2.0},
+            pricing={
+                "model_id": "infra",
+                "model_version": "v2",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0,
+                "storage_gb": 0,
+            },
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertEqual(
+            report["cost_coverage"]["pricing_model_versions"], ["v1", "v2"]
+        )
+
+    def test_worker_loss_records_price_version_but_never_fabricates_usage(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+
+        recovered = self.repository.recover_stale_attempts(
+            utcnow() + timedelta(seconds=1),
+            pricing={
+                "model_id": "worker-infra",
+                "model_version": "2026-11-18",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0.02,
+                "storage_gb": 0.03,
+            },
+        )
+
+        # The PostgreSQL test database may contain other intentionally stale
+        # attempts from earlier tests in this same process. Assert the target
+        # job is included without depending on unrelated recovery counts.
+        self.assertGreaterEqual(recovered, 1)
+        attempt = self.repository.get_stage_snapshot(job_id, "p0")["attempts"][0]
+        self.assertEqual(attempt["id"], attempt_id)
+        self.assertEqual(attempt["status"], "RETRYABLE")
+        self.assertEqual(attempt["error_code"], "WORKER_LOST")
+        self.assertEqual(attempt["pricing_model_version"], "2026-11-18")
+        self.assertIsNone(attempt["estimated_cost"])
+        coverage = attempt["cost_accounting"]["coverage"]
+        self.assertFalse(coverage["complete"])
+        self.assertEqual(
+            set(coverage["missing_dimensions"]),
+            {"cpu_compute", "memory", "storage"},
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertEqual(report["cost_coverage"]["priced_attempt_count"], 0)
+        self.assertEqual(report["cost_coverage"]["total_attempt_count"], 1)
+
     def test_playback_session_requires_a_published_manifest(self):
         job_id = self.create_job("p0")
         with self.assertRaises(ValueError):

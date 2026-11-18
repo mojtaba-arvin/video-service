@@ -15,6 +15,7 @@ from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
+    configured_pricing,
 )
 from .base import BaseStreamingTask
 from .mixins import GenerateThumbnailMixin
@@ -121,6 +122,11 @@ def generate_thumbnail(
     )
     Path(directory).mkdir(parents=True, exist_ok=True)
 
+    usage_metrics = {}
+
+    def capture_usage(metrics):
+        usage_metrics.update(metrics)
+
     try:
         render_thumbnail(
             video_path=video_path,
@@ -135,6 +141,7 @@ def generate_thumbnail(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            usage_callback=capture_usage,
         )
         dimensions = validate_thumbnail_output(
             output_path=output_path,
@@ -162,6 +169,15 @@ def generate_thumbnail(
             repository.cancel_attempt(
                 request_id, output_id, attempt_id,
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
+                metrics={
+                    "input_bytes": input_bytes,
+                    "cpu_seconds": usage_metrics.get(
+                        "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                    ),
+                    "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                    "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                },
+                pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -179,8 +195,12 @@ def generate_thumbnail(
             error_message=str(exc),
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
             },
+            pricing=configured_pricing(settings),
         )
         if retryable:
             raise self.retry(
@@ -194,6 +214,15 @@ def generate_thumbnail(
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_AFTER_THUMBNAIL_VALIDATION",
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
@@ -204,7 +233,11 @@ def generate_thumbnail(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        cpu_seconds=usage_metrics.get(
+            "cpu_seconds", child_cpu_seconds_since(cpu_started)
+        ),
+        peak_memory_bytes=usage_metrics.get("peak_memory_bytes"),
+        memory_duration_ms=usage_metrics.get("memory_duration_ms"),
         validation_report=validation_report,
         artifact_type="image_thumbnail",
         media_type="image/{}".format(

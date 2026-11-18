@@ -63,6 +63,13 @@ def upload_directory(self,
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
+            metrics={
+                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "cpu_seconds": kwargs.get("cpu_seconds"),
+                "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                "memory_duration_ms": kwargs.get("memory_duration_ms"),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
@@ -122,12 +129,22 @@ def upload_directory(self,
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
+            metrics={
+                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "cpu_seconds": kwargs.get("cpu_seconds"),
+                "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                "memory_duration_ms": kwargs.get("memory_duration_ms"),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
         raise self.raise_revoke_output(request_id, output_id)
 
     repository.start_publishing(request_id, output_id, attempt_id)
+    cpu_seconds = kwargs.get("cpu_seconds")
+    peak_memory_bytes = kwargs.get("peak_memory_bytes")
+    memory_duration_ms = kwargs.get("memory_duration_ms")
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
@@ -153,18 +170,36 @@ def upload_directory(self,
                 request_id=request_id, output_id=output_id
             )
         ) or []
-        cpu_seconds = 0.0
         if len(start_cpu) >= 2 and len(end_cpu) >= 2:
             cpu_seconds = max(
                 0.0,
                 sum(float(value) for value in end_cpu[:2])
                 - sum(float(value) for value in start_cpu[:2]),
             )
-        peak_memory_bytes = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+        peak_memory_bytes = (
+            self.cache.get(
+                CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
+                    request_id=request_id, output_id=output_id
+                )
+            ) or peak_memory_bytes
+        )
+        started_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
                 request_id=request_id, output_id=output_id
             )
         )
+        ended_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        if started_at is not None and ended_at is not None:
+            try:
+                memory_duration_ms = max(
+                    0, int((float(ended_at) - float(started_at)) * 1000)
+                )
+            except (TypeError, ValueError):
+                pass
 
         repository.finish_stage(
             job_id=request_id,
@@ -176,6 +211,7 @@ def upload_directory(self,
                 "peak_memory_bytes": (
                     int(peak_memory_bytes) if peak_memory_bytes else None
                 ),
+                "memory_duration_ms": memory_duration_ms,
                 "input_bytes": int(kwargs.get("input_bytes") or 0),
                 "output_bytes": int(publication["directory_size"]),
                 "artifact_count": int(publication["files"]),
@@ -191,6 +227,15 @@ def upload_directory(self,
             repository.cancel_attempt(
                 request_id, output_id, attempt_id,
                 reason="CANCELLED_DURING_PACKAGE_PUBLICATION",
+                metrics={
+                    "input_bytes": int(kwargs.get("input_bytes") or 0),
+                    "cpu_seconds": cpu_seconds,
+                    "peak_memory_bytes": (
+                        int(peak_memory_bytes) if peak_memory_bytes else None
+                    ),
+                    "memory_duration_ms": memory_duration_ms,
+                },
+                pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -217,7 +262,13 @@ def upload_directory(self,
             error_message=str(exc),
             metrics={
                 "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "cpu_seconds": cpu_seconds,
+                "peak_memory_bytes": (
+                    int(peak_memory_bytes) if peak_memory_bytes else None
+                ),
+                "memory_duration_ms": memory_duration_ms,
             },
+            pricing=configured_pricing(settings),
         )
         self.save_job_stop_reason(
             self.stop_reason.INTERNAL_ERROR, request_id
