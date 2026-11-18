@@ -84,6 +84,18 @@ class SettingsEnvironmentTests(unittest.TestCase):
             settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS, 10
         )
 
+    def test_thumbnail_execution_timeout_is_configurable(self):
+        settings = load_settings({
+            "FFMPEG_THUMBNAIL_TIMEOUT_SECONDS": "45",
+        })
+
+        self.assertEqual(settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS, 45)
+
+    def test_thumbnail_execution_timeout_has_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS, 300)
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 
