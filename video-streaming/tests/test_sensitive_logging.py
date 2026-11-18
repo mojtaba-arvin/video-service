@@ -52,8 +52,12 @@ class SensitiveLoggingTests(unittest.TestCase):
                 )
 
         self.assertEqual(result, "ok")
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(
+            captured.records[0].task_name,
+            "tests.sensitive_logging",
+        )
         rendered = "\\n".join(captured.output)
-        self.assertIn("tests.sensitive_logging", rendered)
         self.assertNotIn(secret, rendered)
         self.assertNotIn("webhook_url", rendered)
 
