@@ -4,6 +4,9 @@ This documentation describes both the **verified current implementation** and th
 
 ## Start here
 
+- [Reliability and observability engineering standard](engineering/reliability-observability-standard.md) — mandatory failure, telemetry, SLO, test and operational-readiness requirements.
+- [ADR 0006: Reliability and observability](decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md) — accepted cross-cutting architecture constraints.
+
 1. [Product vision and architecture principles](architecture/vision.md) — product direction, problems, boundaries and measurable outcomes.
 2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop` and the verified reliability/security gaps.
 3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities and explicit deferrals.

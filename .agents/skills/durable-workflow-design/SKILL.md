@@ -27,8 +27,17 @@ Keep these domain concepts distinct:
 8. Worker, broker, or cache loss must not orphan an untracked workflow.
 9. Use an outbox/inbox or equivalent transaction-safe dispatch pattern.
 10. Tenant scope and authorization are enforced on every resource path.
+11. Preserve stable application-owned correlation IDs across outbox, broker, worker, media, storage and callback boundaries.
+12. Every state transition, claim conflict, retry, recovery, cancellation and terminal outcome must be queryable as a structured durable event.
+13. Emit structured logs, bounded-cardinality metrics and trace context; never use high-cardinality IDs as metric labels.
+14. Missing resource or cost measurements remain explicitly incomplete, not zero.
+15. Define runbooks and safe replay/rollback semantics before enabling automatic dispatch or recovery.
+
+## Failure-first design
 
 Write transition tables and invariants before choosing persistence technology.
 Test duplicate submissions/messages, crash windows, retry exhaustion, cancel
 races, and recovery after Redis/broker restart. Celery is a replaceable execution
-adapter, not the domain model. Record database/state-machine decisions as ADRs.
+adapter, not the domain model. Record database/state-machine decisions as ADRs. Apply
+`docs/engineering/reliability-observability-standard.md` to all workflow
+changes; a happy-path test alone is insufficient.
