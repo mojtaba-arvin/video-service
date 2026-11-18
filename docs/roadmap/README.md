@@ -26,6 +26,10 @@ The simple mean is approximately 1.7/5. It is a planning signal only; the six
 outcomes have different dependencies and should not be treated as one linear
 project percentage.
 
+## Cross-cutting reliability and observability standard
+
+Reliability and observability are mandatory release constraints across every outcome lane, not a separate phase. Each PR must define failure/recovery behavior, stable correlation, sanitized structured logs, bounded-cardinality metrics, trace propagation, failure-oriented tests and operator recovery. Numeric SLOs are set only after representative baselines exist. See the [engineering standard](../engineering/reliability-observability-standard.md) and [ADR 0006](../decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md).
+
 ## Product outcome areas
 
 | Outcome | What must become true | Evidence required |
@@ -63,7 +67,7 @@ identified separately and is not counted as merged.
 | P0 | Configuration and repository hygiene | **Done** — settings regressions and safe environment template/ignore checks (PR #55/#56) | Confirm historic development broker credentials are no longer accepted by any shared service |
 | P0 | Thumbnail correctness | **Done** — actual FFmpeg render plus FFprobe checks before completion (PR #57/#59) | Add failure/cancellation coverage to the complete workflow |
 | P0 | HLS/DASH correctness and publication | **Done** — package graph validation, expected rendition checks, bounded metadata probing, storage readback and manifest-last publication (PR #62/#64) | Add adversarial tests for cleanup/partial failure as the package contract evolves |
-| P0 | Durable orchestration | **Plan contract merged; dispatch gap open** — PostgreSQL Job/Workflow/Stage/Attempt/Artifact/Event state plus transport-neutral, versioned execution-plan schema, DAG validation, bounded retry/resource contracts, secret-safe parameters and canonical fingerprint (PR #100) | Build the complete VOD DAG from the live request graph; persist plan/version and outbox intent atomically; add idempotent stage claims and broker-backed crash/replay tests before enabling a relay |
+| P0 | Durable orchestration | **Plan contract and complete pure VOD DAG builder merged (PR #100/#104); dispatch gap open** — the full legacy graph is represented without changing live gRPC/Celery dispatch | Persist immutable plan/version and dispatch intent atomically; complete durable Stage/Attempt claims and secret-reference resolution; add broker-backed crash/replay tests before enabling a relay |
 | P0 | End-to-end VOD reliability | **Partial** — gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible test double; final state survives Redis cache clearing (PR #63/#68) | Add broker-backed worker process tests for worker loss, non-zero FFmpeg exit, retry, cancellation and watermark output |
 | P0 | FFmpeg execution isolation | **Partial — PR #87/#92/#95 merged** — Thumbnail and Watermark use bounded deadlines and terminate process groups/descendants on cancellation; streaming Watermark records direct process-group CPU/RSS/duration; real FFmpeg/FFprobe tests run in CI | Extend metering/supervision to every third-party library-launched FFmpeg path; add cgroup/container CPU/memory/PID/disk bounds, admission control and adversarial cleanup tests |
 | P0 | Security boundary | **Partial — PR #85/#97 merged** — sensitive task/request/provider/callback values are redacted; webhook connect/read timeouts are bounded, automatic redirects/retries are disabled, and response/pool cleanup is deterministic | Caller authentication/authorization, tenant boundaries, quotas, DNS/IP-aware SSRF protection, signed/replay-protected webhooks, delivery history and abuse tests |
