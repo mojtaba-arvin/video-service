@@ -1,5 +1,4 @@
 import os
-import subprocess
 import time
 import ffmpeg
 from abc import ABC
@@ -16,6 +15,7 @@ from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
 )
+from video_streaming.execution.process_control import run_streaming_process
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
 
@@ -115,33 +115,31 @@ def add_watermark(
             [main, watermark], "overlay", 0, 0
         ).output(output_path)
 
-        with subprocess.Popen(
-                stream.compile(),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True) as process:
-            duration = 1
-            current_time = 0
-            start_time = time.time()
-            while True:
-                line = process.stdout.readline().strip()
-                duration = get_time("Duration: ", line, duration)
-                current_time = get_time("time=", line, current_time)
-                if process.poll() is not None:
-                    break
-                callback(
-                    line,
-                    duration,
-                    current_time,
-                    time_left(start_time, current_time, duration),
-                    process,
-                )
+        duration = 1
+        current_time = 0
+        start_time = time.time()
 
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                process.returncode, process.args
+        def report_progress(line, process):
+            nonlocal duration, current_time
+            duration = get_time("Duration: ", line, duration)
+            current_time = get_time("time=", line, current_time)
+            callback(
+                line,
+                duration,
+                current_time,
+                time_left(start_time, current_time, duration),
+                process,
             )
+
+        run_streaming_process(
+            stream.compile(cmd=settings.FFMPEG_BIN_PATH),
+            timeout_seconds=settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS,
+            on_line=report_progress,
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
+        )
 
         if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
             raise RuntimeError("Watermarked output is missing or empty")
