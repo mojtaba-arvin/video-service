@@ -643,7 +643,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(recovered, 1)
+        # The PostgreSQL test database may contain other intentionally stale
+        # attempts from earlier tests in this same process. Assert the target
+        # job is included without depending on unrelated recovery counts.
+        self.assertGreaterEqual(recovered, 1)
         attempt = self.repository.get_stage_snapshot(job_id, "p0")["attempts"][0]
         self.assertEqual(attempt["id"], attempt_id)
         self.assertEqual(attempt["status"], "RETRYABLE")
