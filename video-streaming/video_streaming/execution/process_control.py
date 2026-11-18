@@ -128,6 +128,22 @@ class ProcessExecutionCancelled(RuntimeError):
     """Raised when a cooperative cancellation check requests process shutdown."""
 
 
+def _sample_process_group_usage(process_group_id):
+    """Sample aggregate CPU time and resident memory for a managed process group."""
+    cpu_seconds = 0.0
+    resident_bytes = 0
+    for pid in _active_process_group_members(process_group_id):
+        try:
+            process = psutil.Process(pid)
+            cpu = process.cpu_times()
+            memory = process.memory_info()
+            cpu_seconds += float(cpu.user + cpu.system)
+            resident_bytes += int(memory.rss)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, OSError):
+            continue
+    return cpu_seconds, resident_bytes
+
+
 def _start_managed_process(command, stdin, stdout, stderr):
     process = subprocess.Popen(
         command,
@@ -276,7 +292,8 @@ def run_streaming_process(
         should_cancel=None,
         poll_interval=0.2,
         terminate_grace_period=1.0,
-        max_line_bytes=65536):
+        max_line_bytes=65536,
+        on_usage=None):
     """Run a command while delivering stdout/stderr lines as they arrive.
 
     The pipe is read with selectors/os.read rather than blocking readline(), so
@@ -311,6 +328,22 @@ def run_streaming_process(
     started_at = time.monotonic()
     eof = False
     terminated = False
+    sampled_cpu_seconds = 0.0
+    peak_memory_bytes = 0
+
+    def capture_usage():
+        nonlocal sampled_cpu_seconds, peak_memory_bytes
+        cpu_seconds, resident_bytes = _sample_process_group_usage(process.pid)
+        sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
+        peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
+        if on_usage is not None:
+            on_usage({
+                "cpu_seconds": sampled_cpu_seconds,
+                "peak_memory_bytes": peak_memory_bytes or None,
+                "memory_duration_ms": max(
+                    0, int((time.monotonic() - started_at) * 1000)
+                ),
+            })
 
     def deliver_line(raw_line):
         if raw_line:
@@ -318,6 +351,7 @@ def run_streaming_process(
 
     try:
         while True:
+            capture_usage()
             if should_cancel is not None and should_cancel():
                 terminate_process_tree(process, grace_period=terminate_grace_period)
                 terminated = True
@@ -334,6 +368,7 @@ def run_streaming_process(
                 )
 
             events = selector.select(timeout=min(poll_interval, remaining))
+            capture_usage()
             for key, _ in events:
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
@@ -368,6 +403,7 @@ def run_streaming_process(
                 if pending:
                     deliver_line(bytes(pending))
                     pending.clear()
+                capture_usage()
                 return_code = process.wait()
                 if return_code:
                     raise subprocess.CalledProcessError(

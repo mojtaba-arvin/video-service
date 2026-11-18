@@ -89,13 +89,26 @@ def add_watermark(
         os.path.getsize(video_path) + os.path.getsize(watermark_path)
     )
     cpu_started = capture_child_cpu_seconds()
+    process_usage = {}
+
+    def measured_cpu_seconds():
+        return max(
+            child_cpu_seconds_since(cpu_started),
+            float(process_usage.get("cpu_seconds") or 0.0),
+        )
 
     def process_resource_metrics():
-        peak_memory_bytes = self.cache.get(
+        cached_peak_memory = self.cache.get(
             CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
                 request_id=request_id, output_id=output_id
             )
         )
+        measured_peak_memory = process_usage.get("peak_memory_bytes")
+        peak_memory_bytes = max(
+            int(value) for value in (
+                cached_peak_memory, measured_peak_memory
+            ) if value
+        ) if cached_peak_memory or measured_peak_memory else None
         started_at = self.cache.get(
             CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
                 request_id=request_id, output_id=output_id
@@ -106,8 +119,8 @@ def add_watermark(
                 request_id=request_id, output_id=output_id
             )
         )
-        memory_duration_ms = None
-        if started_at is not None and ended_at is not None:
+        memory_duration_ms = process_usage.get("memory_duration_ms")
+        if memory_duration_ms is None and started_at is not None and ended_at is not None:
             try:
                 memory_duration_ms = max(
                     0, int((float(ended_at) - float(started_at)) * 1000)
@@ -171,6 +184,7 @@ def add_watermark(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=process_usage.update,
         )
 
         if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
