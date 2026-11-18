@@ -123,7 +123,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         snapshot = self.repository.get_job_snapshot(job_id)
         self.assertEqual(snapshot["workflow"]["execution_plan_fingerprint"], persisted["fingerprint"])
-        self.assertEqual(snapshot["workflow"]["execution_plan"], plan)
+        self.assertNotIn("execution_plan", snapshot["workflow"])
         self.assertEqual(
             [(stage["key"], stage["operation"]) for stage in snapshot["stages"]],
             [(node["stage_key"], node["operation"]) for node in plan["nodes"]],
