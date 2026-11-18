@@ -398,6 +398,20 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 )
             ),
             playlists=[playlist],
+            thumbnails=[
+                self.pb2.ThumbnailOutput(
+                    thumbnail_time="00:00:01",
+                    upload_to=self.pb2.S3Output(
+                        key="vod/e2e/thumbnail.jpg",
+                        bucket="vod-output",
+                        create_bucket=True,
+                    ),
+                    options=self.pb2.ThumbnailOptions(
+                        scale_width=160,
+                        scale_height=0,
+                    ),
+                )
+            ],
         )
 
         accepted = self.stub.create_job(request, timeout=120)
@@ -411,22 +425,40 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             accepted.tracking_id
         )
         self.assertIsNotNone(snapshot)
-        self.assertEqual(len(snapshot["stages"]), 1)
-        durable_stage = snapshot["stages"][0]
-        self.assertEqual(durable_stage["status"], "FINISHED")
-        self.assertEqual(len(durable_stage["attempts"]), 1)
-        self.assertEqual(durable_stage["attempts"][0]["status"], "SUCCEEDED")
-        self.assertGreater(durable_stage["attempts"][0]["duration_ms"], 0)
+        self.assertEqual(len(snapshot["stages"]), 2)
         self.assertEqual(
-            durable_stage["attempts"][0]["input_bytes"],
-            self.input_path.stat().st_size,
+            {stage["key"] for stage in snapshot["stages"]},
+            {"p0", "t0"},
         )
-        self.assertGreater(durable_stage["attempts"][0]["output_bytes"], 0)
-        self.assertGreater(durable_stage["attempts"][0]["artifact_count"], 0)
-        self.assertIsNone(durable_stage["attempts"][0]["estimated_cost"])
-        artifact_types = [item["type"] for item in durable_stage["artifacts"]]
-        self.assertIn("validation_report", artifact_types)
-        self.assertIn("streaming_manifest", artifact_types)
+        for durable_stage in snapshot["stages"]:
+            self.assertEqual(durable_stage["status"], "FINISHED")
+            self.assertEqual(len(durable_stage["attempts"]), 1)
+            attempt = durable_stage["attempts"][0]
+            self.assertEqual(attempt["status"], "SUCCEEDED")
+            self.assertGreater(attempt["duration_ms"], 0)
+            self.assertEqual(
+                attempt["input_bytes"], self.input_path.stat().st_size
+            )
+            self.assertGreater(attempt["output_bytes"], 0)
+            self.assertGreater(attempt["artifact_count"], 0)
+            self.assertIsNone(attempt["estimated_cost"])
+        playlist_stage = next(
+            stage for stage in snapshot["stages"] if stage["key"] == "p0"
+        )
+        thumbnail_stage = next(
+            stage for stage in snapshot["stages"] if stage["key"] == "t0"
+        )
+        playlist_artifacts = [
+            item["type"] for item in playlist_stage["artifacts"]
+        ]
+        thumbnail_artifacts = [
+            item["type"] for item in thumbnail_stage["artifacts"]
+        ]
+        self.assertIn("validation_report", playlist_artifacts)
+        self.assertIn("streaming_manifest", playlist_artifacts)
+        self.assertIn("package_inventory", playlist_artifacts)
+        self.assertIn("validation_report", thumbnail_artifacts)
+        self.assertIn("image_thumbnail", thumbnail_artifacts)
 
         results = self.stub.get_results(
             self.pb2.JobsResultsRequest(
@@ -438,11 +470,15 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         result = results.results[0]
 
         self.assertEqual(result.status, self.pb2.PrimaryStatus.FINISHED)
-        self.assertEqual(result.ready_outputs, 1)
+        self.assertEqual(result.ready_outputs, 2)
         self.assertEqual(result.failed_outputs, 0)
         self.assertEqual(len(result.playlists.outputs), 1)
         self.assertEqual(
             result.playlists.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
+        )
+        self.assertEqual(
+            result.thumbnails.outputs[0].status,
             self.pb2.OutputStatus.UPLOADING_FINISHED,
         )
 
@@ -451,14 +487,42 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         variant_key = "vod/e2e/master_144p.m3u8"
         self.assertIn(master_key, output_objects)
         self.assertIn(variant_key, output_objects)
+        self.assertIn("vod/e2e/thumbnail.jpg", output_objects)
+        self.assertIn(
+            "vod/e2e/.master.m3u8.artifacts.json", output_objects
+        )
         self.assertTrue(
             any(key.endswith(".ts") for key in output_objects)
         )
-        self.assertEqual(self.storage.upload_order[-1], master_key)
+        self.assertGreater(
+            self.storage.upload_order.index(master_key),
+            self.storage.upload_order.index(variant_key),
+        )
         self.assertTrue(self.webhook_handler.received)
         self.assertEqual(
             json.loads(self.webhook_handler.received[0])["reference_id"],
             "vod-e2e-reference",
+        )
+
+        # Redis is a progress/cache projection, not the durable source of truth.
+        self.cache.values.clear()
+        recovered = self.stub.get_results(
+            self.pb2.JobsResultsRequest(
+                tracking_ids=[accepted.tracking_id]
+            ),
+            timeout=30,
+        ).results[0]
+        self.assertEqual(recovered.status, self.pb2.PrimaryStatus.FINISHED)
+        self.assertEqual(recovered.ready_outputs, 2)
+        self.assertEqual(len(recovered.playlists.outputs), 1)
+        self.assertEqual(
+            recovered.playlists.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
+        )
+        self.assertEqual(len(recovered.thumbnails.outputs), 1)
+        self.assertEqual(
+            recovered.thumbnails.outputs[0].status,
+            self.pb2.OutputStatus.UPLOADING_FINISHED,
         )
 
 
