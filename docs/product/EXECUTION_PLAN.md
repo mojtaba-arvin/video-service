@@ -159,7 +159,7 @@ Baseline on `develop`:
 - PR #96 merged: public QoE cost-coverage fields and generated-Protobuf integration coverage.
 - PR #97 merged: bounded webhook connect/read waits, no automatic redirect/retry, deterministic cleanup.
 - PR #98 merged: roadmap/governance/runtime status corrected.
-- Current `develop` after PR #100 is `d4f8dd9`; CI passed (Python 3.9 and 3.12 regression, PostgreSQL repository, full VOD integration, Dependency Review and aggregate `Quality gates`).
+- Current `develop` after PR #105 is `2105930`; PR #105 was documentation-only, with Documentation links, Dependency Review and aggregate `Quality gates` passing; runtime suites were correctly skipped.
 - PR #99 merged the product execution plan; PR #100 merged the first versioned execution-plan contract.
 - PR #104 merged the pure VOD plan builder; PR #105 merged the mandatory reliability/observability standard and ADR 0006; PR #106 implements atomic immutable execution-plan persistence and is pending CI.
 
