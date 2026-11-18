@@ -925,7 +925,7 @@ class WorkflowRepository:
         return {
             "session_id": session_id,
             "session_token": session_token,
-            "manifest_uri": manifest.uri,
+            "manifest_artifact_id": manifest.id,
         }
 
     @staticmethod
