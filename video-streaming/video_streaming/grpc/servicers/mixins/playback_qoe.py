@@ -111,4 +111,7 @@ class PlaybackQoEMixin:
             ),
             cost_currency=report["cost_currency"] or "",
             pricing_model_id=report["pricing_model_id"] or "",
+            cost_estimate_complete=report["cost_estimate_complete"],
+            priced_attempt_count=report["priced_attempt_count"],
+            total_attempt_count=report["total_attempt_count"],
         )
