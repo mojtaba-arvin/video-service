@@ -19,6 +19,7 @@ class Streaming(
         RevokeJobsMixin,
         GetResultsMixin,
         CreateJobMixin,
+        PlaybackQoEMixin,
         streaming_pb2_grpc.StreamingServicer):
 
     cache = RedisCache()
