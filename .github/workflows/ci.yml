@@ -236,6 +236,15 @@ jobs:
             -p 'test_synthetic_vod_package_harness.py' \
             -v
 
+      - name: Run supervised FFmpeg watermark integration test
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_watermark_supervised_rendering.py' \
+            -v
+
       - name: Generate gRPC Python modules
         run: |
           cd video-streaming/scripts
