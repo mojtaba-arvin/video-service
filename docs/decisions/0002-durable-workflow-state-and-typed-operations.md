@@ -60,11 +60,11 @@ Core operation identifiers and dataclass request/result/error contracts live in 
 - Storage publication and validation evidence can be queried alongside resource measurements.
 - Cost data is available from the first durable stage without inventing a dollar estimate.
 - The initial implementation intentionally excludes tenant isolation, auth/RBAC, a public API redesign, and an MCP server.
-- Thumbnail stages also use durable attempts and file publication verification. Watermark transformation remains on the legacy task lifecycle until it is explicitly instrumented.
+- Thumbnail stages use durable attempts, validation artifacts, storage readback and are covered by the VOD E2E test. Watermark transformation and its separately published output are also wired to durable attempts, validation and readback; that branch still needs dedicated E2E coverage before it is claimed as end-to-end verified.
 - The database-first create-then-dispatch sequence still has a narrow process-crash window between committing the job and publishing the Celery graph. A transactional dispatch/outbox mechanism is deferred until a durable dispatcher is introduced; Redis is not used to pretend that this gap is closed.
 
 ## Evidence and validation
 
 - PostgreSQL migrations are exercised on Python 3.9 and 3.12 CI lanes.
 - Repository tests cover idempotency conflicts, concurrent duplicate submission, forbidden transitions, validation artifacts, retry attempts, stale-attempt recovery, resource metrics, and immutable events.
-- The VOD E2E test exercises gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible storage and clears Redis before checking the final result again.
+- The VOD E2E test exercises gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible storage and clears Redis before checking the final result again. Watermark-specific E2E is not yet covered.
