@@ -284,6 +284,10 @@ class WorkflowRepository:
                     state=WorkflowState.QUEUED.value,
                 )
                 session.add_all([job, workflow])
+                # Insert parent rows before dependent events and stages. This
+                # explicit flush avoids relying on unit-of-work table ordering
+                # for unrelated ORM objects submitted in one batch.
+                session.flush()
                 _record_event(
                     session,
                     job_id,
