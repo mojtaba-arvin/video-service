@@ -16,28 +16,25 @@ if _HAS_LOGGING_RUNTIME:
     from video_streaming.core.services.s3 import S3Service
     from video_streaming.ffmpeg.tasks.mixins.call_webhook import CallWebhookMixin
 
+    class _DummyTask(BaseTask):
+        name = "tests.sensitive_logging"
+
+        def run(self, *args, **kwargs):
+            return "ok"
+
+    class _Cache:
+        def get(self, key):
+            return {"reference_id": "test-reference"}
+
+    class _WebhookTask(CallWebhookMixin):
+        cache = _Cache()
+        logger = logging.getLogger("tests.webhook_logging")
+
 
 @unittest.skipUnless(
     _HAS_LOGGING_RUNTIME,
     "Celery, Boto3 and runtime dependencies are installed in the VOD integration job",
 )
-class _DummyTask(BaseTask):
-    name = "tests.sensitive_logging"
-
-    def run(self, *args, **kwargs):
-        return "ok"
-
-
-class _Cache:
-    def get(self, key):
-        return {"reference_id": "test-reference"}
-
-
-class _WebhookTask(CallWebhookMixin):
-    cache = _Cache()
-    logger = logging.getLogger("tests.webhook_logging")
-
-
 class SensitiveLoggingTests(unittest.TestCase):
 
     def test_celery_task_arguments_are_not_logged(self):
@@ -52,7 +49,7 @@ class SensitiveLoggingTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "ok")
-        rendered = "\n".join(captured.output)
+        rendered = "\\n".join(captured.output)
         self.assertIn("tests.sensitive_logging", rendered)
         self.assertNotIn(secret, rendered)
         self.assertNotIn("webhook_url", rendered)
@@ -70,7 +67,7 @@ class SensitiveLoggingTests(unittest.TestCase):
                 result = _WebhookTask().call_webhook("job-123", webhook_url=url)
 
         self.assertTrue(result)
-        rendered = "\n".join(captured.output)
+        rendered = "\\n".join(captured.output)
         self.assertIn("204", rendered)
         self.assertIn("job-123", rendered)
         self.assertNotIn(secret, rendered)
@@ -87,7 +84,7 @@ class SensitiveLoggingTests(unittest.TestCase):
                     ValueError("request contained {}".format(secret))
                 )
 
-        rendered = "\n".join(captured.output)
+        rendered = "\\n".join(captured.output)
         self.assertIn("ValueError", rendered)
         self.assertNotIn(secret, rendered)
 
