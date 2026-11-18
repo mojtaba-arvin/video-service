@@ -221,6 +221,7 @@ def upload_file(self,
                     "output_bytes": file_size,
                     "cpu_seconds": kwargs.get("cpu_seconds"),
                 },
+                pricing=configured_pricing(settings),
             )
         self.save_job_stop_reason(
             self.stop_reason.INTERNAL_ERROR, request_id
