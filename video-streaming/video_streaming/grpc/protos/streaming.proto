@@ -470,4 +470,13 @@ message PlaybackQoEReportResponse {
   bool cost_estimate_complete = 15;
   int32 priced_attempt_count = 16;
   int32 total_attempt_count = 17;
+  // False means total_estimated_cost is not a complete aggregate; zero is not a substitute.
+  bool total_estimated_cost_available = 18;
+  // Partial estimate is diagnostic only and may omit attempts with unknown usage.
+  double partial_estimated_cost = 19;
+  bool partial_estimated_cost_available = 20;
+  int32 complete_attempt_count = 21;
+  map<string, int32> missing_cost_dimensions_by_attempt = 22;
+  repeated string excluded_cost_dimensions = 23;
+  repeated string pricing_model_versions = 24;
 }
