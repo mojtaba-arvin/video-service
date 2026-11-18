@@ -12,7 +12,6 @@ import json
 import math
 import os
 import platform
-import resource
 import shutil
 import statistics
 import subprocess
@@ -22,6 +21,14 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+VIDEO_STREAMING_ROOT = REPOSITORY_ROOT / "video-streaming"
+if str(VIDEO_STREAMING_ROOT) not in sys.path:
+    sys.path.insert(0, str(VIDEO_STREAMING_ROOT))
+
+from video_streaming.execution.process_control import run_cancellable_process
 
 
 CODECS = (
@@ -298,15 +305,22 @@ def encode_and_score(source, source_info, codec, crf, ffmpeg_path,
         str(output_path),
     ]
 
-    usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    usage_samples = []
     started = time.monotonic()
-    run_command(encode_command, timeout_seconds)
+    run_cancellable_process(
+        encode_command,
+        timeout_seconds=timeout_seconds,
+        poll_interval=0.1,
+        on_usage=usage_samples.append,
+    )
     encode_wall_seconds = time.monotonic() - started
-    usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_seconds = max(
-        0.0,
-        (usage_after.ru_utime + usage_after.ru_stime)
-        - (usage_before.ru_utime + usage_before.ru_stime),
+        (item["cpu_seconds"] for item in usage_samples),
+        default=0.0,
+    )
+    peak_memory_bytes = max(
+        (item["peak_memory_bytes"] for item in usage_samples),
+        default=None,
     )
 
     output_info = probe_media(ffprobe_path, output_path, timeout_seconds)
@@ -330,6 +344,8 @@ def encode_and_score(source, source_info, codec, crf, ffmpeg_path,
         "vmaf": vmaf,
         "encode_wall_seconds": encode_wall_seconds,
         "encode_cpu_seconds": cpu_seconds,
+        "encode_peak_memory_bytes": peak_memory_bytes,
+        "output_sha256": sha256_file(output_path),
         "input_duration_seconds": source_info["duration_seconds"],
         "throughput_x_realtime": (
             source_info["duration_seconds"] / encode_wall_seconds
