@@ -142,6 +142,31 @@ class ProcessTreeTerminationTests(unittest.TestCase):
         self.assertEqual(context.exception.returncode, 7)
         self.assertIn(b"bad", context.exception.output)
 
+    def test_streaming_runner_reports_process_group_usage(self):
+        from video_streaming.execution.process_control import run_streaming_process
+
+        usage_samples = []
+        result = run_streaming_process(
+            [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(0.3)",
+            ],
+            timeout_seconds=2,
+            poll_interval=0.02,
+            on_line=lambda line, process: None,
+            on_usage=usage_samples.append,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertTrue(usage_samples)
+        self.assertTrue(any(
+            sample["peak_memory_bytes"] for sample in usage_samples
+        ))
+        self.assertGreaterEqual(
+            usage_samples[-1]["memory_duration_ms"], 200
+        )
+
     def test_streaming_runner_delivers_lines_as_they_arrive(self):
         from video_streaming.execution.process_control import run_streaming_process
 

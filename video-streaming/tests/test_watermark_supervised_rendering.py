@@ -54,14 +54,20 @@ class SupervisedWatermarkRenderingTests(unittest.TestCase):
             )
 
             progress_lines = []
+            usage_samples = []
             exit_code = run_streaming_process(
                 command,
                 timeout_seconds=20,
                 poll_interval=0.05,
                 on_line=lambda line, process: progress_lines.append(line),
+                on_usage=usage_samples.append,
             )
 
             self.assertEqual(exit_code, 0)
+            self.assertTrue(usage_samples)
+            self.assertTrue(any(
+                sample["peak_memory_bytes"] for sample in usage_samples
+            ))
             self.assertTrue(output_path.is_file())
             self.assertGreater(output_path.stat().st_size, 0)
             self.assertTrue(
