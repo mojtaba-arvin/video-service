@@ -11,11 +11,11 @@ production-readiness claims.
 | Goal | Maturity | Verified implementation | Remaining distance |
 |---|---:|---|---|
 | 1. AI-native long-running orchestration | 2.5/5 | PostgreSQL Job/Workflow/Stage/Attempt/Artifact/Event state; typed internal operations; async VOD and durable publication | Transactional outbox, versioned workflow definitions, project/scene/character continuity, incremental input/output and resumable creative runs |
-| 2. Cost intelligence | 2/5 | Merged: per-attempt CPU/time/memory/bytes, immutable price-card ID/version/rate snapshots, component coverage, partial spend for failed/retryable/cancelled attempts, explicit worker-loss gaps, RUNIT fallback and matched-VMAF H.264/HEVC/AV1 benchmark harness (PR #93). No production codec default or cost-saving claim is derived from the harness alone | Run the harness on licensed representative media; meter GPU/egress/retention/idle resources; reconcile to provider invoices; then implement cost-aware admission/scheduling and Spot economics |
+| 2. Cost intelligence | 2/5 | Merged: per-attempt CPU/time/memory/bytes, immutable price-card ID/version/rate snapshots, component coverage, partial spend for failed/retryable/cancelled attempts, explicit worker-loss gaps, RUNIT fallback and matched-VMAF H.264/HEVC/AV1 benchmark harness (PR #93); direct process-group CPU/RSS/duration samples for Watermark (PR #95); public gRPC report coverage fields (PR #96). No production codec default or cost-saving claim is derived from the harness alone | Run the harness on licensed representative media; meter GPU/egress/retention/idle resources; reconcile to provider invoices; then implement cost-aware admission/scheduling and Spot economics |
 | 3. Edge–cloud collaboration | 0.5/5 | Research and target architecture only | Real workload baseline, edge preprocessing prototype, secure leases, cloud fallback and measured benefit |
 | 4. Portable MCP server | 1/5 | Typed application-operation request/result/error contracts | MCP server, stable tool schemas, OAuth audience validation, resource authorization, budgets and client contract tests |
-| 5. Observability and QoE | 2.5/5 | Merged manifest-bound playback sessions, idempotent player events and queryable QoE report | Player client/SDK, CDN adapter, delivery correlation, query/aggregation APIs, cohorts and percentiles |
-| 6. FFmpeg scale and isolation | 2/5 | Package validation/publication safety; bounded process-tree cancellation and deadlines for Thumbnail (PR #87) and Watermark (PR #92) merged | Per-attempt cgroup/container CPU/RAM/PID/disk limits, supervision for every library-launched FFmpeg process, admission/concurrency control and broker-backed worker-loss tests |
+| 5. Observability and QoE | 2.5/5 | Merged manifest-bound playback sessions, idempotent player events, queryable QoE report and public gRPC cost-coverage fields (PR #96) | Player client/SDK, CDN adapter, delivery correlation, query/aggregation APIs, cohorts and percentiles |
+| 6. FFmpeg scale and isolation | 2/5 | Package validation/publication safety; bounded process-tree cancellation/deadlines for Thumbnail (PR #87) and Watermark (PR #92), plus direct streaming Watermark process-group CPU/RSS/duration metering (PR #95) merged | Per-attempt cgroup/container CPU/RAM/PID/disk limits, supervision for every library-launched FFmpeg process, admission/concurrency control and broker-backed worker-loss tests |
 
 The simple mean is approximately 1.7/5. It is a planning signal only; the six
 outcomes have different dependencies and should not be treated as one linear
@@ -54,16 +54,16 @@ identified separately and is not counted as merged.
 
 | Priority | Outcome lane | Verified state | Next acceptance evidence |
 |---|---|---|---|
-| P0 | Engineering foundation | **Done** — pinned CI actions, Python 3.9/3.12 regression lanes, synthetic VOD fixture generation, Dependency Review, Dependabot and agent guidance (PR #61) | Keep required checks green; establish repository ruleset with owner/admin access |
+| P0 | Engineering foundation | **Partial** — pinned CI actions, Python 3.9/3.12 regression lanes, synthetic VOD fixtures, Dependency Review, Dependabot, agent guidance and stable aggregate `Quality gates` check (PR #88). Active `Protect develop` ruleset currently blocks deletion/non-fast-forward only; it does not yet require `Quality gates` | Repository admin must make the single stable `Quality gates` check a required status check; keep it green |
 | P0 | Configuration and repository hygiene | **Done** — settings regressions and safe environment template/ignore checks (PR #55/#56) | Confirm historic development broker credentials are no longer accepted by any shared service |
 | P0 | Thumbnail correctness | **Done** — actual FFmpeg render plus FFprobe checks before completion (PR #57/#59) | Add failure/cancellation coverage to the complete workflow |
 | P0 | HLS/DASH correctness and publication | **Done** — package graph validation, expected rendition checks, bounded metadata probing, storage readback and manifest-last publication (PR #62/#64) | Add adversarial tests for cleanup/partial failure as the package contract evolves |
 | P0 | Durable orchestration | **Core merged; dispatch gap open** — PostgreSQL Job/Workflow/Stage/Attempt/Artifact/Event state, explicit transitions, idempotency and stale-attempt recovery (PR #68) | Implement transactional outbox + dispatcher; prove no lost dispatch across DB commit/process crash and idempotent relay redelivery |
 | P0 | End-to-end VOD reliability | **Partial** — gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible test double; final state survives Redis cache clearing (PR #63/#68) | Add broker-backed worker process tests for worker loss, non-zero FFmpeg exit, retry, cancellation and watermark output |
-| P0 | FFmpeg execution isolation | **Partial — PR #87/#92 merged** — Thumbnail and Watermark use bounded deadlines and terminate process groups/descendants on cancellation; real process tests run in CI | Extend supervision to every third-party library-launched FFmpeg path; add cgroup/container CPU/memory/PID/disk bounds, admission control and adversarial cleanup tests |
-| P0 | Security boundary | **Partial — PR #85 merged** — raw task args, gRPC requests, provider exception details and callback URLs are redacted from operational logs | Caller authentication/authorization, tenant boundaries, quotas and webhook SSRF controls; then signatures, replay protection, delivery history and abuse tests |
-| P0 | Runtime and image maintenance | **Open** — Python 3.12 regression suite passes, but the application/runtime image remains on Python 3.9 | Inventory dependencies; migrate the full runtime/container to a supported Python version; execute complete container VOD smoke test |
-| P1 | QoE and delivery intelligence | **Foundation merged — PR #69** — manifest-bound sessions, idempotent events, active-buffering and cost-coverage reporting are in develop | Add client/SDK example, CDN adapter, delivery configuration correlation and richer query APIs |
+| P0 | FFmpeg execution isolation | **Partial — PR #87/#92/#95 merged** — Thumbnail and Watermark use bounded deadlines and terminate process groups/descendants on cancellation; streaming Watermark records direct process-group CPU/RSS/duration; real FFmpeg/FFprobe tests run in CI | Extend metering/supervision to every third-party library-launched FFmpeg path; add cgroup/container CPU/memory/PID/disk bounds, admission control and adversarial cleanup tests |
+| P0 | Security boundary | **Partial — PR #85/#97 merged** — sensitive task/request/provider/callback values are redacted; webhook connect/read timeouts are bounded, automatic redirects/retries are disabled, and response/pool cleanup is deterministic | Caller authentication/authorization, tenant boundaries, quotas, DNS/IP-aware SSRF protection, signed/replay-protected webhooks, delivery history and abuse tests |
+| P0 | Runtime and image maintenance | **Open — target Python 3.12** — Python 3.9 reached EOL on 2025-10-31 and 3.10 reached EOL on 2026-10-01; CI Python 3.12 tests are not evidence that the application image/runtime has migrated | Upgrade gevent/greenlet, pyzmq/circus and remaining pins; build the full Python 3.12 + FFmpeg image; run migrations, broker-backed worker smoke tests and full VOD E2E inside that image; then retire the legacy lane |
+| P1 | QoE and delivery intelligence | **Foundation merged — PR #69/#96** — manifest-bound sessions, idempotent events, active-buffering reports and public gRPC cost-coverage fields are in develop | Add client/SDK example, provider-neutral CDN adapter, delivery/manifest-version correlation and richer query/aggregation APIs |
 | P1 | Cost intelligence | **Merged — PR #68/#93** — stage duration, CPU, peak memory, bytes, immutable price snapshots, component coverage, failure/cancel/retry/worker-loss accounting and explicit RUNIT semantics. No provider-bill claim | Run against licensed representative media; instrument GPU, network egress, storage retention and idle resources; reconcile estimates to provider invoices; then apply cost-aware admission and scheduling |
 | P1 | Codec and packaging efficiency | **Benchmark harness merged — PR #93** — HLS/DASH and H.264/HEVC/VP9 options plus software H.264/HEVC/AV1 matched-VMAF runner with source provenance, raw results, repeat-run variance and environment capture. No production defaults changed; no licensed representative run yet | Run the harness on approved content classes, record repeat-run variance and decoder/player compatibility, then decide profile/default changes from measured trade-offs |
 | P1 | Agent interface | **Foundation only** — typed internal operation identifiers/request/result/error contracts exist (PR #68); no MCP server | Stabilize application contracts and authorization first; implement MCP as a thin adapter and contract-test with real MCP clients |
@@ -136,14 +136,18 @@ Advanced spot/preemptible scheduling, live migration, distributed inference, man
 
 ## Additional P0 — runtime security baseline
 
-The legacy service currently targets Python 3.9. Python 3.9 reached end of
-life on 2025-10-31 and no longer receives official security updates
-([Python version status](https://devguide.python.org/versions/)). CI now keeps
-a Python 3.9 regression check for backward compatibility and adds a separate
-Python 3.12 regression-suite run. The latter is not evidence that the full
-service, its old runtime dependencies, or its container is compatible.
+The legacy service container targets Python 3.9. Python 3.9 reached end of
+life on 2025-10-31 and Python 3.10 reached end of life on 2026-10-01; neither
+receives upstream security updates. Python 3.12 remains in security support
+through 2028-10 ([Python version status](https://devguide.python.org/versions/)).
+CI retains Python 3.9 regression coverage for backward compatibility and
+runs a separate Python 3.12 suite, but neither proves that the application
+image/runtime has migrated.
 
-Next acceptance increment: inventory the runtime image and all pinned
-dependencies, select a supported Python target, prove compatibility with
-gRPC/Celery/Redis/S3/FFmpeg integrations, rebuild the container, and run a
-complete VOD smoke test before changing the production baseline.
+Research on the pinned stack identified old gevent and PyZMQ versions as
+migration blockers; see [Issue #74](https://github.com/mojtaba-arvin/video-service/issues/74)
+for compatibility evidence and the selected target. Next acceptance
+increment: uplift the complete dependency set, rebuild the container from
+pinned inputs, run migrations and broker-backed worker smoke tests, and run
+the complete VOD path inside the Python 3.12 image before retiring the legacy
+lane.
