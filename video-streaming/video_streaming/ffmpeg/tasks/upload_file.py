@@ -54,11 +54,6 @@ def upload_file(self,
         s3_output_bucket=s3_output_bucket,
     )
 
-    if self.is_forced_to_stop(request_id):
-        raise self.raise_revoke(request_id)
-    if self.is_output_forced_to_stop(request_id, output_id):
-        raise self.raise_revoke_output(request_id, output_id)
-
     file_size = os.path.getsize(file_path)
     if file_size <= 0:
         raise self.raise_ignore(
@@ -72,6 +67,30 @@ def upload_file(self,
         if repository is not None else None
     )
     attempt_id = kwargs.get("attempt_id")
+
+    if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+            request_id, output_id):
+        if (
+                durable_stage is not None
+                and durable_stage.get("status") in (
+                    "PROCESSING", "VALIDATED", "PUBLISHING"
+                )
+                and attempt_id):
+            repository.cancel_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=attempt_id,
+                reason="CANCELLED_BEFORE_FILE_PUBLICATION",
+                metrics={
+                    "input_bytes": int(kwargs.get("input_bytes") or 0),
+                    "cpu_seconds": kwargs.get("cpu_seconds"),
+                    "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                },
+                pricing=configured_pricing(settings),
+            )
+        if self.is_forced_to_stop(request_id):
+            raise self.raise_revoke(request_id)
+        raise self.raise_revoke_output(request_id, output_id)
 
     if durable_stage is not None:
         # If recovery closed a lost publisher attempt, start a new durable
