@@ -28,3 +28,17 @@ This corpus is appropriate for correctness, parser, manifest, and smoke tests.
 It is intentionally too small and synthetic to establish perceptual quality,
 real-world performance, production capacity, or cloud cost savings. Such
 claims require a representative corpus with documented redistribution rights.
+
+
+## Package validation harness
+
+The package harness exercises the existing fail-closed HLS/DASH validator against all three generated fixtures. It creates two video renditions per fixture, generates HLS master/variant playlists and a static DASH MPD, validates every referenced playlist/representation/segment, and writes a machine-readable report with manifest hashes and per-file package inventory. Generated media remains outside the repository.
+
+Run from the repository root:
+
+~~~sh
+python video-streaming/tests/fixtures/synthetic-vod-v1/generate.py --output-dir /tmp/synthetic-vod-v1
+PYTHONPATH=video-streaming python video-streaming/tests/fixtures/synthetic-vod-v1/package_harness.py --input-dir /tmp/synthetic-vod-v1 --output-dir /tmp/synthetic-vod-packages
+~~~
+
+The regression test named test_synthetic_vod_package_harness.py runs the generator and harness in temporary directories. It asserts that all three fixtures produce valid two-rendition HLS and DASH packages with non-empty referenced segments and hashed manifests. This is structural/package-completeness validation; it does not claim perceptual quality or player interoperability.
