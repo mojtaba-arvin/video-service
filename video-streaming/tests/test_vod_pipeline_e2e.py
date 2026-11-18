@@ -441,7 +441,12 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             )
             self.assertGreater(attempt["output_bytes"], 0)
             self.assertGreater(attempt["artifact_count"], 0)
-            self.assertIsNone(attempt["estimated_cost"])
+            self.assertGreater(attempt["estimated_cost"], 0)
+            self.assertEqual(attempt["cost_currency"], "RUNIT")
+            self.assertEqual(
+                attempt["pricing_model_id"],
+                "relative-resource-index-v1",
+            )
         playlist_stage = next(
             stage for stage in snapshot["stages"] if stage["key"] == "p0"
         )
