@@ -627,6 +627,42 @@ class WorkflowRepositoryTests(unittest.TestCase):
             report["cost_coverage"]["pricing_model_versions"], ["v1", "v2"]
         )
 
+    def test_worker_loss_records_price_version_but_never_fabricates_usage(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+
+        recovered = self.repository.recover_stale_attempts(
+            utcnow() + timedelta(seconds=1),
+            pricing={
+                "model_id": "worker-infra",
+                "model_version": "2026-11-18",
+                "currency": "USD",
+                "cpu_per_second": 0.01,
+                "memory_gb_second": 0.02,
+                "storage_gb": 0.03,
+            },
+        )
+
+        self.assertEqual(recovered, 1)
+        attempt = self.repository.get_stage_snapshot(job_id, "p0")["attempts"][0]
+        self.assertEqual(attempt["id"], attempt_id)
+        self.assertEqual(attempt["status"], "RETRYABLE")
+        self.assertEqual(attempt["error_code"], "WORKER_LOST")
+        self.assertEqual(attempt["pricing_model_version"], "2026-11-18")
+        self.assertIsNone(attempt["estimated_cost"])
+        coverage = attempt["cost_accounting"]["coverage"]
+        self.assertFalse(coverage["complete"])
+        self.assertEqual(
+            set(coverage["missing_dimensions"]),
+            {"cpu_compute", "memory", "storage"},
+        )
+
+        report = self.repository.get_playback_qoe_report(job_id, "p0")
+        self.assertFalse(report["cost_estimate_complete"])
+        self.assertIsNone(report["total_estimated_cost"])
+        self.assertEqual(report["cost_coverage"]["priced_attempt_count"], 0)
+        self.assertEqual(report["cost_coverage"]["total_attempt_count"], 1)
+
     def test_playback_session_requires_a_published_manifest(self):
         job_id = self.create_job("p0")
         with self.assertRaises(ValueError):
