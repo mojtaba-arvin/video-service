@@ -226,11 +226,12 @@ class ProcessTreeTerminationTests(unittest.TestCase):
 
         samples = []
         code = (
-            "import time; "
-            "payload = bytearray(16 * 1024 * 1024); "
-            "deadline = time.monotonic() + 0.4; "
-            "value = 0; "
-            "while time.monotonic() < deadline: value += 1"
+            "import time\n"
+            "payload = bytearray(16 * 1024 * 1024)\n"
+            "deadline = time.monotonic() + 0.4\n"
+            "value = 0\n"
+            "while time.monotonic() < deadline:\n"
+            "    value += 1\n"
         )
         run_cancellable_process(
             [sys.executable, "-c", code],
