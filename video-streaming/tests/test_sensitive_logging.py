@@ -1,14 +1,26 @@
 """Regression tests ensuring sensitive task and callback values stay out of logs."""
 
+import importlib.util
 import logging
 import unittest
 from unittest.mock import Mock, patch
 
-from video_streaming.core.tasks.base import BaseTask
-from video_streaming.core.services.s3 import S3Service
-from video_streaming.ffmpeg.tasks.mixins.call_webhook import CallWebhookMixin
+
+_HAS_LOGGING_RUNTIME = all(
+    importlib.util.find_spec(module_name) is not None
+    for module_name in ("celery", "boto3", "botocore", "urllib3")
+)
+
+if _HAS_LOGGING_RUNTIME:
+    from video_streaming.core.tasks.base import BaseTask
+    from video_streaming.core.services.s3 import S3Service
+    from video_streaming.ffmpeg.tasks.mixins.call_webhook import CallWebhookMixin
 
 
+@unittest.skipUnless(
+    _HAS_LOGGING_RUNTIME,
+    "Celery, Boto3 and runtime dependencies are installed in the VOD integration job",
+)
 class _DummyTask(BaseTask):
     name = "tests.sensitive_logging"
 
