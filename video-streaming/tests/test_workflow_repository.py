@@ -13,6 +13,8 @@ from video_streaming.workflows.domain import (
     StageState,
 )
 from video_streaming.workflows.repository import WorkflowRepository, utcnow
+from video_streaming.workflows.execution_plan import execution_plan_sha256
+from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
 
 @unittest.skipUnless(
@@ -79,6 +81,105 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         snapshot = self.repository.get_job_snapshot(job_id)
         self.assertEqual(len(snapshot["stages"]), 1)
+
+
+    def build_plan(self, job_id, output_key="master.m3u8"):
+        return build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": "input-media", "key": "source.mp4"},
+                "playlists": [{
+                    "bucket": "output-media",
+                    "key": output_key,
+                    "protocol": "hls",
+                    "quality_names": ["360p"],
+                    "use_watermark": False,
+                    "dont_replace": False,
+                    "create_bucket": False,
+                }],
+                "thumbnails": [],
+            },
+            workflow_version="vod-v1",
+        )
+
+    def test_execution_plan_is_persisted_atomically_with_workflow_and_stages(self):
+        job_id = str(uuid4())
+        plan = self.build_plan(job_id)
+        returned_id, created = self.repository.create_job(
+            job_id,
+            "idem-plan-{}".format(uuid4()),
+            "e" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+        )
+
+        self.assertEqual((returned_id, created), (job_id, True))
+        persisted = self.repository.get_execution_plan(job_id)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted["plan"], plan)
+        self.assertEqual(persisted["schema_version"], plan["schema_version"])
+        self.assertEqual(persisted["workflow_version"], "vod-v1")
+        self.assertEqual(persisted["fingerprint"], execution_plan_sha256(plan))
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["workflow"]["execution_plan_fingerprint"], persisted["fingerprint"])
+        self.assertEqual(snapshot["workflow"]["execution_plan"], plan)
+        self.assertEqual(
+            [(stage["key"], stage["operation"]) for stage in snapshot["stages"]],
+            [(node["stage_key"], node["operation"]) for node in plan["nodes"]],
+        )
+        created_event = snapshot["events"][0]
+        self.assertEqual(created_event["type"], "JOB_CREATED")
+        self.assertEqual(created_event["payload"]["execution_plan_fingerprint"], persisted["fingerprint"])
+
+    def test_idempotent_replay_rejects_a_different_execution_plan(self):
+        job_id = str(uuid4())
+        key = "idem-plan-conflict-{}".format(uuid4())
+        self.repository.create_job(
+            job_id, key, "f" * 64, execution_plan=self.build_plan(job_id)
+        )
+
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.create_job(
+                str(uuid4()),
+                key,
+                "f" * 64,
+                execution_plan=self.build_plan(job_id, "different/master.m3u8"),
+            )
+
+        persisted = self.repository.get_execution_plan(job_id)
+        self.assertEqual(persisted["fingerprint"], execution_plan_sha256(self.build_plan(job_id)))
+
+    def test_legacy_idempotent_replay_does_not_mutate_accepted_workflow(self):
+        job_id = str(uuid4())
+        key = "idem-legacy-plan-{}".format(uuid4())
+        self.repository.create_job(job_id, key, "1" * 64)
+
+        replay_id, created = self.repository.create_job(
+            str(uuid4()),
+            key,
+            "1" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        self.assertEqual((replay_id, created), (job_id, False))
+        self.assertIsNone(self.repository.get_execution_plan(job_id))
+
+    def test_execution_plan_and_stage_projection_must_match(self):
+        job_id = str(uuid4())
+        plan = self.build_plan(job_id)
+        with self.assertRaises(ValueError):
+            self.repository.create_job(
+                job_id,
+                "idem-plan-stage-mismatch-{}".format(uuid4()),
+                "2" * 64,
+                execution_plan=plan,
+                stage_specs=[{
+                    "stage_key": "wrong-stage",
+                    "operation": "video.hls.package",
+                }],
+            )
+        self.assertIsNone(self.repository.get_job_snapshot(job_id))
 
     def test_state_machine_persists_validation_artifact_and_cost_metrics(self):
         job_id = self.create_job("p0")
