@@ -144,6 +144,18 @@ class WorkflowRepositoryTests(unittest.TestCase):
         ]
         self.assertEqual(len(reports), 1)
         self.assertEqual(reports[0]["metadata"], report)
+        event_types = [event["type"] for event in snapshot["events"]]
+        self.assertEqual(
+            event_types,
+            [
+                "JOB_CREATED",
+                "STAGE_ATTEMPT_STARTED",
+                "STAGE_VALIDATED",
+                "STAGE_PUBLISHING",
+                "JOB_FINISHED",
+                "STAGE_FINISHED",
+            ],
+        )
 
     def test_forbidden_transition_cannot_skip_validation(self):
         job_id = self.create_job("p0")
@@ -169,6 +181,14 @@ class WorkflowRepositoryTests(unittest.TestCase):
         third_id, third_number = self.repository.start_attempt(job_id, "p0")
         self.assertNotEqual(second_id, third_id)
         self.assertEqual(third_number, second_number + 1)
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        event_types = [event["type"] for event in snapshot["events"]]
+        self.assertIn("ATTEMPT_RETRYABLE", event_types)
+        self.assertIn("ATTEMPT_RECOVERED", event_types)
+        self.assertEqual(
+            event_types.count("STAGE_ATTEMPT_STARTED"), 3
+        )
 
     def test_concurrent_idempotency_key_creates_only_one_job(self):
         job_id = str(uuid4())
