@@ -161,6 +161,45 @@ Targets must be set after establishing a reproducible baseline. Report at least:
 
 No numeric performance or savings target is accepted until the benchmark workload and measurement procedure are documented.
 
-## 8. Claims requiring independent validation
+## 8. Six strategic objectives and traceability
 
-Industry figures supplied in planning discussions (for example, codec efficiency percentages, spot savings, GPU rental prices, distributed-inference savings, or latency improvements) are hypotheses, not verified properties of this repository. Codec gains vary by content, encoder, preset, quality target, and playback support. Cloud prices vary by region and time. Any such figure used in product claims must cite a current source and be reproduced or qualified with a project-specific benchmark.
+The product direction is executed as six connected but independently valuable
+outcomes:
+
+1. **AI-native long-running orchestration:** versioned workflow definitions,
+   durable runs, composable stages, project/scene/character/asset continuity,
+   provenance, resumability and incremental output.
+2. **First-class cost intelligence:** measured usage, explicit price-card
+   versions, cost/quality/latency trade-offs, admission control, CPU/GPU policy
+   and interruption-aware Spot capacity.
+3. **Edge–cloud collaboration:** selective local preprocessing and semantic
+   sampling, with cloud fallback and measurable privacy/bandwidth/latency
+   benefits.
+4. **Portable MCP interface:** stable typed video tools over application
+   contracts, with authentication, authorization, quotas and audit applied
+   consistently across protocols.
+5. **End-to-end observability and QoE:** correlate server workflow, immutable
+   output version, CDN delivery and player-session experience through a
+   queryable API.
+6. **FFmpeg execution at scale:** process-tree supervision, per-attempt
+   CPU/memory/PID/disk bounds, fair concurrency, worker-loss recovery and
+   safe artifact cleanup.
+
+Security, runtime support, test infrastructure and governance are cross-cutting
+prerequisites for all six outcomes.
+
+## 9. Claims requiring independent validation
+
+Industry figures supplied in planning discussions (codec-efficiency percentages,
+Spot discounts, GPU rental rates, distributed-inference savings, survey
+percentages and latency improvements) are hypotheses, not verified properties
+of this repository. The research note
+`docs/research/2026-11-18-parallel-architecture-and-benchmarks.md` records
+which claims have identifiable sources and which remain unsubstantiated.
+
+Codec gains vary by content, encoder, preset, quality target, hardware and
+playback support. Cloud prices vary by provider, region, tenancy and time.
+MediaConvert uses normalized output-minute pricing; GPU sticker price is not
+comparable to a provider's end-to-end job bill. Product claims must identify
+a current source and be reproduced or qualified with a project-specific
+benchmark.

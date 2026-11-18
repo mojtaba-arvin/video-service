@@ -210,3 +210,85 @@ GitHub repository administration also remains necessary: current inspection
 found no active ruleset and develop is unprotected. The connected GitHub
 integration does not expose write access to branch-protection or repository
 security settings.
+
+
+## 10. Verified implementation update (2026-11-18)
+
+The historical review above describes the legacy baseline at commit
+`d75bd59d8203277fc6a50440d3f0b34693958ee1`. It must not be read as the
+current implementation. The following evidence was verified against
+`develop` at `37a6bce9e20bdf1cb5b69ca9dca80e4e5b69b3d9` on
+2026-11-18.
+
+### Merged implementation
+
+| Capability | Current evidence | Boundary / remaining work |
+|---|---|---|
+| CI and engineering controls | Python 3.9 and 3.12 regression lanes, generated synthetic media fixtures, pinned Actions, dependency review, Dependabot and repository agent guidance (PR #61) | Python 3.12 lane is regression coverage, not proof that the full service image/runtime is compatible |
+| Thumbnail correctness | FFmpeg rendering and FFprobe validation reject missing, empty, corrupt and dimension-mismatched artifacts (PR #59) | Does not prove process-tree isolation or broad resource limits |
+| HLS/DASH publication | Structured package validation checks manifests, rendition references, media artifacts and metadata; publication verifies storage dependencies and publishes root manifests last (PR #62/#64) | Namespace-safe garbage collection of unreachable old remote media remains deferred |
+| End-to-end VOD smoke path | Real local gRPC server, Celery signatures/chains, FFmpeg/FFprobe, HLS generation, in-memory cache/storage doubles and callback server (PR #63) | It is an in-process/eager integration harness, not a broker-backed worker crash/restart or live cloud-storage test |
+| Durable workflow state | PostgreSQL Job/Workflow/Stage/Attempt/Artifact/Event records; explicit transitions, idempotency, stale-attempt recovery, validation reports and resource measurements (PR #68) | Job commit and Celery graph dispatch still have a crash window; a transactional outbox/dispatcher is not implemented |
+| Durable VOD vertical | Playlist and thumbnail stages use durable attempts, validation, publication readback and persisted artifacts; E2E retrieves final state after clearing Redis (PR #68) | Watermark-specific E2E, worker-loss recovery through a real worker process, cancellation and non-zero FFmpeg exit/retry coverage remain open |
+
+PR #68's verified CI evidence on its reviewed head was 54 regression tests
+on Python 3.9 (7 skipped), 54 on Python 3.12 (7 skipped), five PostgreSQL
+repository tests on each Python version, two VOD E2E tests on Python 3.9,
+and a passing Dependency Review. These are CI test results, not production
+deployment or performance evidence.
+
+### Merged QoE increment
+
+PR #69 is merged into `develop` in commit
+`94c57d6b3f709ff7d7d4f294113bd7a9151f1790`. It adds PostgreSQL-backed
+playback sessions and append-only player-event ingestion bound to the exact
+completed Stage and manifest Artifact. The contract covers startup, buffering,
+decoder errors and playback end. CI passed all five jobs, including the full
+gRPC → Celery → FFmpeg → storage E2E path and PostgreSQL tests on Python 3.9
+and 3.12.
+
+The pre-merge review found and fixed important correctness issues: active
+buffering was omitted from live reports, partially priced attempts could be
+presented as a total, and duplicate event IDs did not compare semantic
+payloads. A further regression test verifies that active buffering updates
+both duration and rebuffer count.
+
+This is durable ingestion/reporting infrastructure, not a player SDK, CDN
+integration, percentile/SLA view or automated adaptive-bitrate system.
+
+### Current priority gaps
+
+1. Transactional outbox/dispatcher for the Job-to-Celery dual-write window.
+2. FFmpeg process-tree cancellation is merged via PR #78. The callback now
+   uses bounded graceful/forced descendant termination; supervision for every
+   command path, deadlines, CPU/memory/PID/disk limits and cgroup isolation
+   remain open.
+3. Sensitive log redaction is being delivered in new PR #85. Authentication,
+   authorization, tenant isolation and quotas, plus SSRF-safe webhook
+   delivery with DNS/IP/redirect controls, remain open.
+4. Full failure-path integration: worker loss, non-zero FFmpeg exit, retry,
+   cancellation, duplicate delivery and watermark output.
+5. Supported Python runtime and reproducible container migration. Python 3.9
+   reached end of life; the Python 3.12 regression lane does not establish
+   complete application compatibility.
+6. Measured, versioned monetary cost attribution across CPU/GPU, storage,
+   network transfer and provider billing; current resource metrics and RUNIT
+   are not a cloud invoice.
+7. Versioned public application contracts and an MCP adapter. Typed internal
+   operation contracts are a foundation, not an MCP implementation.
+8. Codec-quality/cost benchmark, then evidence-based AV1/HEVC decisions.
+9. Versioned AI/creative workflow definitions, project continuity state,
+   incremental ingestion, JIT packaging, cost-aware scheduling, CDN/player
+   correlation and edge execution remain independent backlog outcomes.
+   Issues #79–#84 define scoped acceptance criteria.
+
+### Operational and governance limits
+
+The CI harness and the connected GitHub integration do not establish that a
+production deployment exists. GitHub repository rulesets/branch protection and
+some repository security settings require owner/admin access. Those settings
+should be enabled, but they do not block independent engineering work on
+isolated branches.
+
+The authoritative work queue remains
+[Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54).
