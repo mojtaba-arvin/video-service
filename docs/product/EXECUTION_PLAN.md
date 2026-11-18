@@ -163,7 +163,7 @@ Baseline on `develop`:
 - No open PRs at the time of this update.
 
 Next execution order:
-1. **#71 — build the complete VOD DAG.** Translate input preflight/download/analysis, output bucket/key checks, fan-in, playlist/thumbnail/watermark, uploads and notification references into stable plan nodes and dependency edges. Keep the live dispatch path unchanged.
+1. **#71 — complete VOD DAG builder (merged in PR #104).** The pure transport-neutral builder now represents preflight, input analysis, fan-in, watermark, HLS/DASH, thumbnails, uploads and callback references. Keep the live dispatch path unchanged.
 2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction.** Add secret-store reference resolution; do not copy raw webhook URLs or credentials into plan JSON or broker messages.
 3. **#71 — establish idempotent execution claims and broker-backed failure tests.** Cover commit-before-relay crash, relay crash after publish, concurrent duplicate delivery, broker outage, cancellation and poison messages. Enable the relay only after these pass.
 4. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
@@ -174,7 +174,7 @@ Next execution order:
 7. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
 8. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
 
-The versioned execution-plan contract is merged in PR #100. The next PR should implement the **pure complete-VOD graph builder** under #71, not an outbox table and not a live-dispatch switch. Its success is measured by a round-trip of every legacy request path (including optional watermark branches), explicit fan-in/dependency coverage, stable IDs, and rejection of raw webhook credentials. Persistence, idempotent consumer claims, crash/replay tests and relay activation remain separate gates.
+The versioned execution-plan contract is merged in PR #100 and the pure complete-VOD graph builder is merged in PR #104. The next increment under #71 is transactional persistence of the immutable plan/version with Job/Workflow/Stage state, followed by complete durable Stage/Attempt claims, secret-reference resolution and broker-backed crash/replay tests. Do not add an outbox table that can dispatch an incompletely durable graph, and do not switch live dispatch until all failure and idempotency gates pass.
 
 ## 7. Explicit no-go decisions for now
 
