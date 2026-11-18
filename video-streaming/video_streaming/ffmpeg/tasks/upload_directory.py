@@ -67,6 +67,7 @@ def upload_directory(self,
                 "input_bytes": int(kwargs.get("input_bytes") or 0),
                 "cpu_seconds": kwargs.get("cpu_seconds"),
                 "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                "memory_duration_ms": kwargs.get("memory_duration_ms"),
             },
             pricing=configured_pricing(settings),
         )
@@ -132,6 +133,7 @@ def upload_directory(self,
                 "input_bytes": int(kwargs.get("input_bytes") or 0),
                 "cpu_seconds": kwargs.get("cpu_seconds"),
                 "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
+                "memory_duration_ms": kwargs.get("memory_duration_ms"),
             },
             pricing=configured_pricing(settings),
         )
@@ -142,6 +144,7 @@ def upload_directory(self,
     repository.start_publishing(request_id, output_id, attempt_id)
     cpu_seconds = kwargs.get("cpu_seconds")
     peak_memory_bytes = kwargs.get("peak_memory_bytes")
+    memory_duration_ms = kwargs.get("memory_duration_ms")
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
@@ -180,6 +183,23 @@ def upload_directory(self,
                 )
             ) or peak_memory_bytes
         )
+        started_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        ended_at = self.cache.get(
+            CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                request_id=request_id, output_id=output_id
+            )
+        )
+        if started_at is not None and ended_at is not None:
+            try:
+                memory_duration_ms = max(
+                    0, int((float(ended_at) - float(started_at)) * 1000)
+                )
+            except (TypeError, ValueError):
+                pass
 
         repository.finish_stage(
             job_id=request_id,
@@ -191,6 +211,7 @@ def upload_directory(self,
                 "peak_memory_bytes": (
                     int(peak_memory_bytes) if peak_memory_bytes else None
                 ),
+                "memory_duration_ms": memory_duration_ms,
                 "input_bytes": int(kwargs.get("input_bytes") or 0),
                 "output_bytes": int(publication["directory_size"]),
                 "artifact_count": int(publication["files"]),
@@ -212,6 +233,7 @@ def upload_directory(self,
                     "peak_memory_bytes": (
                         int(peak_memory_bytes) if peak_memory_bytes else None
                     ),
+                    "memory_duration_ms": memory_duration_ms,
                 },
                 pricing=configured_pricing(settings),
             )
