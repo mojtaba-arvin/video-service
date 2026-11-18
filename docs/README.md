@@ -8,9 +8,11 @@ This documentation describes both the **verified current implementation** and th
 2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop`, what the code demonstrates, and the concrete reliability and security gaps found during repository inspection.
 3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities, acceptance evidence, and explicit deferrals.
 4. [GitHub governance](engineering/github-governance.md) — recommended rulesets, security settings, and the verified public-repository plan constraints.
-5. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — research-backed decisions, market-claim verification, six-goal alignment and parallel engineering lanes.
-6. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
-7. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
+5. [CI execution matrix](engineering/ci-execution-matrix.md) — change-aware job selection, required aggregate status, and safe CI performance measurement.
+
+6. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — research-backed decisions, market-claim verification, six-goal alignment and parallel engineering lanes.
+7. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
+8. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
 
 8. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch, at-least-once relay semantics, idempotent execution claims and worker-loss acceptance tests.
 
