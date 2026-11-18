@@ -207,6 +207,30 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 RuntimeError, "execution plan fingerprint mismatch"):
             self.repository.get_job_snapshot(job_id)
 
+
+    def test_execution_plan_denormalized_metadata_tampering_is_detected(self):
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-plan-metadata-tamper-{}".format(uuid4()),
+            "5" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        with self.repository._session.begin() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            workflow.workflow_version = "tampered"
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan metadata mismatch"):
+            self.repository.get_execution_plan(job_id)
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan metadata mismatch"):
+            self.repository.get_job_snapshot(job_id)
+
     def test_legacy_idempotent_replay_does_not_mutate_accepted_workflow(self):
         job_id = str(uuid4())
         key = "idem-legacy-plan-{}".format(uuid4())
