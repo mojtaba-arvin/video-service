@@ -169,7 +169,7 @@ class VODPlanBuilderTests(unittest.TestCase):
                 "thumbnail_time": float("nan"),
             }],
         }
-        with self.assertRaisesRegex(VODPlanBuildError, "finite and non-negative"):
+        with self.assertRaisesRegex(VODPlanBuildError, "must be non-negative"):
             build_vod_execution_plan("job-123", request)
 
         request["thumbnails"][0]["thumbnail_time"] = 1
