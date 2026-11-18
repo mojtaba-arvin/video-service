@@ -4,6 +4,7 @@ The input is a normalized mapping owned by a transport adapter. This module
 must not import protobuf, Celery, storage SDKs, or FFmpeg task signatures.
 """
 
+import math
 from copy import deepcopy
 
 from video_streaming.workflows.execution_plan import (
@@ -134,7 +135,7 @@ def _normalize_output(output, kind, index):
             "encode_format": output.get("encode_format"),
             "video_codec": output.get("video_codec"),
             "audio_codec": output.get("audio_codec"),
-            "fragmented": bool(output.get("fragmented", False)),
+            "fragmented": _as_bool(output.get("fragmented", False), "{}[{}].fragmented".format(kind, index)),
             "custom_qualities": deepcopy(
                 output.get("custom_qualities", [])
             ),
@@ -144,6 +145,7 @@ def _normalize_output(output, kind, index):
         if (
             isinstance(thumbnail_time, bool)
             or not isinstance(thumbnail_time, (int, float))
+            or not math.isfinite(thumbnail_time)
             or thumbnail_time < 0
         ):
             raise VODPlanBuildError(
@@ -211,6 +213,10 @@ def build_vod_execution_plan(
     if bool(watermark_output_bucket) != bool(watermark_output_key):
         raise VODPlanBuildError(
             "watermark output bucket and key must be provided together"
+        )
+    if watermark_output_key and not watermark_input_key:
+        raise VODPlanBuildError(
+            "watermarked video output requires a watermark input"
         )
 
     playlists_raw = request.get("playlists", [])
