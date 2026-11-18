@@ -14,6 +14,7 @@ from video_streaming.ffmpeg.constants import VideoEncodingFormats, \
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.operations import OperationKind
 
 
 class CreateJobMixin(object):
@@ -513,9 +514,9 @@ class CreateJobMixin(object):
             stage_specs.append({
                 "stage_key": output_id,
                 "operation": (
-                    "video.hls.package_and_publish"
+                    OperationKind.HLS_PACKAGE_AND_PUBLISH.value
                     if output.protocol == self.pb2.Protocol.HLS
-                    else "video.dash.package_and_publish"
+                    else OperationKind.DASH_PACKAGE_AND_PUBLISH.value
                 ),
                 "input": {
                     "protocol": (
@@ -550,7 +551,7 @@ class CreateJobMixin(object):
             )
             stage_specs.append({
                 "stage_key": output_id,
-                "operation": "video.thumbnail_and_publish",
+                "operation": OperationKind.THUMBNAIL_AND_PUBLISH.value,
                 "input": {
                     "bucket": output.upload_to.bucket,
                     "key": output.upload_to.key,
@@ -564,7 +565,7 @@ class CreateJobMixin(object):
         if request_has_watermark and upload_watermarked_video:
             stage_specs.append({
                 "stage_key": watermarked_video_output_id,
-                "operation": "video.watermark_and_publish",
+                "operation": OperationKind.WATERMARK_AND_PUBLISH.value,
                 "input": {
                     "bucket": request.watermark.upload_to.bucket,
                     "key": request.watermark.upload_to.key,
