@@ -4,6 +4,7 @@ import time
 import ffmpeg
 from abc import ABC
 from pathlib import Path
+from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
