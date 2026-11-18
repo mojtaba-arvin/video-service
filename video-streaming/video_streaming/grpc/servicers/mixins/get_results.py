@@ -321,8 +321,10 @@ class GetResultsMixin(object):
     def _get_result(self,
                     request_id: str
                     ) -> None or streaming_pb2.ResultDetails:
-        durable_snapshot = get_workflow_repository().get_job_snapshot(
-            request_id
+        repository = get_workflow_repository(required=False)
+        durable_snapshot = (
+            repository.get_job_snapshot(request_id)
+            if repository is not None else None
         )
         durable_stages = {
             stage["key"]: stage
