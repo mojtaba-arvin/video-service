@@ -108,6 +108,26 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 3600)
 
+    def test_webhook_timeout_defaults_are_bounded(self):
+        settings = load_settings({})
+
+        self.assertEqual(settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS, 3.0)
+        self.assertEqual(settings.WEBHOOK_READ_TIMEOUT_SECONDS, 10.0)
+
+    def test_webhook_timeouts_are_configurable(self):
+        settings = load_settings({
+            "WEBHOOK_CONNECT_TIMEOUT_SECONDS": "1.5",
+            "WEBHOOK_READ_TIMEOUT_SECONDS": "7",
+        })
+
+        self.assertEqual(settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS, 1.5)
+        self.assertEqual(settings.WEBHOOK_READ_TIMEOUT_SECONDS, 7.0)
+
+    def test_webhook_timeouts_must_be_positive(self):
+        with self.assertRaisesRegex(
+                ValueError, "WEBHOOK_CONNECT_TIMEOUT_SECONDS"):
+            load_settings({"WEBHOOK_CONNECT_TIMEOUT_SECONDS": "0"})
+
     def test_custom_price_card_requires_an_explicit_version(self):
         from video_streaming.workflows.metrics import configured_pricing
 
