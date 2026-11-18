@@ -12,9 +12,11 @@ This documentation describes both the **verified current implementation** and th
 6. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
 7. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
 
-8. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
+8. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch, at-least-once relay semantics, idempotent execution claims and worker-loss acceptance tests.
 
-9. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
+9. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
+
+10. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
 
 ## Documentation rules
 
