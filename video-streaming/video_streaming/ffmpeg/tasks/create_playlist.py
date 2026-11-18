@@ -10,7 +10,11 @@ from video_streaming.ffmpeg.package_validation import (
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
-from video_streaming.workflows.metrics import configured_pricing
+from video_streaming.workflows.metrics import (
+    capture_child_cpu_seconds,
+    child_cpu_seconds_since,
+    configured_pricing,
+)
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -122,6 +126,7 @@ def create_playlist(
         execution_ref=self.request.id.__str__(),
     )
     input_bytes = 0
+    cpu_started = capture_child_cpu_seconds()
     expected_renditions = []
     validation_report = None
 
@@ -215,7 +220,7 @@ def create_playlist(
                 stage_key=output_id,
                 attempt_id=attempt_id,
                 reason="CANCELLED_DURING_PACKAGE_CREATION_OR_VALIDATION",
-                metrics={"input_bytes": input_bytes},
+                metrics={"input_bytes": input_bytes, "cpu_seconds": child_cpu_seconds_since(cpu_started)},
                 pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
@@ -263,5 +268,6 @@ def create_playlist(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
+        cpu_seconds=child_cpu_seconds_since(cpu_started),
         validation_report=validation_report.as_dict(),
     )
