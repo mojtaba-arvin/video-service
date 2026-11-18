@@ -1051,7 +1051,7 @@ def _hls_extinf_summary(playlist):
 
 
 
-def _hls_segment_paths(playlist, package_root):
+def _hls_segment_paths(playlist):
     """Return the validated standalone media segment paths in an HLS rendition."""
     paths = []
     pending_extinf = False
@@ -1071,34 +1071,35 @@ def _hls_segment_paths(playlist, package_root):
 
 
 def _probe_hls_media_duration(
-        playlist, package_root, ffprobe_bin_path, timeout_seconds):
+        playlist, ffprobe_bin_path, timeout_seconds):
     """Probe actual standalone media segments, not EXTINF-derived playlist duration.
 
     Fragmented MP4 media fragments require their initialization section and are
     not independently duration-probeable; in that case duration comparison is
     omitted rather than treating the manifest's own EXTINF values as evidence.
     """
-    segments = _hls_segment_paths(playlist, package_root)
+    segments = _hls_segment_paths(playlist)
     if not segments or any(path.suffix.lower() == ".m4s" for path in segments):
         return None
 
-    temporary_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".ffconcat", encoding="utf-8",
-                delete=False) as concat_file:
-            temporary_path = concat_file.name
-            concat_file.write("ffconcat version 1.0\\n")
-            for segment in segments:
-                escaped = str(segment).replace("\\\\", "\\\\\\\\").replace("'", "\\\\'")
-                concat_file.write("file '{}'\\n".format(escaped))
+    with tempfile.TemporaryDirectory(prefix="hls-probe-") as temporary_directory:
+        temporary_root = Path(temporary_directory)
+        lines = ["ffconcat version 1.0"]
+        for index, segment in enumerate(segments):
+            link = temporary_root / "segment_{:06d}{}".format(
+                index, segment.suffix.lower()
+            )
+            os.symlink(str(segment), str(link))
+            lines.append("file {}".format(link))
+        concat_path = temporary_root / "segments.ffconcat"
+        concat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         command = [
             ffprobe_bin_path,
             "-v", "error",
             "-f", "concat",
             "-safe", "0",
-            "-i", temporary_path,
+            "-i", str(concat_path),
             "-show_entries", "format=duration",
             "-of", "json",
         ]
@@ -1113,9 +1114,6 @@ def _probe_hls_media_duration(
             "duration"
         )
         return float(duration) if duration is not None else None
-    finally:
-        if temporary_path and os.path.exists(temporary_path):
-            os.unlink(temporary_path)
 
 
 def _probe_package_metadata(
@@ -1206,7 +1204,6 @@ def _probe_package_metadata(
                 durations, target_duration = _hls_extinf_summary(local_path)
                 measured_duration = _probe_hls_media_duration(
                     local_path,
-                    root,
                     ffprobe_bin_path,
                     timeout_seconds,
                 )
