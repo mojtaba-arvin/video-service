@@ -1665,7 +1665,6 @@ class WorkflowRepository:
                     "version": workflow.workflow_version,
                     "execution_plan_schema_version": workflow.execution_plan_schema_version,
                     "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
-                    "execution_plan": workflow.execution_plan_json,
                 },
                 "stages": [],
                 "events": [{
