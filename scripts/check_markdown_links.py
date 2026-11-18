@@ -77,12 +77,12 @@ def validate_link(source_file, destination):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--head", required=True)
+    parser.add_argument("--base")
+    parser.add_argument("--head")
     parser.add_argument("--all", action="store_true")
     args = parser.parse_args()
 
-    if args.all:
+    if args.all or not args.base or not args.head:
         paths = subprocess.run(
             ["git", "ls-files", "-z"],
             check=True,
