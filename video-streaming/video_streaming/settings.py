@@ -225,6 +225,13 @@ FFMPEG_THUMBNAIL_TIMEOUT_SECONDS = env_config.get(
     default=300,
     cast=int)
 
+# Maximum wall time for one watermark render. This is deliberately longer
+# than the thumbnail limit because the operation re-encodes the full video.
+FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
+    "FFMPEG_WATERMARK_TIMEOUT_SECONDS",
+    default=3600,
+    cast=int)
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
