@@ -141,7 +141,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(IdempotencyConflict):
             self.repository.create_job(
-                str(uuid4()),
+                job_id,
                 key,
                 "f" * 64,
                 execution_plan=self.build_plan(job_id, "different/master.m3u8"),
@@ -150,6 +150,31 @@ class WorkflowRepositoryTests(unittest.TestCase):
         persisted = self.repository.get_execution_plan(job_id)
         self.assertEqual(persisted["fingerprint"], execution_plan_sha256(self.build_plan(job_id)))
 
+
+
+    def test_idempotent_plan_replay_rebinds_generated_job_id(self):
+        original_job_id = str(uuid4())
+        key = "idem-plan-generated-id-{}".format(uuid4())
+        self.repository.create_job(
+            original_job_id,
+            key,
+            "4" * 64,
+            execution_plan=self.build_plan(original_job_id),
+        )
+
+        retry_job_id = str(uuid4())
+        replay_id, created = self.repository.create_job(
+            retry_job_id,
+            key,
+            "4" * 64,
+            execution_plan=self.build_plan(retry_job_id),
+        )
+
+        self.assertEqual((replay_id, created), (original_job_id, False))
+        self.assertEqual(
+            self.repository.get_execution_plan(original_job_id)["fingerprint"],
+            execution_plan_sha256(self.build_plan(original_job_id)),
+        )
 
     def test_execution_plan_fingerprint_detects_persisted_mutation(self):
         job_id = str(uuid4())
