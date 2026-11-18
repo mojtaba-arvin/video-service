@@ -1,5 +1,6 @@
 """Adversarial tests for manifest-last package publication and retries."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
