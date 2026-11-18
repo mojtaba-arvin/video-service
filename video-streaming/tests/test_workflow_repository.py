@@ -152,8 +152,8 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "STAGE_ATTEMPT_STARTED",
                 "STAGE_VALIDATED",
                 "STAGE_PUBLISHING",
-                "JOB_FINISHED",
                 "STAGE_FINISHED",
+                "JOB_FINISHED",
             ],
         )
 
