@@ -25,7 +25,7 @@ The typed gRPC contract accepts:
 - `DECODER_ERROR` with a bounded error code and optional decoder identifier.
 - `PLAYBACK_ENDED`.
 
-Every event requires a client-generated stable `event_id`. A unique constraint on `(session_id, event_id)` makes retries idempotent. Reusing the same event ID for a different event type is rejected.
+Every event requires a client-generated stable `event_id`. A unique constraint on `(session_id, event_id)` makes retries idempotent. A canonical SHA-256 fingerprint of the event type and semantic payload is stored, so an exact replay is accepted but reuse of the key with a different event type or payload is rejected.
 
 Client timestamps are not used to calculate durations. The server receive clock measures buffering intervals, avoiding device-clock skew. An unfinished buffering interval is closed when the session ends.
 
@@ -41,4 +41,4 @@ Client timestamps are not used to calculate durations. The server receive clock 
 - QoE can be compared across published outputs without relying on Redis TTL.
 - Event replay does not double-count starts, buffering or decoder errors.
 - The client needs a small integration to request a session and send typed events; this change does not add a web/mobile player or SDK.
-- The current first report exposes average startup time, buffering ratio, rebuffer count, decoder-error count and aggregate stage resource/cost values. Percentiles, cohorts, adaptive bitrate decisioning, player-specific integrations and automated quality policies are deferred until representative telemetry volume exists.
+- The current first report exposes average startup time, buffering ratio (including an interval that is still active when queried), rebuffer count, decoder-error count and aggregate stage resource/cost values. Estimated cost is reported as complete only when every attempt is priced under one currency and price model; partial coverage is exposed separately and never mislabeled as a total. Percentiles, cohorts, adaptive bitrate decisioning, player-specific integrations and automated quality policies are deferred until representative telemetry volume exists.
