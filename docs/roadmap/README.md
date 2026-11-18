@@ -28,39 +28,56 @@ Do not delay an independently useful capability just because another outcome lan
 
 ## Live implementation backlog
 
-The canonical task status is tracked in [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54). This table is a current snapshot; update it when evidence or priority changes.
+The canonical engineering work queue is tracked in
+[Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54). Status
+below reflects evidence on `develop` as of 2026-11-18; open PR work is
+identified separately and is not counted as merged.
 
-| Priority | Outcome lane | Current increment / next proof | Status |
+| Priority | Outcome lane | Verified state | Next acceptance evidence |
 |---|---|---|---|
-| P0 | Engineering foundation | Python 3.9 unit-test runner, generated VOD fixture validation, pinned Actions, CodeQL, dependency review, and Dependabot | **Done** — PR #55 established the runner; 17 tests now run in the expanded CI workflow |
-| P0 | Configuration and portability | Remove tracked local environment values, add safe template and enforce ignore rules in CI | **Done** — PR #56 |
-| P0 | Media correctness | Correct zero-dimension scaling and prove thumbnail rendering using FFmpeg + FFprobe | **Done** — PR #57 merged; 17 tests pass in CI, including eight FFmpeg/FFprobe render and validation integrations |
-| P1 | Execution correctness | Validate HLS/DASH playlist manifests and expected renditions before publication; test non-zero FFmpeg exit, invalid/partial output, and cancellation | **Next** — thumbnail output validation is done in PR #59; playlist validation remains open |
-| P1 | Process isolation | Supervise FFmpeg process groups/descendants; define timeout, termination, resource bounds, and cleanup semantics | Planned |
-| P1 | API and outbound security | Redacted structured logs; caller authentication/authorization; SSRF-safe webhook delivery with DNS/redirect controls | Planned |
-| P1 | Durable orchestration | Specify Job/Workflow/Stage/Attempt/Artifact states and idempotency; choose durable persistence through an ADR; test restart and cache loss | Planned |
-| P1 | End-to-end VOD reliability | Exercise submit → execute → validate → publish → observe/cancel using isolated local services and storage test doubles | Planned |
-| P2 | Cost intelligence | Capture stage-level wall/CPU/memory/disk/bytes and distinguish measured usage, estimated provider cost, and actual billing | Planned |
-| P2 | Codec and packaging | Benchmark H.264/HEVC/AV1 and CMAF/fMP4 profiles on a fixed corpus; adopt only compatible, measured improvements | Planned |
-| P2 | Agent interface | Define typed application operations first; expose the same services through gRPC/API and MCP without duplicating business logic | Planned |
-| P3 | Hybrid cloud/edge | Add constrained edge leases and local incremental inspection only for workloads with measured locality benefit | Deferred pending workload evidence |
-| P3 | QoE | Add privacy-reviewed session telemetry and correlate published asset versions with player/CDN outcomes | Deferred pending delivery/player integration |
+| P0 | Engineering foundation | **Done** — pinned CI actions, Python 3.9/3.12 regression lanes, synthetic VOD fixture generation, Dependency Review, Dependabot and agent guidance (PR #61) | Keep required checks green; establish repository ruleset with owner/admin access |
+| P0 | Configuration and repository hygiene | **Done** — settings regressions and safe environment template/ignore checks (PR #55/#56) | Confirm historic development broker credentials are no longer accepted by any shared service |
+| P0 | Thumbnail correctness | **Done** — actual FFmpeg render plus FFprobe checks before completion (PR #57/#59) | Add failure/cancellation coverage to the complete workflow |
+| P0 | HLS/DASH correctness and publication | **Done** — package graph validation, expected rendition checks, bounded metadata probing, storage readback and manifest-last publication (PR #62/#64) | Add adversarial tests for cleanup/partial failure as the package contract evolves |
+| P0 | Durable orchestration | **Core merged; dispatch gap open** — PostgreSQL Job/Workflow/Stage/Attempt/Artifact/Event state, explicit transitions, idempotency and stale-attempt recovery (PR #68) | Implement transactional outbox + dispatcher; prove no lost dispatch across DB commit/process crash and idempotent relay redelivery |
+| P0 | End-to-end VOD reliability | **Partial** — gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible test double; final state survives Redis cache clearing (PR #63/#68) | Add broker-backed worker process tests for worker loss, non-zero FFmpeg exit, retry, cancellation and watermark output |
+| P0 | FFmpeg execution isolation | **Open** — no complete process-group/container/cgroup isolation proof | Supervise process trees; enforce deadlines, CPU/memory/PID/disk bounds; prove termination and cleanup with adversarial tests |
+| P0 | Security boundary | **Open** — historical secrets hygiene improved; caller authentication/authorization, tenant boundaries, quota and webhook SSRF controls are not complete | Redacted structured logs; request-scoped authz; webhook DNS/IP/redirect/timeouts/signatures/replay protection; abuse tests |
+| P0 | Runtime and image maintenance | **Open** — Python 3.12 regression suite passes, but the application/runtime image remains on Python 3.9 | Inventory dependencies; migrate the full runtime/container to a supported Python version; execute complete container VOD smoke test |
+| P1 | QoE and delivery intelligence | **Open PR #69** — durable session/event/report design is on a separate branch, not yet in develop | Pass CI after event-payload idempotency, active-buffering and cost-coverage fixes; merge only after review; then add player SDK and CDN signals |
+| P1 | Cost intelligence | **Partial foundation** — stage duration, CPU, peak memory, byte counts and model-labelled estimates persisted in PR #68; RUNIT is not money | Named/versioned price cards; include GPU, disk, storage retention and egress; report coverage and distinguish estimates from reconciled billing |
+| P1 | Codec and packaging efficiency | **Partial foundation** — HLS/DASH, H.264/HEVC/VP9 options and fMP4 path exist; AV1 is not yet established by the current contract/runtime | Benchmark representative corpus at matched quality using VMAF and decode/compatibility checks; adopt codec/profile changes only with measured economics |
+| P1 | Agent interface | **Foundation only** — typed internal operation identifiers/request/result/error contracts exist (PR #68); no MCP server | Stabilize application contracts and authorization first; implement MCP as a thin adapter and contract-test with real MCP clients |
+| P2/P3 | Hybrid cloud/edge | **Deferred, research active** — no edge agent or scheduler is implemented | Benchmark locality/bandwidth/latency/privacy benefit on a target workload before building edge leases or routing |
+| P2 | Playback and delivery correlation | **Research / integration gap** — QoE ingestion is not equivalent to CDN telemetry | Join session metrics to delivery configuration and CDN/player outcomes without collecting unnecessary identity data |
 
-Priority labels indicate current execution order, not a promise of a phase gate. Reorder them when a concrete failure, workload, or measurement changes their risk/value.
+Priority is execution guidance, not a requirement to finish one lane before
+starting another. Independent research, test design and implementation can
+proceed concurrently when they have stable contracts and do not contend for
+the same files or migration/protobuf ownership.
 
 ## First end-to-end target
 
-The next meaningful platform milestone is not "finish the baseline phase". It is a repeatable VOD request path with these properties:
+The next milestone is a **failure-tested, cost-observable VOD vertical**:
 
-1. A caller submits a typed, validated operation and receives a stable job identifier.
-2. The job and each stage/attempt have authoritative state that survives worker restart.
-3. The existing execution backend can run the media operation without owning the domain state.
-4. FFmpeg completion is checked and the output is probed/validated before it is published.
-5. Publication is idempotent and the artifact reference is durable.
-6. Status, progress, cancellation, and failure reason are queryable and tested.
-7. External dependencies are local, mocked, or contract-tested so they do not block CI.
+1. A caller submits a typed request with a stable idempotency key.
+2. PostgreSQL persists the Job, Workflow, Stage and an outbox dispatch record
+   in one transaction.
+3. A relay leases and publishes the dispatch at least once; duplicate delivery
+   is safe because state transitions and side effects are idempotent.
+4. A bounded worker owns a supervised FFmpeg process tree and records an
+   Attempt with measurements.
+5. The output is probed, package-validated and read back from object storage
+   before the root manifest is published and the Artifact is marked available.
+6. Job status, progress, cancellation and failure reason are queryable from
+   durable state after cache loss and worker restart.
+7. Resource usage, cost-estimate coverage and output quality are available
+   through a stable application contract.
 
-The initial proof can use the existing Celery path and a local filesystem/S3 test adapter. It should not require MCP, edge workers, GPUs, a new broker, or a multi-service rewrite.
+The current in-process E2E test is a strong deterministic regression harness,
+but it is not a substitute for broker-backed worker-loss tests or live
+provider billing. MCP, GPU, Edge, DRM and JIT packaging are not prerequisites
+for this first reliability milestone.
 
 ## Delivery and governance rules
 
