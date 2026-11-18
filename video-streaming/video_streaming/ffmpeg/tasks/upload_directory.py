@@ -75,6 +75,24 @@ def upload_directory(self,
             )
         )
 
+    # A recovered publisher receives the previous task result through
+    # ChainCallbackMixin. Start a new Attempt and reattach its validation proof.
+    if stage["status"] == "RETRY_WAIT":
+        validation_report = kwargs.get("validation_report")
+        if not validation_report:
+            raise RuntimeError(
+                "A recovered package publication requires its validation report"
+            )
+        attempt_id, _ = repository.start_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            execution_backend="celery",
+            execution_ref=self.request.id.__str__(),
+        )
+        repository.mark_validated(
+            request_id, output_id, attempt_id, validation_report
+        )
+
     # A redelivered task after the DB commit must only repair the Redis
     # projection. Do not upload the same completed stage again.
     if stage["status"] == "FINISHED":
