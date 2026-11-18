@@ -2,6 +2,11 @@
 
 This document is a **live backlog of product outcomes**, not a mandatory phase sequence. The outcome areas are related but independently valuable; work is selected by current risk, value, dependency, and available evidence.
 
+The delivery sequence, release gates, parallel workstreams, product metrics, and
+go/no-go decisions are maintained in the
+[Product execution plan](../product/EXECUTION_PLAN.md). This roadmap remains
+the issue-level outcome index and current implementation status.
+
 ## Strategic-goal alignment (2026-11-18)
 
 The six ratings are engineering estimates on a 0–5 maturity scale based on
