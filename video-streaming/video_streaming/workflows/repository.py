@@ -394,12 +394,16 @@ class WorkflowRepository:
                             WorkflowRecord.job_id == existing.id
                         )
                     ).scalar_one()
+                    replay_fingerprint = (
+                        execution_plan_sha256(dict(plan, job_id=existing.id))
+                        if plan is not None else None
+                    )
                     if (
-                            plan_fingerprint is not None
+                            replay_fingerprint is not None
                             and existing_workflow.execution_plan_fingerprint
                             is not None
                             and existing_workflow.execution_plan_fingerprint
-                            != plan_fingerprint):
+                            != replay_fingerprint):
                         raise IdempotencyConflict(
                             "Idempotency key resolves to a different execution plan"
                         )
@@ -476,10 +480,14 @@ class WorkflowRepository:
                         WorkflowRecord.job_id == existing.id
                     )
                 ).scalar_one()
+                replay_fingerprint = (
+                    execution_plan_sha256(dict(plan, job_id=existing.id))
+                    if plan is not None else None
+                )
                 if (
-                        plan_fingerprint is not None
+                        replay_fingerprint is not None
                         and existing_workflow.execution_plan_fingerprint is not None
-                        and existing_workflow.execution_plan_fingerprint != plan_fingerprint):
+                        and existing_workflow.execution_plan_fingerprint != replay_fingerprint):
                     raise IdempotencyConflict(
                         "Idempotency key resolves to a different execution plan"
                     )
