@@ -5,6 +5,7 @@ from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
 from video_streaming.grpc.protos import streaming_pb2
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class GetResultsMixin(object):
@@ -37,18 +38,50 @@ class GetResultsMixin(object):
         busy_delta = end_busy - start_busy
         return busy_delta
 
-    def _playlists(self, request_id, output_ids, outputs):
+
+    @staticmethod
+    def _durable_output_status(stage):
+        if stage is None:
+            return None
+        return {
+            "PENDING": "PREPARATION_PROCESSING",
+            "PROCESSING": "PROCESSING",
+            "VALIDATED": "PROCESSING",
+            "PUBLISHING": "UPLOADING",
+            "RETRY_WAIT": "PROCESSING",
+            "FINISHED": "UPLOADING_FINISHED",
+            "FAILED": "OUTPUT_FAILED",
+            "CANCELLED": "OUTPUT_REVOKED",
+        }.get(stage.get("status"))
+
+    def _playlists(self, request_id, output_ids, outputs, durable_stages=None):
+        durable_stages = durable_stages or {}
         for output_id in output_ids:
-            output_status = self.cache.get(
-                CacheKeysTemplates.OUTPUT_STATUS.format(
-                    request_id=request_id,
-                    output_id=output_id),
-                decode=False)
-            if output_status:
-                directory_size: int = self.cache.get(
-                    CacheKeysTemplates.OUTPUT_SIZE.format(
+            durable_stage = durable_stages.get(output_id)
+            output_status = self._durable_output_status(durable_stage)
+            if output_status is None:
+                output_status = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_STATUS.format(
                         request_id=request_id,
-                        output_id=output_id)) or 0
+                        output_id=output_id),
+                    decode=False,
+                )
+            if output_status:
+                durable_attempt = (
+                    durable_stage["attempts"][-1]
+                    if durable_stage and durable_stage.get("attempts")
+                    else {}
+                )
+                directory_size: int = (
+                    durable_attempt.get("output_bytes")
+                    if durable_attempt.get("output_bytes") is not None
+                    else self.cache.get(
+                        CacheKeysTemplates.OUTPUT_SIZE.format(
+                            request_id=request_id,
+                            output_id=output_id
+                        )
+                    ) or 0
+                )
                 output_details = dict(
                     id=output_id,
                     status=self.pb2.OutputStatus.Value(
@@ -63,15 +96,24 @@ class GetResultsMixin(object):
                     output_details['output_progress'] = self.pb2.\
                         Progress(**progress)
 
-                start_progressing_times: float = self.cache.get(
-                    CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
-                        request_id=request_id,
-                        output_id=output_id))
-                end_progressing_times: float = self.cache.get(
-                    CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
-                        request_id=request_id,
-                        output_id=output_id))
-                if start_progressing_times and end_progressing_times:
+                if durable_attempt:
+                    duration_ms = durable_attempt.get("duration_ms")
+                    if duration_ms is not None:
+                        output_details["spent_time"] = duration_ms / 1000.0
+                    if durable_attempt.get("cpu_seconds") is not None:
+                        output_details["cpu_usage"] = durable_attempt["cpu_seconds"]
+                    if durable_attempt.get("peak_memory_bytes") is not None:
+                        output_details["memory_usage"] = durable_attempt["peak_memory_bytes"]
+                else:
+                    start_progressing_times: float = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                            request_id=request_id,
+                            output_id=output_id))
+                    end_progressing_times: float = self.cache.get(
+                        CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                            request_id=request_id,
+                            output_id=output_id))
+                if not durable_attempt and start_progressing_times and end_progressing_times:
                     output_details['spent_time'] = end_progressing_times - start_progressing_times
                     start_cpu_times: list = self.cache.get(
                         CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
@@ -99,18 +141,34 @@ class GetResultsMixin(object):
 
                 outputs.append(self.pb2.PlaylistDetails(**output_details))
 
-    def _thumbnails(self, request_id, output_ids, outputs):
+    def _thumbnails(self, request_id, output_ids, outputs, durable_stages=None):
+        durable_stages = durable_stages or {}
         for output_id in output_ids:
-            output_status = self.cache.get(
-                CacheKeysTemplates.OUTPUT_STATUS.format(
-                    request_id=request_id,
-                    output_id=output_id),
-                decode=False)
-            if output_status:
-                file_size: int = self.cache.get(
-                    CacheKeysTemplates.OUTPUT_SIZE.format(
+            durable_stage = durable_stages.get(output_id)
+            output_status = self._durable_output_status(durable_stage)
+            if output_status is None:
+                output_status = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_STATUS.format(
                         request_id=request_id,
-                        output_id=output_id)) or 0
+                        output_id=output_id),
+                    decode=False,
+                )
+            if output_status:
+                durable_attempt = (
+                    durable_stage["attempts"][-1]
+                    if durable_stage and durable_stage.get("attempts")
+                    else {}
+                )
+                file_size: int = (
+                    durable_attempt.get("output_bytes")
+                    if durable_attempt.get("output_bytes") is not None
+                    else self.cache.get(
+                        CacheKeysTemplates.OUTPUT_SIZE.format(
+                            request_id=request_id,
+                            output_id=output_id
+                        )
+                    ) or 0
+                )
                 output_details = dict(
                     id=output_id,
                     status=self.pb2.OutputStatus.Value(
@@ -121,21 +179,37 @@ class GetResultsMixin(object):
 
     def _watermarked_video(
             self,
-            request_id
+            request_id,
+            durable_stages=None
             ) -> None or streaming_pb2.WatermarkedVideoDetails:
         # output id of watermarked video
         output_id = CacheKeysTemplates. \
             WATERMARKED_VIDEO_OUTPUT_ID.format(number=0)
-        output_status = self.cache.get(
-            CacheKeysTemplates.OUTPUT_STATUS.format(
-                request_id=request_id,
-                output_id=output_id),
-            decode=False)
-        if output_status:
-            file_size: int = self.cache.get(
-                CacheKeysTemplates.OUTPUT_SIZE.format(
+        durable_stage = (durable_stages or {}).get(output_id)
+        output_status = self._durable_output_status(durable_stage)
+        if output_status is None:
+            output_status = self.cache.get(
+                CacheKeysTemplates.OUTPUT_STATUS.format(
                     request_id=request_id,
-                    output_id=output_id)) or 0
+                    output_id=output_id),
+                decode=False,
+            )
+        if output_status:
+            durable_attempt = (
+                durable_stage["attempts"][-1]
+                if durable_stage and durable_stage.get("attempts")
+                else {}
+            )
+            file_size: int = (
+                durable_attempt.get("output_bytes")
+                if durable_attempt.get("output_bytes") is not None
+                else self.cache.get(
+                    CacheKeysTemplates.OUTPUT_SIZE.format(
+                        request_id=request_id,
+                        output_id=output_id
+                    )
+                ) or 0
+            )
             output_details = dict(
                 id=output_id,
                 status=self.pb2.OutputStatus.Value(
@@ -247,15 +321,34 @@ class GetResultsMixin(object):
     def _get_result(self,
                     request_id: str
                     ) -> None or streaming_pb2.ResultDetails:
+        durable_snapshot = get_workflow_repository().get_job_snapshot(
+            request_id
+        )
+        durable_stages = {
+            stage["key"]: stage
+            for stage in (durable_snapshot or {}).get("stages", [])
+        }
         primary_status: str = self.cache.get(
             CacheKeysTemplates.PRIMARY_STATUS.format(
                 request_id=request_id), decode=False)
         job_details: dict = self.cache.get(
             CacheKeysTemplates.JOB_DETAILS.format(
                 request_id=request_id))
+        if durable_snapshot is not None:
+            persisted_details = (
+                durable_snapshot.get("metadata", {}).get("result_details")
+            )
+            if persisted_details:
+                job_details = persisted_details
+            primary_status = {
+                "QUEUED": PrimaryStatus.QUEUING_CHECKS,
+                "RUNNING": PrimaryStatus.OUTPUTS_PROGRESSING,
+                "FINISHED": PrimaryStatus.FINISHED,
+                "FAILED": PrimaryStatus.FAILED,
+                "CANCELLED": PrimaryStatus.REVOKED,
+            }.get(durable_snapshot["status"], primary_status)
         if primary_status and job_details:
-            status = self.pb2.PrimaryStatus.Value(
-                primary_status)
+            status = self.pb2.PrimaryStatus.Value(primary_status)
             reference_id: str = job_details['reference_id']
             total_checks: int = job_details['total_checks']
             total_inputs: int = job_details['total_inputs']
@@ -263,15 +356,24 @@ class GetResultsMixin(object):
             # total_playlists: int = job_details['total_playlists']
             # total_thumbnails: int = job_details['total_thumbnails']
 
-            ready_outputs: int = self.cache.get(
-                CacheKeysTemplates.READY_OUTPUTS.format(
-                    request_id=request_id)) or 0
-            revoked_outputs: int = self.cache.get(
-                CacheKeysTemplates.REVOKED_OUTPUTS.format(
-                    request_id=request_id)) or 0
-            failed_outputs: int = self.cache.get(
-                CacheKeysTemplates.FAILED_OUTPUTS.format(
-                    request_id=request_id)) or 0
+            if durable_snapshot is not None:
+                durable_statuses = [
+                    stage.get("status")
+                    for stage in durable_snapshot.get("stages", [])
+                ]
+                ready_outputs = durable_statuses.count("FINISHED")
+                revoked_outputs = durable_statuses.count("CANCELLED")
+                failed_outputs = durable_statuses.count("FAILED")
+            else:
+                ready_outputs: int = self.cache.get(
+                    CacheKeysTemplates.READY_OUTPUTS.format(
+                        request_id=request_id)) or 0
+                revoked_outputs: int = self.cache.get(
+                    CacheKeysTemplates.REVOKED_OUTPUTS.format(
+                        request_id=request_id)) or 0
+                failed_outputs: int = self.cache.get(
+                    CacheKeysTemplates.FAILED_OUTPUTS.format(
+                        request_id=request_id)) or 0
             checks = self.pb2.Checks(
                 total=total_checks,
                 passed=self.cache.get(
@@ -284,20 +386,24 @@ class GetResultsMixin(object):
             self._playlists(
                 request_id,
                 job_details['no_watermarked_playlists_ids'],
-                playlists_outputs)
+                playlists_outputs,
+                durable_stages)
             self._playlists(
                 request_id,
                 job_details['watermarked_playlists_ids'],
-                playlists_outputs)
+                playlists_outputs,
+                durable_stages)
 
             self._thumbnails(
                 request_id,
                 job_details['no_watermarked_thumbnails_ids'],
-                thumbnails_outputs)
+                thumbnails_outputs,
+                durable_stages)
             self._thumbnails(
                 request_id,
                 job_details['watermarked_thumbnails_ids'],
-                thumbnails_outputs)
+                thumbnails_outputs,
+                durable_stages)
 
             result_details = dict(
                 tracking_id=request_id,
@@ -313,7 +419,9 @@ class GetResultsMixin(object):
                     outputs=playlists_outputs),
                 thumbnails=self.pb2.Thumbnails(
                     outputs=thumbnails_outputs),
-                watermarked_video=self._watermarked_video(request_id)
+                watermarked_video=self._watermarked_video(
+                    request_id, durable_stages
+                )
             )
             # get stop reason if primary status is FAILED or REVOKED
             if primary_status in [
