@@ -177,7 +177,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
         recovered = self.repository.recover_stale_attempts(
             utcnow() + timedelta(seconds=1)
         )
-        self.assertEqual(recovered, 1)
+        # The PostgreSQL CI database is shared by tests in this process; other
+        # tests can intentionally leave a running attempt to test transitions.
+        # Assert recovery for this job, not a global count across all test jobs.
+        self.assertGreaterEqual(recovered, 1)
+        recovered_stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(recovered_stage["status"], "RETRY_WAIT")
         third_id, third_number = self.repository.start_attempt(job_id, "p0")
         self.assertNotEqual(second_id, third_id)
         self.assertEqual(third_number, second_number + 1)
@@ -191,7 +196,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
 
     def test_concurrent_idempotency_key_creates_only_one_job(self):
-        job_id = str(uuid4())
+        candidate_ids = [str(uuid4()), str(uuid4())]
         key = "idem-concurrent-{}".format(uuid4())
         request_hash = "d" * 64
         barrier = threading.Barrier(2)
@@ -213,8 +218,8 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 errors.append(exc)
 
         threads = [
-            threading.Thread(target=submit, args=(job_id,)),
-            threading.Thread(target=submit, args=(str(uuid4()),)),
+            threading.Thread(target=submit, args=(candidate_ids[0],)),
+            threading.Thread(target=submit, args=(candidate_ids[1],)),
         ]
         for thread in threads:
             thread.start()
@@ -223,9 +228,17 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         self.assertFalse(errors, errors)
         self.assertEqual(len(results), 2)
-        self.assertEqual({item[0] for item in results}, {job_id})
+        # Either racing request may win the initial insert; both callers must
+        # receive that same durable identity regardless of scheduling order.
+        returned_ids = {item[0] for item in results}
+        self.assertEqual(len(returned_ids), 1)
+        durable_job_id = returned_ids.pop()
+        self.assertIn(durable_job_id, candidate_ids)
         self.assertEqual(sum(1 for _, created in results if created), 1)
-        self.assertEqual(len(self.repository.get_job_snapshot(job_id)["stages"]), 1)
+        self.assertEqual(
+            len(self.repository.get_job_snapshot(durable_job_id)["stages"]),
+            1,
+        )
 
 
 if __name__ == "__main__":
