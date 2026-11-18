@@ -15,6 +15,7 @@ from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
+    configured_pricing,
 )
 from .base import BaseStreamingTask
 from .mixins import GenerateThumbnailMixin
@@ -162,6 +163,11 @@ def generate_thumbnail(
             repository.cancel_attempt(
                 request_id, output_id, attempt_id,
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
+                metrics={
+                    "input_bytes": input_bytes,
+                    "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                },
+                pricing=configured_pricing(settings),
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -181,6 +187,7 @@ def generate_thumbnail(
                 "input_bytes": input_bytes,
                 "cpu_seconds": child_cpu_seconds_since(cpu_started),
             },
+            pricing=configured_pricing(settings),
         )
         if retryable:
             raise self.retry(
@@ -194,6 +201,11 @@ def generate_thumbnail(
         repository.cancel_attempt(
             request_id, output_id, attempt_id,
             reason="CANCELLED_AFTER_THUMBNAIL_VALIDATION",
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+            },
+            pricing=configured_pricing(settings),
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
