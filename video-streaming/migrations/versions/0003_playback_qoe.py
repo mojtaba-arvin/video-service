@@ -37,6 +37,7 @@ def upgrade():
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_event_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("playback_started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("startup_ms", sa.BigInteger(), nullable=True),
         sa.Column(
