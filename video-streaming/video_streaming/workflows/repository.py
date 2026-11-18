@@ -210,6 +210,7 @@ class PlaybackSessionRecord(Base):
     status = Column(String(16), nullable=False, default="ACTIVE")
     started_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     last_event_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    playback_started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     startup_ms = Column(BigInteger, nullable=True)
     buffering_started_at = Column(DateTime(timezone=True), nullable=True)
@@ -934,6 +935,10 @@ class WorkflowRepository:
             "session_id": record.id,
             "status": record.status,
             "startup_ms": record.startup_ms,
+            "playback_started_at": (
+                record.playback_started_at.isoformat()
+                if record.playback_started_at else None
+            ),
             "rebuffer_count": record.rebuffer_count,
             "total_buffering_ms": record.total_buffering_ms,
             "decoder_error_count": record.decoder_error_count,
@@ -1032,6 +1037,7 @@ class WorkflowRepository:
                     if startup_ms is None:
                         raise ValueError("PLAYBACK_STARTED requires startup_ms")
                     playback.startup_ms = int(startup_ms)
+                    playback.playback_started_at = now
 
                 elif event_type == "BUFFERING_STARTED":
                     if playback.startup_ms is None:
@@ -1129,9 +1135,14 @@ class WorkflowRepository:
             )
             wall_time_ms = 0
             for item in sessions:
+                if item.playback_started_at is None:
+                    continue
                 end_time = item.ended_at or now
                 wall_time_ms += max(
-                    0, int((end_time - item.started_at).total_seconds() * 1000)
+                    0, int(
+                        (end_time - item.playback_started_at)
+                        .total_seconds() * 1000
+                    )
                 )
             buffering_ratio = (
                 (buffering_ms / wall_time_ms * 100.0)
