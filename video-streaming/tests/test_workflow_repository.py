@@ -111,6 +111,11 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "e" * 64,
             workflow_name="video.vod",
             execution_plan=plan,
+            stage_specs=[{
+                "stage_key": node["stage_key"],
+                "operation": node["operation"],
+                "input": {"webhook_url": "https://must-not-be-persisted.invalid"},
+            } for node in plan["nodes"]],
         )
 
         self.assertEqual((returned_id, created), (job_id, True))
@@ -128,6 +133,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             [(stage["key"], stage["operation"]) for stage in snapshot["stages"]],
             [(node["stage_key"], node["operation"]) for node in plan["nodes"]],
         )
+        self.assertTrue(all(not stage["input"] for stage in snapshot["stages"]))
         created_event = snapshot["events"][0]
         self.assertEqual(created_event["type"], "JOB_CREATED")
         self.assertEqual(created_event["payload"]["execution_plan_fingerprint"], persisted["fingerprint"])
