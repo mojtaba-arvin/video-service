@@ -76,6 +76,14 @@ class InMemoryS3:
         self.buckets = {"vod-input": {"source.mp4": input_bytes}}
         self.upload_order = []
 
+    def read_object_bytes(self, key, bucket_name=None):
+        return self.buckets.get(bucket_name or "", {}).get(key)
+
+    def put_object_bytes(self, key, content, bucket_name=None,
+                         content_type="application/json"):
+        self.buckets.setdefault(bucket_name, {})[key] = content
+        return {"Key": key}
+
     def head(self, key, bucket_name=None, **kwargs):
         bucket = self.buckets.get(bucket_name or "", {})
         value = bucket.get(key)
