@@ -68,6 +68,7 @@ def upgrade():
         ),
         sa.Column("event_id", sa.String(128), nullable=False),
         sa.Column("event_type", sa.String(32), nullable=False),
+        sa.Column("payload_hash", sa.String(64), nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("duration_ms", sa.BigInteger(), nullable=True),
         sa.Column("startup_ms", sa.BigInteger(), nullable=True),
