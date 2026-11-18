@@ -59,13 +59,13 @@ def configured_pricing(settings):
             raise ValueError(
                 "WORKFLOW_COST_CURRENCY must be an uppercase three-letter code"
             )
-        if not any(value > 0 for value in rates.values()):
-            raise ValueError("At least one custom price-card rate must be positive")
         for name, value in rates.items():
             if not math.isfinite(value) or value < 0:
                 raise ValueError(
                     "{} must be finite and non-negative".format(name)
                 )
+        if not any(value > 0 for value in rates.values()):
+            raise ValueError("At least one custom price-card rate must be positive")
         return {
             "model_id": model_id,
             "model_version": model_version,
