@@ -10,7 +10,6 @@ from video_streaming.ffmpeg.package_validation import (
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
-from video_streaming.workflows.service import get_workflow_repository
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
