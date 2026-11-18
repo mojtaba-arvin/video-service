@@ -266,6 +266,7 @@ def upload_directory(self,
                 "peak_memory_bytes": (
                     int(peak_memory_bytes) if peak_memory_bytes else None
                 ),
+                "memory_duration_ms": memory_duration_ms,
             },
             pricing=configured_pricing(settings),
         )
