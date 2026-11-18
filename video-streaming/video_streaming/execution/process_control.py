@@ -22,6 +22,10 @@ def terminate_process_tree(process, grace_period=1.0):
         ProcessTreeTerminationError: A process remains alive after SIGKILL.
         psutil.AccessDenied: The worker lacks permission to stop a process.
     """
+    poll = getattr(process, "poll", None)
+    if callable(poll) and poll() is not None:
+        return
+
     pid = getattr(process, "pid", process)
     try:
         root = psutil.Process(int(pid))
