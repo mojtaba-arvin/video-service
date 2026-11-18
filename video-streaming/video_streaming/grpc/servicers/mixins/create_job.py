@@ -1,6 +1,10 @@
 import hashlib
 import json
+import logging
 import uuid
+
+
+logger = logging.getLogger(__name__)
 from celery import result as celery_result, chain, group, signature, \
     chord
 from google.protobuf import reflection
@@ -313,7 +317,10 @@ class CreateJobMixin(object):
 
     def _create_job(self, request, context):
         request_id: str = str(uuid.uuid4())
-        print("request_id =", request_id)
+        logger.info(
+            "Accepted video job",
+            extra={"job_id": request_id},
+        )
 
         first_level: list = []
         second_level: list = []
@@ -628,7 +635,8 @@ class CreateJobMixin(object):
             no_watermarked_playlists_ids=no_watermarked_playlists_ids,
             no_watermarked_thumbnails_ids=no_watermarked_thumbnails_ids
         )
-        print(job_details)
+        # Persist callback data in the configured cache. Never log this
+        # object: it contains the caller-provided webhook URL.
 
         # saving job details
         self.cache.set(
