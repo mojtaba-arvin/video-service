@@ -17,11 +17,17 @@ class BaseTask(Task, ABC):
     def __call__(self, *args, **kwargs):
         # Task arguments may contain signed URLs, webhook credentials or
         # storage identifiers. Log execution identity, never raw arguments.
+        try:
+            task_id = getattr(self.request, "id", None)
+        except (AttributeError, RuntimeError):
+            # Unit invocation outside a configured Celery app has no request
+            # stack; the task can still run without a correlation ID.
+            task_id = None
         logger.info(
             "Executing Celery task",
             extra={
                 "task_name": self.name,
-                "task_id": getattr(self.request, "id", None),
+                "task_id": task_id,
             },
         )
         return super().__call__(*args, **kwargs)
