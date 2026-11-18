@@ -20,9 +20,9 @@ def _active_process_group_members(process_group_id):
         try:
             if item.info.get("status") == psutil.STATUS_ZOMBIE:
                 continue
-            if psutil.Process(item.info["pid"]).pgid() == process_group_id:
+            if os.getpgid(item.info["pid"]) == process_group_id:
                 active.append(item.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, OSError):
             continue
     return active
 
