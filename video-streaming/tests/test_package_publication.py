@@ -19,6 +19,16 @@ class FakeObjectStorage:
         self.unreadable_key = None
         self.events = []
 
+    def read_object_bytes(self, key, bucket_name=None):
+        value = self.objects.get(key)
+        return value
+
+    def put_object_bytes(self, key, content, bucket_name=None,
+                         content_type="application/json"):
+        self.objects[key] = content
+        self.events.append(("put", key))
+        return {"Key": key}
+
     def delete_object(self, key, bucket_name=None, **kwargs):
         self.events.append(("delete", key))
         self.objects.pop(key, None)
