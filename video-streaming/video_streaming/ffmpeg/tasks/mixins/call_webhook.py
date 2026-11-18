@@ -46,8 +46,15 @@ class CallWebhookMixin(object):
             # urllib3.exceptions.NewConnectionError
             raise self.retry(exc=e)
 
+        # Callback URLs may contain credentials or signed query parameters.
+        # Keep the status and job correlation, never the URL itself.
         self.logger.info(
-            f'http status: {http_response.status}, url: {webhook_url}')
+            "Webhook response received",
+            extra={
+                "http_status": http_response.status,
+                "request_id": request_id,
+            },
+        )
 
         # check the HTTP status code to raise ignore/retry
         is_delivered = self.check_http_status(
