@@ -8,14 +8,13 @@ This documentation describes both the **verified current implementation** and th
 2. [Current-state architecture review](architecture/current-state.md) — what exists in `develop`, what the code demonstrates, and the concrete reliability and security gaps found during repository inspection.
 3. [Implementation roadmap](roadmap/README.md) — outcome lanes, current priorities, acceptance evidence, and explicit deferrals.
 4. [GitHub governance](engineering/github-governance.md) — recommended rulesets, security settings, and the verified public-repository plan constraints.
-5. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
-6. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
+5. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — research-backed decisions, market-claim verification, six-goal alignment and parallel engineering lanes.
+6. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills under .agents/skills/.
+7. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
 
-7. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
+8. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation reports, metadata-only probing, manifest-last publication, status proof, and retry behavior.
 
-8. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
-
-9. [Session-scoped playback QoE telemetry (ADR 0003)](decisions/0003-session-scoped-playback-qoe-telemetry.md) — typed playback session start, idempotent buffering/decoder events, manifest correlation, and stage-cost reporting.
+9. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
 
 ## Documentation rules
 
