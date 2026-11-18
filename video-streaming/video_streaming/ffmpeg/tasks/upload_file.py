@@ -10,6 +10,7 @@ from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.ffmpeg.utils import S3UploadCallback
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.metrics import configured_pricing
 from .base import BaseStreamingTask
 from .mixins import UploadFileMixin
 
@@ -196,6 +197,7 @@ def upload_file(self,
                     "output_bytes": file_size,
                     "artifact_count": 1,
                 },
+                pricing=configured_pricing(settings),
             )
     except Exception as exc:
         if durable_stage is not None:
