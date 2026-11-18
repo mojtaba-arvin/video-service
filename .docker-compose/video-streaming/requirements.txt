@@ -29,3 +29,7 @@ python-decouple==3.8
 # clouds 
 boto3==1.17.14
 
+# durable workflow state
+SQLAlchemy==2.0.58
+alembic==1.16.5
+psycopg2-binary==2.9.12

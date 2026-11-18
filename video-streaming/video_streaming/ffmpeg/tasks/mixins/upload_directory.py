@@ -73,7 +73,7 @@ class UploadDirectoryMixin(BaseOutputMixin):
             output_id,
             request_id,
             protocol,
-            expected_renditions=None) -> int:
+            expected_renditions=None) -> dict:
         """Validate and publish package artifacts with manifests last."""
         directory_callback = S3UploadCallback(
             task=self,
@@ -97,4 +97,4 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 directory_callback, total_size, total_files, index
             ),
         )
-        return publication["directory_size"]
+        return publication

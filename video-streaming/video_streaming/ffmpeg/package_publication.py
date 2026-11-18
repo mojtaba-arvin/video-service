@@ -1,10 +1,11 @@
-"""Storage publication gate for HLS/DASH VOD packages.
+"""Storage publication gate for static HLS/DASH packages.
 
-No manifest is uploaded until all of its dependencies have been uploaded,
-HEAD-verified, and successfully read through a one-byte ranged GET. The root
-manifest is withdrawn before retry publication and uploaded last.
+The inventory sidecar is an ownership journal for one root manifest. It lets
+retries remove only the previous package's objects instead of deleting a
+shared bucket prefix. The player-visible root manifest is uploaded last.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -23,6 +24,21 @@ def _object_key(prefix, relative_path):
     if not prefix:
         return relative_path
     return prefix.rstrip("/") + "/" + relative_path
+
+
+def _safe_inventory_path(value):
+    if (
+            not isinstance(value, str)
+            or value in ("", ".", "..")
+            or "\\" in value
+    ):
+        raise PackagePublicationError("Invalid package inventory path")
+    path = Path(value)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise PackagePublicationError("Unsafe package inventory path: " + value)
+    if path.as_posix() != value:
+        raise PackagePublicationError("Non-canonical package inventory path: " + value)
+    return value
 
 
 def _verify_readable(storage, bucket, key, expected_size=None):
@@ -49,6 +65,93 @@ def _verify_readable(storage, bucket, key, expected_size=None):
     return actual_size
 
 
+def _inventory_key(prefix, manifest_relative):
+    name = Path(manifest_relative).name
+    return _object_key(prefix, ".{}.artifacts.json".format(name))
+
+
+def _read_inventory(storage, bucket, key):
+    raw = storage.read_object_bytes(key=key, bucket_name=bucket)
+    if raw is None:
+        return []
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise PackagePublicationError(
+            "Existing package inventory is unreadable: " + key
+        ) from exc
+    if payload.get("format_version") != 1:
+        raise PackagePublicationError(
+            "Unsupported package inventory version: " + key
+        )
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise PackagePublicationError(
+            "Package inventory artifacts must be a list: " + key
+        )
+    return sorted(set(_safe_inventory_path(value) for value in artifacts))
+
+
+def _write_inventory(storage, bucket, key, protocol, manifest, relatives):
+    payload = {
+        "format_version": 1,
+        "protocol": protocol,
+        "manifest": manifest,
+        "artifacts": sorted(set(relatives)),
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    storage.put_object_bytes(
+        key=key,
+        content=encoded,
+        bucket_name=bucket,
+        content_type="application/json",
+    )
+    _verify_readable(storage, bucket, key, expected_size=len(encoded))
+    return len(encoded)
+
+
+def _artifact_record(bucket, prefix, file_path, relative_path, file_size,
+                     root_manifest, protocol):
+    suffix = Path(relative_path).suffix.lower()
+    if suffix == ".m3u8":
+        artifact_type = (
+            "streaming_manifest"
+            if relative_path == root_manifest
+            else "streaming_playlist"
+        )
+        media_type = "application/vnd.apple.mpegurl"
+    elif suffix == ".mpd":
+        artifact_type = "streaming_manifest"
+        media_type = "application/dash+xml"
+    elif suffix == ".ts":
+        artifact_type = "media_segment"
+        media_type = "video/mp2t"
+    elif suffix == ".m4s":
+        artifact_type = "media_segment"
+        media_type = "video/iso.segment"
+    elif suffix in (".mp4", ".m4a"):
+        artifact_type = "media_initialization"
+        media_type = "video/mp4" if suffix == ".mp4" else "audio/mp4"
+    else:
+        artifact_type = "media_artifact"
+        media_type = None
+
+    key = _object_key(prefix, relative_path)
+    return {
+        "artifact_type": artifact_type,
+        "logical_name": relative_path,
+        "uri": "s3://{}/{}".format(bucket, key),
+        "media_type": media_type,
+        "size_bytes": file_size,
+        "metadata": {
+            "protocol": protocol,
+            "readback_verified": True,
+        },
+    }
+
+
 def publish_package(
         directory,
         manifest_path,
@@ -58,12 +161,19 @@ def publish_package(
         s3_output_bucket,
         storage,
         callback_factory=None):
-    """Validate and publish package assets with dependency-aware ordering.
+    """Validate, replace an owned package and publish its root manifest last.
 
-    Existing root-manifest visibility is removed before writing any replacement
-    objects. Deterministic object keys are overwritten on retries, so repeated
-    attempts do not create duplicate segment keys. A failed attempt leaves no
-    root manifest pointing at a partial package.
+    1. Validate locally before altering the last known good publication.
+    2. Read the previous per-root inventory and write a combined ownership
+       journal (previous + next objects).
+    3. Withdraw old manifests and old objects owned by that root only.
+    4. Narrow the inventory to this attempt, upload/read-back all dependencies,
+       and upload the root manifest as the final media object.
+    5. On failure, remove every object from this attempt. If cleanup itself
+       fails, retain the inventory journal so a later retry can finish cleanup.
+
+    This is idempotent for deterministic object keys and safe for shared
+    buckets/prefixes because it never deletes an unowned prefix wholesale.
     """
     root = Path(directory).resolve()
     manifest_input = Path(manifest_path)
@@ -71,47 +181,81 @@ def publish_package(
     manifest_relative = manifest.relative_to(root).as_posix()
     prefix = s3_output_key.rpartition("/")[0]
     root_key = _object_key(prefix, manifest_relative)
+    inventory_key = _inventory_key(prefix, manifest_relative)
 
-    # Withdraw the root and child manifests already present in this isolated
-    # output directory. A failed retry must not leave any old playlist
-    # advertising assets while the package is being replaced.
-    manifest_keys = [root_key]
-    for current, directories, filenames in os.walk(
-            str(root), followlinks=False):
-        for filename in filenames:
-            if Path(filename).suffix.lower() in (".m3u8", ".mpd"):
-                relative = (Path(current) / filename).relative_to(root).as_posix()
-                key = _object_key(prefix, relative)
-                if key not in manifest_keys:
-                    manifest_keys.append(key)
-    for key in manifest_keys:
-        storage.delete_object(key=key, bucket_name=s3_output_bucket)
+    report = validate_package(
+        directory=directory,
+        package_type=protocol,
+        expected_renditions=expected_renditions,
+        manifest_path=manifest_path,
+    )
+    report.require_valid()
 
-    try:
-        report = validate_package(
-            directory=directory,
-            package_type=protocol,
-            expected_renditions=expected_renditions,
-            manifest_path=manifest_path,
+    files = ordered_package_files(
+        directory=directory,
+        manifest_name=manifest_relative,
+        protocol=protocol,
+    )
+    if not files or files[-1][1] != manifest_relative:
+        raise PackagePublicationError(
+            "Root manifest must be the final package artifact"
         )
-        report.require_valid()
-        files = ordered_package_files(
-            directory=directory,
-            manifest_name=manifest_relative,
-            protocol=protocol,
-        )
-        total_size = sum(file_size for _, _, file_size in files)
-        total_files = len(files)
-        manifest_keys = [
-            _object_key(prefix, relative_path)
-            for file_path, relative_path, _ in files
-            if Path(file_path).suffix.lower() in (".m3u8", ".mpd")
-        ]
-        for manifest_key in manifest_keys:
+
+    new_relatives = sorted(relative for _, relative, _ in files)
+    old_relatives = _read_inventory(
+        storage, s3_output_bucket, inventory_key
+    )
+    combined_relatives = sorted(set(old_relatives) | set(new_relatives))
+
+    # Write the union first. If the worker dies during deletion or upload, the
+    # next attempt knows both the old and the partially written object keys.
+    _write_inventory(
+        storage, s3_output_bucket, inventory_key,
+        protocol, manifest_relative, combined_relatives,
+    )
+
+    # Withdraw old manifests first, then delete all old package objects before
+    # deterministic keys are written again. No unrelated prefix is touched.
+    old_manifest_relatives = [
+        relative for relative in combined_relatives
+        if Path(relative).suffix.lower() in (".m3u8", ".mpd")
+    ]
+    # Withdraw the root first. If this fails, preserve the previous package
+    # intact; never delete child manifests while the old root is visible.
+    storage.delete_object(key=root_key, bucket_name=s3_output_bucket)
+    for relative in old_manifest_relatives:
+        key = _object_key(prefix, relative)
+        if key != root_key:
             storage.delete_object(
-                key=manifest_key, bucket_name=s3_output_bucket
+                key=key,
+                bucket_name=s3_output_bucket,
             )
 
+    for relative in combined_relatives:
+        storage.delete_object(
+            key=_object_key(prefix, relative),
+            bucket_name=s3_output_bucket,
+        )
+
+    # Once prior objects are removed, the journal can be narrowed to this
+    # attempt. This remains durable across worker loss before root publication.
+    inventory_size = _write_inventory(
+        storage, s3_output_bucket, inventory_key,
+        protocol, manifest_relative, new_relatives,
+    )
+
+    total_size = sum(file_size for _, _, file_size in files)
+    total_files = len(files)
+    uploaded_keys = []
+    manifest_keys = [
+        _object_key(prefix, relative)
+        for relative in new_relatives
+        if Path(relative).suffix.lower() in (".m3u8", ".mpd")
+    ]
+
+    try:
+        # Upload every dependency before its referencing manifest. The root
+        # manifest is guaranteed to be the last item by ordered_package_files.
         for index, (file_path, relative_path, file_size) in enumerate(files):
             local_path = Path(file_path)
             object_key = _object_key(prefix, relative_path)
@@ -143,35 +287,63 @@ def publish_package(
                 bucket_name=s3_output_bucket,
                 callback=callback,
             )
+            uploaded_keys.append(object_key)
             _verify_readable(
-                storage,
-                s3_output_bucket,
-                object_key,
+                storage, s3_output_bucket, object_key,
                 expected_size=file_size,
             )
 
-        # The root manifest must be the last ordered artifact.
-        if files[-1][1] != manifest_relative:
-            raise PackagePublicationError(
-                "Root manifest was not the final package artifact"
-            )
         _verify_readable(
             storage, s3_output_bucket, root_key,
             expected_size=manifest.stat().st_size,
         )
     except Exception:
-        # Never leave old/partial playlists advertising an incomplete package.
-        # Media segments may be overwritten deterministically, but no manifest
-        # created or replaced by this attempt remains visible.
-        for manifest_key in set(manifest_keys):
-            storage.delete_object(
-                key=manifest_key, bucket_name=s3_output_bucket
-            )
+        cleanup_ok = True
+        # Do not leave playlists advertising an incomplete package.
+        attempt_keys = [
+            _object_key(prefix, relative)
+            for relative in new_relatives
+        ]
+        for key in sorted(set(attempt_keys + uploaded_keys + manifest_keys + [root_key])):
+            try:
+                storage.delete_object(key=key, bucket_name=s3_output_bucket)
+            except Exception:
+                cleanup_ok = False
+        if cleanup_ok:
+            try:
+                storage.delete_object(
+                    key=inventory_key, bucket_name=s3_output_bucket
+                )
+            except Exception:
+                # Keep the journal if deletion fails; next retry can recover.
+                pass
         raise
+
+    published_artifacts = [
+        _artifact_record(
+            s3_output_bucket, prefix, file_path, relative_path,
+            file_size, manifest_relative, protocol,
+        )
+        for file_path, relative_path, file_size in files
+    ]
+    inventory_record = {
+        "artifact_type": "package_inventory",
+        "logical_name": Path(inventory_key).name,
+        "uri": "s3://{}/{}".format(s3_output_bucket, inventory_key),
+        "media_type": "application/json",
+        "size_bytes": inventory_size,
+        "metadata": {
+            "format_version": 1,
+            "owned_artifact_count": len(new_relatives),
+        },
+    }
+    published_artifacts.append(inventory_record)
 
     return {
         "directory_size": total_size,
         "files": total_files,
         "manifest_key": root_key,
+        "inventory_key": inventory_key,
         "validation_report": report.as_dict(),
+        "artifacts": published_artifacts,
     }

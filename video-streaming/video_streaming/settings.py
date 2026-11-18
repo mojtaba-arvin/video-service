@@ -226,6 +226,52 @@ PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     cast=int)
 
 ##################################################
+#    Durable workflow database                  #
+##################################################
+
+WORKFLOW_DATABASE_URL = env_config.get(
+    "WORKFLOW_DATABASE_URL",
+    default="",
+    cast=str)
+
+WORKFLOW_DATABASE_POOL_SIZE = env_config.get(
+    "WORKFLOW_DATABASE_POOL_SIZE",
+    default=5,
+    cast=int)
+
+WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
+    "WORKFLOW_DATABASE_MAX_OVERFLOW",
+    default=5,
+    cast=int)
+
+# Optional infrastructure price card. Resource measurements are persisted
+# even when no monetary rates are configured.
+WORKFLOW_PRICING_MODEL_ID = env_config.get(
+    "WORKFLOW_PRICING_MODEL_ID",
+    default="",
+    cast=str)
+
+WORKFLOW_COST_CURRENCY = env_config.get(
+    "WORKFLOW_COST_CURRENCY",
+    default="USD",
+    cast=str)
+
+WORKFLOW_CPU_COST_PER_SECOND = env_config.get(
+    "WORKFLOW_CPU_COST_PER_SECOND",
+    default=0.0,
+    cast=float)
+
+WORKFLOW_MEMORY_GB_SECOND_COST = env_config.get(
+    "WORKFLOW_MEMORY_GB_SECOND_COST",
+    default=0.0,
+    cast=float)
+
+WORKFLOW_STORAGE_GB_COST = env_config.get(
+    "WORKFLOW_STORAGE_GB_COST",
+    default=0.0,
+    cast=float)
+
+##################################################
 #    Redis                                       #
 ##################################################
 

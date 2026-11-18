@@ -10,3 +10,8 @@ python-decouple==3.8
 redis==5.2.1
 boto3==1.17.14
 psutil==5.9.8
+
+# durable workflow state and PostgreSQL adapter
+SQLAlchemy==2.0.58
+alembic==1.16.5
+psycopg2-binary==2.9.12

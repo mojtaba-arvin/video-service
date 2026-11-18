@@ -22,6 +22,9 @@ message JobRequest {
   // every output includes destination s3 key, and convert details
   repeated PlaylistOutput playlists = 5;
   repeated ThumbnailOutput thumbnails = 6;
+
+  // Client-supplied idempotency key. Empty preserves legacy create-new behavior.
+  string idempotency_key = 7;
 }
 enum Protocol {
   HLS = 0;

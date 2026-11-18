@@ -1,4 +1,5 @@
 import ffmpeg
+import os
 from abc import ABC
 from pathlib import Path
 from video_streaming import settings
@@ -8,6 +9,12 @@ from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.ffmpeg.thumbnail import (
     ThumbnailValidationError,
     render_thumbnail,
+    validate_thumbnail_output,
+)
+from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.metrics import (
+    capture_child_cpu_seconds,
+    child_cpu_seconds_since,
 )
 from .base import BaseStreamingTask
 from .mixins import GenerateThumbnailMixin
@@ -86,34 +93,33 @@ def generate_thumbnail(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
+    repository = get_workflow_repository()
+    attempt_id, attempt_number = repository.start_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        execution_backend="celery",
+        execution_ref=self.request.id.__str__(),
+    )
+    input_bytes = os.path.getsize(video_path)
+    cpu_started = capture_child_cpu_seconds()
+
     # save primary status using request_id
     self.save_primary_status(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
 
-    # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
         output_id,
         request_id)
 
-    # get output directory and set output_path if is None
     output_path, directory = self.ensure_set_output_location(
-       request_id,
-       output_id,
-       output_path=output_path,
-       s3_output_key=s3_output_key)
-
-    # create directory with all parents, to prevent ffmpeg error
-    Path(directory).mkdir(parents=True, exist_ok=True)
-
-    # TODO validate thumbnail time is in video duration with
-    #  ffprobe result cache, and it's positive
-
-    self.save_output_status(
-        self.output_status.PROCESSING,
+        request_id,
         output_id,
-        request_id)
+        output_path=output_path,
+        s3_output_key=s3_output_key,
+    )
+    Path(directory).mkdir(parents=True, exist_ok=True)
 
     try:
         render_thumbnail(
@@ -125,12 +131,78 @@ def generate_thumbnail(
             ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
             ffprobe_bin_path=settings.FFPROBE_BIN_PATH
         )
-    except (ffmpeg.Error, ThumbnailValidationError) as e:
-        raise self.retry(exc=e)
+        dimensions = validate_thumbnail_output(
+            output_path=output_path,
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+            expected_width=scale_width if scale_width > 0 else None,
+            expected_height=scale_height if scale_height > 0 else None,
+        )
+        validation_report = {
+            "valid": True,
+            "artifact_type": "image_thumbnail",
+            "width": dimensions["width"],
+            "height": dimensions["height"],
+            "size_bytes": os.path.getsize(output_path),
+            "errors": [],
+        }
+        repository.mark_validated(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report,
+        )
+    except Exception as exc:
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            repository.cancel_attempt(
+                request_id, output_id, attempt_id,
+                reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
+            )
+            if self.is_forced_to_stop(request_id):
+                raise self.raise_revoke(request_id)
+            raise self.raise_revoke_output(request_id, output_id)
 
-    self.save_output_status(
-        self.output_status.PROCESSING_FINISHED,
-        output_id,
-        request_id)
+        retryable = (
+            self.request.retries < settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+        )
+        repository.fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=retryable,
+            error_code="THUMBNAIL_RENDER_OR_VALIDATION_FAILED",
+            error_message=str(exc),
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+            },
+        )
+        if retryable:
+            raise self.retry(
+                exc=exc,
+                max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX,
+            )
+        raise
 
-    return dict(file_path=output_path)
+    if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+            request_id, output_id):
+        repository.cancel_attempt(
+            request_id, output_id, attempt_id,
+            reason="CANCELLED_AFTER_THUMBNAIL_VALIDATION",
+        )
+        if self.is_forced_to_stop(request_id):
+            raise self.raise_revoke(request_id)
+        raise self.raise_revoke_output(request_id, output_id)
+
+    return dict(
+        file_path=output_path,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        input_bytes=input_bytes,
+        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        validation_report=validation_report,
+        artifact_type="image_thumbnail",
+        media_type="image/{}".format(
+            Path(output_path).suffix.lower().lstrip(".") or "jpeg"
+        ),
+    )
