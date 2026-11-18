@@ -15,6 +15,8 @@ This documentation describes both the **verified current implementation** and th
 
 8. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, idempotency, stage transitions, retry recovery, structured artifacts, resource-cost reporting, and API/MCP-ready operation contracts.
 
+9. [Session-scoped playback QoE telemetry (ADR 0003)](decisions/0003-session-scoped-playback-qoe-telemetry.md) — typed playback session start, idempotent buffering/decoder events, manifest correlation, and stage-cost reporting.
+
 ## Documentation rules
 
 - **Evidence before claims:** distinguish repository facts, measured results, assumptions, and proposals.
