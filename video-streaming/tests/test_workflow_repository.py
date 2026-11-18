@@ -12,7 +12,7 @@ from video_streaming.workflows.domain import (
     StageAlreadyRunning,
     StageState,
 )
-from video_streaming.workflows.repository import WorkflowRepository, utcnow
+from video_streaming.workflows.repository import WorkflowRepository, WorkflowRecord, utcnow
 from video_streaming.workflows.execution_plan import execution_plan_sha256
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
@@ -149,6 +149,32 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         persisted = self.repository.get_execution_plan(job_id)
         self.assertEqual(persisted["fingerprint"], execution_plan_sha256(self.build_plan(job_id)))
+
+
+    def test_execution_plan_fingerprint_detects_persisted_mutation(self):
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-plan-tamper-{}".format(uuid4()),
+            "3" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        with self.repository._session.begin() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            mutated_plan = dict(workflow.execution_plan_json)
+            mutated_plan["workflow_version"] = "tampered"
+            workflow.execution_plan_json = mutated_plan
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan fingerprint mismatch"):
+            self.repository.get_execution_plan(job_id)
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan fingerprint mismatch"):
+            self.repository.get_job_snapshot(job_id)
 
     def test_legacy_idempotent_replay_does_not_mutate_accepted_workflow(self):
         job_id = str(uuid4())
