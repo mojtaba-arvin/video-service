@@ -142,6 +142,85 @@ class ProcessTreeTerminationTests(unittest.TestCase):
         self.assertEqual(context.exception.returncode, 7)
         self.assertIn(b"bad", context.exception.output)
 
+    def test_streaming_runner_delivers_lines_as_they_arrive(self):
+        from video_streaming.execution.process_control import run_streaming_process
+
+        lines = []
+        result = run_streaming_process(
+            [sys.executable, "-c", "print('first'); print('second')"],
+            timeout_seconds=2,
+            poll_interval=0.02,
+            on_line=lambda line, process: lines.append(line),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(lines, ["first", "second"])
+
+    def test_streaming_deadline_kills_child_after_parent_exits(self):
+        import tempfile
+        from pathlib import Path
+
+        from video_streaming.execution.process_control import run_streaming_process
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "orphan.pid"
+            child_code = (
+                "import os, time; "
+                "open({!r}, 'w').write(str(os.getpid())); "
+                "time.sleep(60)"
+            ).format(str(pid_path))
+            parent_code = (
+                "import subprocess, sys; "
+                "subprocess.Popen([sys.executable, '-c', {!r}])"
+            ).format(child_code)
+
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_streaming_process(
+                    [sys.executable, "-c", parent_code],
+                    timeout_seconds=0.5,
+                    poll_interval=0.02,
+                    on_line=lambda line, process: None,
+                    terminate_grace_period=0.2,
+                )
+
+            self.assertTrue(pid_path.exists(), "child process did not start")
+            self.assertFalse(self._is_running(int(pid_path.read_text())))
+
+    def test_streaming_cancellation_is_checked_without_new_output(self):
+        import tempfile
+        from pathlib import Path
+
+        from video_streaming.execution.process_control import (
+            ProcessExecutionCancelled,
+            run_streaming_process,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "child.pid"
+            child_code = (
+                "import os, time; "
+                "open({!r}, 'w').write(str(os.getpid())); "
+                "time.sleep(60)"
+            ).format(str(pid_path))
+            parent_code = (
+                "import subprocess, sys; "
+                "subprocess.Popen([sys.executable, '-c', {!r}]); "
+                "time.sleep(60)"
+            ).format(child_code)
+
+            with self.assertRaises(ProcessExecutionCancelled):
+                run_streaming_process(
+                    [sys.executable, "-c", parent_code],
+                    timeout_seconds=5,
+                    poll_interval=0.02,
+                    on_line=lambda line, process: None,
+                    should_cancel=pid_path.exists,
+                    terminate_grace_period=0.2,
+                )
+
+            self.assertTrue(pid_path.exists(), "child process did not start")
+            self.assertFalse(self._is_running(int(pid_path.read_text())))
+
     @staticmethod
     def _is_running(pid):
         try:
