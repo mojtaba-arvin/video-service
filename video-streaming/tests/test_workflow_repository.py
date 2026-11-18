@@ -236,9 +236,14 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         self.assertTrue(session["session_id"])
         self.assertTrue(session["session_token"])
+        snapshot = self.repository.get_job_snapshot(job_id)
+        manifest_artifact = next(
+            artifact
+            for artifact in snapshot["stages"][0]["artifacts"]
+            if artifact["type"] == "streaming_manifest"
+        )
         self.assertEqual(
-            session["manifest_uri"],
-            "s3://vod-output/qoe/master.m3u8",
+            session["manifest_artifact_id"], manifest_artifact["id"]
         )
 
         with self.assertRaises(PermissionError):
