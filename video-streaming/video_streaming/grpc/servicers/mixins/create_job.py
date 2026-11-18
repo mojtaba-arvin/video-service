@@ -591,6 +591,23 @@ class CreateJobMixin(object):
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": len(stage_specs),
+                    # Persist non-secret result metadata so the status API can
+                    # reconstruct durable job/output state after Redis expires.
+                    "result_details": {
+                        "reference_id": request.reference_id,
+                        "total_checks": len(first_level) + len(second_level),
+                        "total_inputs": len(third_level),
+                        "total_outputs": (
+                            len(no_watermarked_tasks) + len(watermarked_tasks)
+                        ),
+                        "total_playlists": len(request.playlists),
+                        "total_thumbnails": len(request.thumbnails),
+                        "watermarked_outputs_ids": list(watermarked_outputs_ids),
+                        "watermarked_playlists_ids": list(watermarked_playlists_ids),
+                        "watermarked_thumbnails_ids": list(watermarked_thumbnails_ids),
+                        "no_watermarked_playlists_ids": list(no_watermarked_playlists_ids),
+                        "no_watermarked_thumbnails_ids": list(no_watermarked_thumbnails_ids),
+                    },
                 },
             )
         )
