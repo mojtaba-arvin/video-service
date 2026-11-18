@@ -356,7 +356,10 @@ class WorkflowRepository:
                 "stage_key": node["stage_key"],
                 "operation": node["operation"],
                 "ordinal": index,
-                "input": node["parameters"],
+                # The immutable plan is the only parameter source. Stage rows
+                # are intentionally thin projections to avoid duplicating
+                # secret references or request payloads into status snapshots.
+                "input": {},
                 "output": {},
             } for index, node in enumerate(plan["nodes"])]
             if stage_specs is None:
@@ -375,7 +378,9 @@ class WorkflowRepository:
                     raise ValueError(
                         "stage_specs must match execution plan node order, keys and operations"
                     )
-                stage_specs = supplied
+                # Discard caller-supplied projection payloads; persist only
+                # the validated plan-derived stage identity and operation.
+                stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
         try:
             with self._session.begin() as session:
