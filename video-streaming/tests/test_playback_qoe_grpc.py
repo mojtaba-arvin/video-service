@@ -1,28 +1,8 @@
-"""Tests for lossless playback QoE and cost-coverage gRPC projection."""
+"""Dependency-free tests for the playback QoE response projection."""
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import patch
 
-from video_streaming.grpc.servicers.mixins.playback_qoe import PlaybackQoEMixin
-
-
-class _Response:
-    def __init__(self, **values):
-        self.__dict__.update(values)
-
-
-class _FakePB2:
-    PlaybackQoEReportResponse = _Response
-
-
-class _Context:
-    def abort(self, code, message):
-        raise AssertionError("{}: {}".format(code, message))
-
-
-class _Servicer(PlaybackQoEMixin):
-    pb2 = _FakePB2()
+from video_streaming.workflows.qoe import playback_qoe_report_payload
 
 
 class PlaybackQoEContractTests(unittest.TestCase):
@@ -60,43 +40,63 @@ class PlaybackQoEContractTests(unittest.TestCase):
             "priced_attempt_count": 2,
             "total_attempt_count": 3,
         }
-        repository = SimpleNamespace(
-            get_playback_qoe_report=lambda **kwargs: report
-        )
-        request = SimpleNamespace(
-            tracking_id="job-1",
-            output_id="playlist-0",
-        )
 
-        with patch(
-            "video_streaming.grpc.servicers.mixins.playback_qoe."
-            "get_workflow_repository",
-            return_value=repository,
-        ):
-            response = _Servicer().get_playback_qoe_report(
-                request, _Context()
-            )
+        payload = playback_qoe_report_payload(report)
 
-        self.assertEqual(response.total_estimated_cost, 0.0)
-        self.assertFalse(response.total_estimated_cost_available)
-        self.assertEqual(response.partial_estimated_cost, 12.75)
-        self.assertTrue(response.partial_estimated_cost_available)
-        self.assertEqual(response.complete_attempt_count, 1)
+        self.assertEqual(payload["total_estimated_cost"], 0.0)
+        self.assertFalse(payload["total_estimated_cost_available"])
+        self.assertEqual(payload["partial_estimated_cost"], 12.75)
+        self.assertTrue(payload["partial_estimated_cost_available"])
+        self.assertEqual(payload["complete_attempt_count"], 1)
         self.assertEqual(
-            response.missing_cost_dimensions_by_attempt,
+            payload["missing_cost_dimensions_by_attempt"],
             {"gpu_seconds": 2, "egress_bytes": 1},
         )
         self.assertEqual(
-            response.excluded_cost_dimensions,
+            payload["excluded_cost_dimensions"],
             ["provider_invoice", "worker_idle"],
         )
         self.assertEqual(
-            response.pricing_model_versions,
+            payload["pricing_model_versions"],
             ["relative-resource-index-v1:1"],
         )
-        self.assertEqual(response.priced_attempt_count, 2)
-        self.assertEqual(response.total_attempt_count, 3)
+        self.assertEqual(payload["priced_attempt_count"], 2)
+        self.assertEqual(payload["total_attempt_count"], 3)
+
+    def test_complete_total_is_marked_available(self):
+        report = {
+            "job_id": "job-2",
+            "stage_key": "playlist-0",
+            "stage_status": "FINISHED",
+            "session_count": 1,
+            "playback_started_count": 1,
+            "average_startup_ms": 10,
+            "rebuffer_count": 0,
+            "total_buffering_ms": 0,
+            "decoder_error_count": 0,
+            "buffering_ratio_percent": 0.0,
+            "total_cpu_seconds": 5.0,
+            "total_estimated_cost": 3.25,
+            "partial_estimated_cost": 3.25,
+            "cost_estimate_complete": True,
+            "cost_coverage": {
+                "complete_attempt_count": 1,
+                "missing_dimensions_by_attempt": {},
+                "excluded_dimensions": ["provider_invoice"],
+                "pricing_model_versions": ["custom-card-v2"],
+            },
+            "cost_currency": "USD",
+            "pricing_model_id": "production-prices",
+            "priced_attempt_count": 1,
+            "total_attempt_count": 1,
+        }
+
+        payload = playback_qoe_report_payload(report)
+
+        self.assertTrue(payload["total_estimated_cost_available"])
+        self.assertEqual(payload["total_estimated_cost"], 3.25)
+        self.assertTrue(payload["partial_estimated_cost_available"])
+        self.assertEqual(payload["cost_currency"], "USD")
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __old=0; false; then :; fi
