@@ -1072,7 +1072,7 @@ def _hls_segment_paths(playlist):
 
 def _probe_hls_media_duration(
         playlist, ffprobe_bin_path, timeout_seconds):
-    """Probe actual standalone media segments, not EXTINF-derived playlist duration.
+    """Derive media duration from actual packet timestamps, not EXTINF tags.
 
     Fragmented MP4 media fragments require their initialization section and are
     not independently duration-probeable; in that case duration comparison is
@@ -1100,8 +1100,9 @@ def _probe_hls_media_duration(
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_path),
-            "-show_entries", "format=duration",
-            "-of", "json",
+            "-show_packets",
+            "-show_entries", "packet=pts_time,duration_time",
+            "-of", "csv=p=0",
         ]
         result = subprocess.run(
             command,
@@ -1110,10 +1111,29 @@ def _probe_hls_media_duration(
             text=True,
             timeout=timeout_seconds,
         )
-        duration = (json.loads(result.stdout or "{}").get("format") or {}).get(
-            "duration"
-        )
-        return float(duration) if duration is not None else None
+        first_pts = None
+        last_packet_end = None
+        for line in result.stdout.splitlines():
+            fields = line.strip().split(",")
+            if not fields:
+                continue
+            try:
+                pts = float(fields[0])
+            except (TypeError, ValueError):
+                continue
+            try:
+                packet_duration = float(fields[1])
+            except (IndexError, TypeError, ValueError):
+                packet_duration = 0.0
+            first_pts = pts if first_pts is None else min(first_pts, pts)
+            packet_end = pts + max(0.0, packet_duration)
+            last_packet_end = (
+                packet_end if last_packet_end is None
+                else max(last_packet_end, packet_end)
+            )
+        if first_pts is None or last_packet_end is None:
+            return None
+        return max(0.0, last_packet_end - first_pts)
 
 
 def _probe_package_metadata(
