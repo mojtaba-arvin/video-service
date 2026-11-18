@@ -28,7 +28,7 @@ def upgrade():
     )
     op.add_column(
         "workflow_workflows",
-        sa.Column("execution_plan_json", sa.JSON(), nullable=True),
+        sa.Column("execution_plan_json", sa.JSON(none_as_null=True), nullable=True),
     )
     op.create_check_constraint(
         "ck_workflow_execution_plan_snapshot_complete",
