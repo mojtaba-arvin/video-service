@@ -1,7 +1,10 @@
 """SQLAlchemy-backed source of truth for jobs, workflows and artifacts."""
 
+import hashlib
+import hmac
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON, BigInteger, Column, DateTime, Float, ForeignKey, Index, Integer,
@@ -180,6 +183,62 @@ class WorkflowEventRecord(Base):
     to_state = Column(String(24), nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     payload_json = Column(JSON, nullable=False, default=dict)
+
+
+class PlaybackSessionRecord(Base):
+    __tablename__ = "playback_sessions"
+    __table_args__ = (
+        Index("ix_playback_sessions_stage_started", "stage_id", "started_at"),
+        Index("ix_playback_sessions_job_started", "job_id", "started_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    job_id = Column(
+        String(36), ForeignKey("workflow_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    stage_id = Column(
+        String(36), ForeignKey("workflow_stages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    manifest_artifact_id = Column(
+        String(36), ForeignKey("workflow_artifacts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    token_hash = Column(String(64), nullable=False)
+    client_version = Column(String(64), nullable=False, default="")
+    status = Column(String(16), nullable=False, default="ACTIVE")
+    started_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_event_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    startup_ms = Column(BigInteger, nullable=True)
+    buffering_started_at = Column(DateTime(timezone=True), nullable=True)
+    rebuffer_count = Column(Integer, nullable=False, default=0)
+    total_buffering_ms = Column(BigInteger, nullable=False, default=0)
+    decoder_error_count = Column(Integer, nullable=False, default=0)
+
+
+class PlaybackEventRecord(Base):
+    __tablename__ = "playback_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "event_id", name="uq_playback_session_event_id"
+        ),
+        Index("ix_playback_events_session_time", "session_id", "received_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(
+        String(36), ForeignKey("playback_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_id = Column(String(128), nullable=False)
+    event_type = Column(String(32), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    duration_ms = Column(BigInteger, nullable=True)
+    startup_ms = Column(BigInteger, nullable=True)
+    error_code = Column(String(128), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
 
 
 def _record_event(
@@ -822,6 +881,289 @@ class WorkflowRepository:
         with self._session() as session:
             stage = self._find_stage(session, job_id, stage_key)
             return stage.status == StageState.FINISHED.value
+
+
+
+    def start_playback_session(
+            self,
+            job_id,
+            stage_key,
+            client_version=""):
+        """Create an opaque playback capability bound to a finished manifest."""
+        session_id = new_id()
+        session_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+        now = utcnow()
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key)
+            if stage.status != StageState.FINISHED.value:
+                raise ValueError("Playback can start only for a finished output")
+
+            manifest = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.artifact_type == "streaming_manifest",
+                    ArtifactRecord.status == "AVAILABLE",
+                ).order_by(ArtifactRecord.created_at.desc())
+            ).scalars().first()
+            if manifest is None or not manifest.uri:
+                raise ValueError(
+                    "Finished output has no available streaming manifest artifact"
+                )
+
+            session.add(PlaybackSessionRecord(
+                id=session_id,
+                job_id=job_id,
+                stage_id=stage.id,
+                manifest_artifact_id=manifest.id,
+                token_hash=token_hash,
+                client_version=(client_version or "")[:64],
+                status="ACTIVE",
+                started_at=now,
+                last_event_at=now,
+            ))
+        return {
+            "session_id": session_id,
+            "session_token": session_token,
+            "manifest_uri": manifest.uri,
+        }
+
+    @staticmethod
+    def _playback_session_summary(record):
+        return {
+            "session_id": record.id,
+            "status": record.status,
+            "startup_ms": record.startup_ms,
+            "rebuffer_count": record.rebuffer_count,
+            "total_buffering_ms": record.total_buffering_ms,
+            "decoder_error_count": record.decoder_error_count,
+            "started_at": record.started_at.isoformat(),
+            "last_event_at": record.last_event_at.isoformat(),
+            "ended_at": (
+                record.ended_at.isoformat() if record.ended_at else None
+            ),
+        }
+
+    def record_playback_event(
+            self,
+            session_id,
+            session_token,
+            event_id,
+            event_type,
+            startup_ms=None,
+            error_code=None,
+            decoder=None,
+            client_version=None):
+        """Append an idempotent event and update session aggregates atomically.
+
+        Client clocks are deliberately not trusted: server receive time is the
+        canonical clock for buffering intervals and ordering.
+        """
+        if not event_id or len(event_id) > 128:
+            raise ValueError("event_id must contain 1 to 128 characters")
+        if not session_token:
+            raise PermissionError("A playback session token is required")
+        event_type = str(event_type or "").upper()
+        allowed = {
+            "PLAYBACK_STARTED",
+            "BUFFERING_STARTED",
+            "BUFFERING_ENDED",
+            "DECODER_ERROR",
+            "PLAYBACK_ENDED",
+        }
+        if event_type not in allowed:
+            raise ValueError("Unsupported playback event type")
+        if startup_ms is not None and not 0 <= int(startup_ms) <= 86400000:
+            raise ValueError("startup_ms must be between 0 and 86400000")
+        if error_code and len(error_code) > 128:
+            raise ValueError("error_code must be at most 128 characters")
+
+        now = utcnow()
+        token_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            playback = session.execute(
+                select(PlaybackSessionRecord).where(
+                    PlaybackSessionRecord.id == session_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if playback is None:
+                raise KeyError("Playback session was not found")
+            if not hmac.compare_digest(playback.token_hash, token_hash):
+                raise PermissionError("Playback session token is invalid")
+            if playback.status != "ACTIVE":
+                raise ValueError("Playback session is already ended")
+            if now - playback.started_at > timedelta(hours=24):
+                playback.status = "EXPIRED"
+                playback.ended_at = now
+                raise ValueError("Playback session has expired")
+
+            duplicate = session.execute(
+                select(PlaybackEventRecord).where(
+                    PlaybackEventRecord.session_id == session_id,
+                    PlaybackEventRecord.event_id == event_id,
+                )
+            ).scalar_one_or_none()
+            if duplicate is not None:
+                return {
+                    **self._playback_session_summary(playback),
+                    "duplicate": True,
+                }
+
+            duration_ms = None
+            metadata = {}
+            if decoder:
+                metadata["decoder"] = str(decoder)[:128]
+            if client_version:
+                metadata["client_version"] = str(client_version)[:64]
+                if not playback.client_version:
+                    playback.client_version = str(client_version)[:64]
+
+            if event_type == "PLAYBACK_STARTED":
+                if playback.startup_ms is not None:
+                    raise ValueError("PLAYBACK_STARTED was already recorded")
+                if startup_ms is None:
+                    raise ValueError("PLAYBACK_STARTED requires startup_ms")
+                playback.startup_ms = int(startup_ms)
+
+            elif event_type == "BUFFERING_STARTED":
+                if playback.startup_ms is None:
+                    raise ValueError("Playback must start before buffering")
+                if playback.buffering_started_at is not None:
+                    raise ValueError("A buffering interval is already active")
+                playback.buffering_started_at = now
+
+            elif event_type == "BUFFERING_ENDED":
+                if playback.buffering_started_at is None:
+                    raise ValueError("BUFFERING_ENDED has no matching start")
+                duration_ms = max(
+                    0,
+                    int((now - playback.buffering_started_at).total_seconds() * 1000),
+                )
+                playback.rebuffer_count += 1
+                playback.total_buffering_ms += duration_ms
+                playback.buffering_started_at = None
+
+            elif event_type == "DECODER_ERROR":
+                if not error_code:
+                    raise ValueError("DECODER_ERROR requires error_code")
+                playback.decoder_error_count += 1
+
+            elif event_type == "PLAYBACK_ENDED":
+                if playback.startup_ms is None:
+                    raise ValueError("Playback must start before it can end")
+                if playback.buffering_started_at is not None:
+                    duration_ms = max(
+                        0,
+                        int(
+                            (now - playback.buffering_started_at)
+                            .total_seconds() * 1000
+                        ),
+                    )
+                    playback.rebuffer_count += 1
+                    playback.total_buffering_ms += duration_ms
+                    playback.buffering_started_at = None
+                playback.status = "ENDED"
+                playback.ended_at = now
+
+            playback.last_event_at = now
+            session.add(PlaybackEventRecord(
+                id=new_id(),
+                session_id=session_id,
+                event_id=event_id,
+                event_type=event_type,
+                received_at=now,
+                duration_ms=duration_ms,
+                startup_ms=(
+                    int(startup_ms) if event_type == "PLAYBACK_STARTED" else None
+                ),
+                error_code=(error_code or None),
+                metadata_json=metadata,
+            ))
+            return {
+                **self._playback_session_summary(playback),
+                "duplicate": False,
+            }
+
+    def get_playback_qoe_report(self, job_id, stage_key):
+        """Aggregate playback QoE beside the same stage's resource/cost data."""
+        now = utcnow()
+        with self._session() as session:
+            stage = self._find_stage(session, job_id, stage_key)
+            sessions = session.execute(
+                select(PlaybackSessionRecord).where(
+                    PlaybackSessionRecord.stage_id == stage.id
+                ).order_by(PlaybackSessionRecord.started_at)
+            ).scalars().all()
+            attempts = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.stage_id == stage.id
+                ).order_by(AttemptRecord.attempt_number)
+            ).scalars().all()
+
+            startup_values = [
+                int(item.startup_ms)
+                for item in sessions if item.startup_ms is not None
+            ]
+            rebuffer_count = sum(item.rebuffer_count for item in sessions)
+            buffering_ms = sum(
+                item.total_buffering_ms for item in sessions
+            )
+            decoder_errors = sum(
+                item.decoder_error_count for item in sessions
+            )
+            wall_time_ms = 0
+            for item in sessions:
+                end_time = item.ended_at or now
+                wall_time_ms += max(
+                    0, int((end_time - item.started_at).total_seconds() * 1000)
+                )
+            buffering_ratio = (
+                (buffering_ms / wall_time_ms * 100.0)
+                if wall_time_ms > 0 else None
+            )
+
+            cpu_seconds = sum(
+                float(item.cpu_seconds or 0.0) for item in attempts
+            )
+            priced_attempts = [
+                item for item in attempts if item.estimated_cost is not None
+            ]
+            cost_currencies = {item.cost_currency for item in priced_attempts}
+            pricing_models = {item.pricing_model_id for item in priced_attempts}
+            report = {
+                "job_id": job_id,
+                "stage_key": stage_key,
+                "stage_status": stage.status,
+                "session_count": len(sessions),
+                "playback_started_count": len(startup_values),
+                "average_startup_ms": (
+                    sum(startup_values) / len(startup_values)
+                    if startup_values else None
+                ),
+                "rebuffer_count": rebuffer_count,
+                "total_buffering_ms": buffering_ms,
+                "decoder_error_count": decoder_errors,
+                "buffering_ratio_percent": buffering_ratio,
+                "total_cpu_seconds": cpu_seconds,
+                "total_estimated_cost": (
+                    sum(float(item.estimated_cost) for item in priced_attempts)
+                    if priced_attempts and len(cost_currencies) == 1
+                    and len(pricing_models) == 1 else None
+                ),
+                "cost_currency": (
+                    next(iter(cost_currencies))
+                    if len(cost_currencies) == 1 else None
+                ),
+                "pricing_model_id": (
+                    next(iter(pricing_models))
+                    if len(pricing_models) == 1 else None
+                ),
+                "sessions": [
+                    self._playback_session_summary(item)
+                    for item in sessions
+                ],
+            }
+            return report
 
 
     def get_stage_snapshot(self, job_id, stage_key):
