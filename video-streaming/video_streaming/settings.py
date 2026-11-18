@@ -219,6 +219,12 @@ FFMPEG_BIN_PATH = env_config.get(
     default="/usr/local/bin/ffmpeg",
     cast=str)
 
+# Metadata-only ffprobe validation timeout per package/rendition.
+PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
+    "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
+    default=10,
+    cast=int)
+
 ##################################################
 #    Redis                                       #
 ##################################################

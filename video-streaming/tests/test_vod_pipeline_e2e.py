@@ -101,6 +101,16 @@ class InMemoryS3:
             callback(len(value))
         return destination_path
 
+    def delete_object(self, key, bucket_name=None, **kwargs):
+        self.buckets.setdefault(bucket_name, {}).pop(key, None)
+        return {"Deleted": key}
+
+    def read_range(self, key, bucket_name=None, start=0, end=0):
+        value = self.buckets.get(bucket_name, {}).get(key)
+        if value is None:
+            return None
+        return value[start:end + 1]
+
     def upload_file_by_path(self, key, file_path, bucket_name=None,
                             callback=None, **kwargs):
         with open(file_path, "rb") as source:
@@ -282,6 +292,76 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         else:
             cls.env_path.write_bytes(cls.previous_env)
         cls.temp_dir.cleanup()
+
+    def test_processing_finished_requires_both_validation_proofs(self):
+        from video_streaming.core.constants import (
+            CacheKeysTemplates,
+            OutputStatus,
+        )
+        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+
+        class StatusProbe:
+            def __init__(self):
+                self.cache = InMemoryCache()
+                self.output_status = OutputStatus
+
+            def can_set_output_status(self, output_id, request_id):
+                return False
+
+        probe = StatusProbe()
+        request_id = "status-invariant-job"
+        output_id = "p0"
+        probe.cache.set(
+            CacheKeysTemplates.JOB_DETAILS.format(request_id=request_id),
+            {"no_watermarked_playlists_ids": [output_id]},
+        )
+        with self.assertRaisesRegex(
+                RuntimeError, "both succeed"):
+            BaseOutputMixin.save_output_status(
+                probe, OutputStatus.PROCESSING_FINISHED,
+                output_id, request_id,
+            )
+
+        probe.cache.set(
+            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+                request_id=request_id, output_id=output_id
+            ),
+            "1",
+        )
+        with self.assertRaisesRegex(
+                RuntimeError, "both succeed"):
+            BaseOutputMixin.save_output_status(
+                probe, OutputStatus.PROCESSING_FINISHED,
+                output_id, request_id,
+            )
+
+        probe.cache.set(
+            CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+                request_id=request_id, output_id=output_id
+            ),
+            "1",
+        )
+        BaseOutputMixin.save_output_status(
+            probe, OutputStatus.PROCESSING_FINISHED,
+            output_id, request_id,
+        )
+
+    def test_output_key_cannot_escape_managed_local_directory(self):
+        from video_streaming.ffmpeg.tasks.mixins.output import BaseOutputMixin
+
+        class PathProbe:
+            def get_outputs_root_directory(self, request_id):
+                return str(self.root / "outputs_" / request_id)
+
+        probe = PathProbe()
+        probe.root = self.root
+        with self.assertRaisesRegex(ValueError, "unsafe local filename"):
+            BaseOutputMixin.ensure_set_output_location(
+                probe,
+                request_id="path-guard",
+                output_id="p0",
+                s3_output_key="folder/..",
+            )
 
     def test_grpc_job_runs_through_celery_ffmpeg_and_storage(self):
         options = self.pb2.ConvertOptions(

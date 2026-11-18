@@ -68,6 +68,22 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertFalse(settings.DEFAULT_PLAYLIST_IS_HLS)
 
+    def test_package_metadata_probe_timeout_is_configurable(self):
+        settings = load_settings({
+            "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS": "4",
+        })
+
+        self.assertEqual(
+            settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS, 4
+        )
+
+    def test_package_metadata_probe_timeout_has_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(
+            settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS, 10
+        )
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 

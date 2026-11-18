@@ -1,10 +1,15 @@
 from abc import ABC
+import os
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
-from video_streaming.ffmpeg.package_validation import validate_streaming_package
+from video_streaming.ffmpeg.package_validation import (
+    reset_package_directory,
+    validate_package,
+)
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
+from video_streaming.core.constants import CacheKeysTemplates
 from .base import BaseStreamingTask
 from .mixins import CreatePlaylistMixin
 
@@ -113,6 +118,17 @@ def create_playlist(
         self.primary_status.OUTPUTS_PROGRESSING,
         request_id)
 
+    # Clear proofs from any earlier attempt; only this attempt may authorize
+    # the later PROCESSING_FINISHED transition.
+    self.cache.delete(
+        CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+            request_id=request_id, output_id=output_id
+        ),
+        CacheKeysTemplates.PACKAGE_REMOTE_VALIDATED.format(
+            request_id=request_id, output_id=output_id
+        ),
+    )
+
     # save output status using output_id and request_id
     self.save_output_status(
         self.output_status.PREPARATION_PROCESSING,
@@ -120,11 +136,18 @@ def create_playlist(
         request_id)
 
     # get output directory and set output_path if is None
+    managed_output_directory = output_path is None
     output_path, directory = self.ensure_set_output_location(
        request_id,
        output_id,
        output_path=output_path,
        s3_output_key=s3_output_key)
+
+    if managed_output_directory:
+        directory = reset_package_directory(
+            directory,
+            self.get_outputs_root_directory(request_id),
+        )
 
     playlist = self.initial_protocol(
         video_path,
@@ -139,6 +162,19 @@ def create_playlist(
         quality_names=quality_names)
 
     try:
+        expected_renditions = []
+        representations = list(playlist.reps)
+        if is_hls:
+            manifest_stem = os.path.splitext(os.path.basename(output_path))[0]
+            expected_renditions = [
+                "{}_{}p.m3u8".format(manifest_stem, rep.size.height)
+                for rep in representations
+            ]
+        else:
+            expected_renditions = [
+                str(index) for index, _ in enumerate(representations)
+            ]
+
         # self.output_path includes the file name
         playlist.output(
             output_path,
@@ -150,10 +186,23 @@ def create_playlist(
             ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run)
-        validate_streaming_package(
+        validation_report = validate_package(
             directory=directory,
             manifest_path=output_path,
-            protocol="hls" if is_hls else "dash",
+            package_type="hls" if is_hls else "dash",
+            expected_renditions=expected_renditions,
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+            metadata_probe_timeout_seconds=(
+                settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
+            ),
+        )
+        validation_report.require_valid()
+        self.cache.set(
+            CacheKeysTemplates.PACKAGE_LOCAL_VALIDATED.format(
+                request_id=request_id,
+                output_id=output_id,
+            ),
+            "1",
         )
     except Exception as e:
 
@@ -179,9 +228,9 @@ def create_playlist(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
-    self.save_output_status(
-        self.output_status.PROCESSING_FINISHED,
-        output_id,
-        request_id)
-
-    return dict(directory=directory)
+    # PROCESSING_FINISHED is intentionally deferred until the upload task
+    # independently verifies every storage dependency and the root manifest.
+    return dict(
+        directory=directory,
+        expected_renditions=expected_renditions,
+    )

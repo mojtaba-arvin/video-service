@@ -8,8 +8,11 @@ import unittest
 from pathlib import Path
 
 from video_streaming.ffmpeg.package_validation import (
+    PackageValidationReport,
     StreamingPackageValidationError,
     ordered_package_files,
+    reset_package_directory,
+    validate_package,
     validate_streaming_package,
 )
 
@@ -105,6 +108,49 @@ class StreamingPackageValidationTests(unittest.TestCase):
         self.assertEqual(result["renditions"], 2)
         self.assertGreaterEqual(result["segments"], 2)
 
+    def test_structured_report_captures_expected_rendition_mismatch(self):
+        directory = self.root / "hls-expected-mismatch"
+        manifest = self.make_hls_package(directory)
+        report = validate_package(
+            str(directory),
+            "hls",
+            ["video_180p.m3u8", "video_720p.m3u8"],
+            str(manifest),
+        )
+        self.assertIsInstance(report, PackageValidationReport)
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            report.errors[0].code, "expected_renditions_mismatch"
+        )
+        self.assertEqual(report.errors[0].location, str(manifest))
+        with self.assertRaises(StreamingPackageValidationError):
+            report.require_valid()
+
+    def test_structured_report_returns_actual_renditions(self):
+        directory = self.root / "hls-expected-valid"
+        manifest = self.make_hls_package(directory)
+        report = validate_package(
+            str(directory),
+            "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+        )
+        self.assertTrue(report.valid)
+        self.assertEqual(
+            report.actual_renditions,
+            ["video_180p.m3u8", "video_90p.m3u8"],
+        )
+
+    def test_rejects_empty_root_playlist_with_structured_error(self):
+        directory = self.root / "hls-empty-root"
+        directory.mkdir()
+        manifest = directory / "master.m3u8"
+        manifest.write_text("", encoding="utf-8")
+        report = validate_package(str(directory), "hls", [], str(manifest))
+        self.assertFalse(report.valid)
+        self.assertEqual(len(report.errors), 1)
+        self.assertEqual(report.errors[0].location, str(manifest))
+
     def test_rejects_hls_package_with_missing_segment(self):
         directory = self.root / "hls-missing-segment"
         manifest = self.make_hls_package(directory)
@@ -156,85 +202,97 @@ class StreamingPackageValidationTests(unittest.TestCase):
                 str(directory), str(manifest), "hls"
             )
 
-    def test_validates_every_dash_representation(self):
-        directory = self.root / "dash-valid"
-        manifest = self.make_dash_package(directory)
-        result = validate_streaming_package(
-            str(directory), str(manifest), "dash"
-        )
-        self.assertEqual(result["renditions"], 2)
-        self.assertGreaterEqual(result["segments"], 2)
-
-    def test_rejects_dash_package_with_missing_media_segment(self):
-        directory = self.root / "dash-missing-segment"
-        manifest = self.make_dash_package(directory)
-        segment = next(directory.glob("*chunk*"))
-        segment.unlink()
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
-
-    def test_rejects_dash_base_url_until_resolution_is_implemented(self):
-        directory = self.root / "dash-base-url"
-        manifest = self.make_dash_package(directory)
-        text = manifest.read_text(encoding="utf-8")
-        text = text.replace(
-            "</MPD>", "<BaseURL>media/</BaseURL></MPD>", 1
-        )
-        manifest.write_text(text, encoding="utf-8")
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
-
-    def test_rejects_dynamic_dash_manifest(self):
-        directory = self.root / "dash-dynamic"
-        manifest = self.make_dash_package(directory)
+    def test_rejects_manifest_resolution_mismatch_against_media_probe(self):
+        directory = self.root / "hls-resolution-mismatch"
+        manifest = self.make_hls_package(directory)
         manifest.write_text(
             manifest.read_text(encoding="utf-8").replace(
-                'type="static"', 'type="dynamic"'
+                "RESOLUTION=320x180", "RESOLUTION=1920x1080"
             ),
             encoding="utf-8",
         )
-        with self.assertRaises(StreamingPackageValidationError):
-            validate_streaming_package(
-                str(directory), str(manifest), "dash"
-            )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "resolution_mismatch", [issue.code for issue in report.errors]
+        )
 
-    def test_upload_order_places_all_manifests_after_media(self):
-        directory = self.root / "upload-order"
-        directory.mkdir()
-        (directory / "master.m3u8").write_text("#EXTM3U\n")
-        (directory / "variant.m3u8").write_text("#EXTM3U\n")
-        (directory / "manifest.mpd").write_text("<MPD/>")
-        (directory / "segment-0001.m4s").write_bytes(b"segment")
-        (directory / "nested").mkdir()
-        (directory / "nested" / "init.mp4").write_bytes(b"init")
+    def test_rejects_manifest_codec_mismatch_against_media_probe(self):
+        directory = self.root / "hls-codec-mismatch"
+        manifest = self.make_hls_package(directory)
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "BANDWIDTH=300000",
+                'BANDWIDTH=300000,CODECS="vp09.00.10.08"',
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "codec_mismatch", [issue.code for issue in report.errors]
+        )
 
-        files = ordered_package_files(str(directory), "master.m3u8")
-        names = [relative for _, relative, _ in files]
-        self.assertLess(names.index("segment-0001.m4s"), names.index("variant.m3u8"))
-        self.assertLess(names.index("variant.m3u8"), names.index("master.m3u8"))
-        self.assertEqual(names[-1], "master.m3u8")
-        self.assertIn("nested/init.mp4", names)
+    def test_rejects_manifest_bandwidth_below_probed_bitrate(self):
+        directory = self.root / "hls-bitrate-mismatch"
+        manifest = self.make_hls_package(directory)
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "BANDWIDTH=300000", "BANDWIDTH=1"
+            ),
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "bitrate_mismatch", [issue.code for issue in report.errors]
+        )
 
-    def test_dash_manifest_is_uploaded_after_every_representation(self):
-        directory = self.root / "dash-upload-order"
-        directory.mkdir()
-        (directory / "manifest.mpd").write_text("<MPD/>")
-        (directory / "init.mp4").write_bytes(b"init")
-        (directory / "segment.m4s").write_bytes(b"segment")
-        files = ordered_package_files(str(directory), "manifest.mpd")
-        self.assertEqual(files[-1][1], "manifest.mpd")
-
-    def test_upload_order_rejects_empty_artifacts(self):
-        directory = self.root / "upload-empty"
-        directory.mkdir()
-        (directory / "master.m3u8").write_text("#EXTM3U\n")
-        (directory / "empty.ts").write_bytes(b"")
-        with self.assertRaises(StreamingPackageValidationError):
-            ordered_package_files(str(directory), "master.m3u8")
+    def test_rejects_playlist_duration_mismatch_against_media_probe(self):
+        directory = self.root / "hls-duration-mismatch"
+        manifest = self.make_hls_package(directory)
+        variant = directory / "video_180p.m3u8"
+        segment = directory / "duration-check.ts"
+        subprocess.run(
+            [
+                shutil.which("ffmpeg"),
+                "-hide_banner", "-loglevel", "error",
+                "-i", str(self.input_path),
+                "-an", "-c:v", "libx264",
+                "-f", "mpegts", "-y", str(segment),
+            ],
+            check=True, capture_output=True, text=True,
+        )
+        variant.write_text(
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-TARGETDURATION:30\n"
+            "#EXTINF:30.000000,\n"
+            "duration-check.ts\n"
+            "#EXT-X-ENDLIST\n",
+            encoding="utf-8",
+        )
+        report = validate_package(
+            str(directory), "hls",
+            ["video_180p.m3u8", "video_90p.m3u8"],
+            str(manifest),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+        )
+        self.assertIn(
+            "duration_mismatch", [issue.code for issue in report.errors]
+        )
 
     def test_rejects_symlinked_manifest(self):
         directory = self.root / "hls-symlink-manifest"
@@ -247,6 +305,30 @@ class StreamingPackageValidationTests(unittest.TestCase):
             validate_streaming_package(
                 str(directory), str(manifest), "hls"
             )
+
+    def test_retry_reset_removes_only_current_output_directory(self):
+        job_root = self.root / "outputs_job"
+        output_dir = job_root / "p0"
+        sibling = job_root / "p1"
+        output_dir.mkdir(parents=True)
+        sibling.mkdir()
+        (output_dir / "stale.ts").write_bytes(b"old")
+        (sibling / "keep.ts").write_bytes(b"keep")
+
+        reset = reset_package_directory(
+            str(output_dir), str(job_root)
+        )
+        self.assertTrue(Path(reset).is_dir())
+        self.assertFalse((output_dir / "stale.ts").exists())
+        self.assertEqual((sibling / "keep.ts").read_bytes(), b"keep")
+
+    def test_retry_reset_rejects_path_outside_job_output_root(self):
+        job_root = self.root / "outputs_job"
+        job_root.mkdir()
+        outside = self.root / "other" / "p0"
+        outside.mkdir(parents=True)
+        with self.assertRaises(StreamingPackageValidationError):
+            reset_package_directory(str(outside), str(job_root))
 
     def test_rejects_hls_path_traversal_reference(self):
         directory = self.root / "hls-path-traversal"

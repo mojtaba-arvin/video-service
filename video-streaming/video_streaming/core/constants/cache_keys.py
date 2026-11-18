@@ -100,6 +100,10 @@ class CacheKeysTemplates:
     # to save size of playlist directory
     OUTPUT_SIZE = _PREFIX + "o_size_{request_id}_{output_id}"
 
+    # package validation/publication boundary proofs
+    PACKAGE_LOCAL_VALIDATED = _PREFIX + "package_local_validated_{request_id}_{output_id}"
+    PACKAGE_REMOTE_VALIDATED = _PREFIX + "package_remote_validated_{request_id}_{output_id}"
+
     # usage
 
     # integer

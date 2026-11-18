@@ -3,10 +3,7 @@ from functools import partial
 from celery import Task
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
 from video_streaming.ffmpeg.utils import S3UploadCallback
-from video_streaming.ffmpeg.package_validation import (
-    ordered_package_files,
-    validate_streaming_package,
-)
+from video_streaming.ffmpeg.package_publication import publish_package
 from .output import BaseOutputMixin
 
 
@@ -68,58 +65,36 @@ class UploadDirectoryMixin(BaseOutputMixin):
                 S3_OUTPUT_BUCKET_IS_REQUIRED,
                 request_kwargs=self.request.kwargs)
 
-    @staticmethod
-    def get_directory_size(
-            directory: str,
-            manifest_name: str) -> tuple[int, list[tuple[str, str, int]]]:
-        files = ordered_package_files(directory, manifest_name)
-        total_size = sum(file_size for _, _, file_size in files)
-        return total_size, files
-
-    def upload_directory(self,
-                         directory,
-                         s3_output_key,
-                         s3_output_bucket,
-                         output_id,
-                         request_id,
-                         protocol) -> int:
-        """upload the directory of the output files to S3 object storage
-         Returns directory size
-         """
-
-        manifest_name = os.path.basename(s3_output_key)
-        manifest_path = os.path.join(directory, manifest_name)
-        validate_streaming_package(directory, manifest_path, protocol)
-
+    def upload_directory(
+            self,
+            directory,
+            s3_output_key,
+            s3_output_bucket,
+            output_id,
+            request_id,
+            protocol,
+            expected_renditions=None) -> int:
+        """Validate and publish package artifacts with manifests last."""
         directory_callback = S3UploadCallback(
-                task=self,
-                task_id=self.request.id.__str__(),
-                output_id=output_id,
-                request_id=request_id,
-            ).directory_progress
+            task=self,
+            task_id=self.request.id.__str__(),
+            output_id=output_id,
+            request_id=request_id,
+        ).directory_progress
 
-        total_size, files = self.get_directory_size(directory, manifest_name)
-        total_files = len(files)
-        for number, (file_path, relative_path, file_size) in \
-                enumerate(files):
-            partial_callback = partial(
-                directory_callback,
-                total_size,
-                total_files,
-                number)
-
-            # Preserve nested package paths under the manifest's object prefix.
-            s3_folder = s3_output_key.rpartition('/')[0]
-            object_key = "/".join(
-                part for part in (s3_folder, relative_path) if part
-            )
-
-            self.s3_service.upload_file_by_path(
-                key=object_key,
-                file_path=file_path,
-                bucket_name=s3_output_bucket,
-                callback=partial_callback
-            )
-
-        # return the directory size
-        return total_size
+        manifest_path = os.path.join(
+            directory, os.path.basename(s3_output_key)
+        )
+        publication = publish_package(
+            directory=directory,
+            manifest_path=manifest_path,
+            protocol=protocol,
+            expected_renditions=expected_renditions,
+            s3_output_key=s3_output_key,
+            s3_output_bucket=s3_output_bucket,
+            storage=self.s3_service,
+            callback_factory=lambda index, total_files, total_size: partial(
+                directory_callback, total_size, total_files, index
+            ),
+        )
+        return publication["directory_size"]
