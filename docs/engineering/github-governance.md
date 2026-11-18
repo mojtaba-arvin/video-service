@@ -103,8 +103,13 @@ aggregate status check named `Quality gates`.
   the VOD integration path, and PostgreSQL repository tests on Python 3.12.
   The Python 3.9 PostgreSQL repository suite is part of the integration job,
   reusing its existing database service.
-- FFmpeg is checked before installation; apt update/install is only performed
-  when the runner does not already provide both FFmpeg and FFprobe.
+- FFmpeg is installed only in the VOD integration job. The Python regression
+  and PostgreSQL-only jobs do not install media binaries; the real thumbnail
+  and HLS/DASH package suites run once in the FFmpeg job.
+- The standalone synthetic-corpus generation step is omitted because the
+  HLS/DASH harness creates and validates its own temporary fixtures.
+- FFmpeg/FFprobe are checked before installation; apt update/install occurs
+  only when the integration runner does not already provide both binaries.
 - Pip caching remains keyed to the corresponding pinned requirement file.
 - The change classifier fails closed: an unknown/empty diff runs all checks.
 - Concurrency cancels superseded commits for the same PR/ref. Independent PRs
