@@ -3,7 +3,12 @@ import time
 import sys
 import psutil
 from celery import Task, states
+from celery.utils.log import get_task_logger
 from video_streaming.core.constants import CacheKeysTemplates
+from video_streaming.execution.process_control import terminate_process_tree
+
+
+logger = get_task_logger(__name__)
 
 
 class FfmpegCallback(object):
@@ -49,8 +54,9 @@ class FfmpegCallback(object):
                     f"\r{self.request_id} | {self.output_id} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
                 )
                 sys.stdout.flush()
-        except psutil.NoSuchProcess as e:
-            print(e)
+        except psutil.NoSuchProcess:
+            # FFmpeg may exit between callback delivery and process sampling.
+            return
 
     # def ffmpeg_progress(self, ffmpeg_line, process):
     #     try:
@@ -77,10 +83,9 @@ class FfmpegCallback(object):
                                                self.output_id)
 
         if is_job_stop or is_output_stop:
-            try:
-                process.kill()
-            except Exception as e:
-                print(e)
+            # Stop the complete FFmpeg process tree, not only its direct PID.
+            # This prevents child encoders from surviving a cancelled task.
+            terminate_process_tree(process)
             # raise inside callback, is just to finish processing,
             # so, will write 'ffmpeg executed command successfully' log
             self.task.raise_ignore(
@@ -123,9 +128,11 @@ class FfmpegCallback(object):
                     request_id=self.request_id,
                     output_id=self.output_id),
                 current_memory_rss)
-        except Exception as e:
-            # TODO notify developer
-            print(e)
+        except Exception as exc:
+            logger.warning(
+                "Unable to capture FFmpeg process metrics (%s)",
+                type(exc).__name__,
+            )
 
     def _save_start_usage(self, psutil_process):
         try:
@@ -147,6 +154,8 @@ class FfmpegCallback(object):
                     output_id=self.output_id),
                 memory_rss)
             self.start_memory_rss = memory_rss
-        except Exception as e:
-            # TODO notify developer
-            print(e)
+        except Exception as exc:
+            logger.warning(
+                "Unable to capture FFmpeg process metrics (%s)",
+                type(exc).__name__,
+            )
