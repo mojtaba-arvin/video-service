@@ -357,8 +357,13 @@ def build_vod_execution_plan(
     ))
     base_dependency = "inputs-funnel"
     watermark_dependency = None
-    if watermark_input_key and any(
-            item["use_watermark"] for item in playlists + thumbnails):
+    needs_watermark = bool(
+        watermark_input_key and (
+            watermark_output_key
+            or any(item["use_watermark"] for item in playlists + thumbnails)
+        )
+    )
+    if needs_watermark:
         watermark_dependency = "watermark-apply"
         nodes.append(_node(
             watermark_dependency, "video.watermark.apply", [base_dependency], {
