@@ -307,6 +307,56 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.env_path.write_bytes(cls.previous_env)
         cls.temp_dir.cleanup()
 
+    def test_qoe_proto_preserves_partial_cost_coverage_fields(self):
+        from video_streaming.workflows.qoe import playback_qoe_report_payload
+
+        report = {
+            "job_id": "qoe-proto-job",
+            "stage_key": "playlist-0",
+            "stage_status": "FINISHED",
+            "session_count": 2,
+            "playback_started_count": 2,
+            "average_startup_ms": 120,
+            "rebuffer_count": 1,
+            "total_buffering_ms": 350,
+            "decoder_error_count": 0,
+            "buffering_ratio_percent": 0.5,
+            "total_cpu_seconds": 8.5,
+            "total_estimated_cost": None,
+            "partial_estimated_cost": 1.75,
+            "cost_estimate_complete": False,
+            "cost_currency": None,
+            "pricing_model_id": None,
+            "priced_attempt_count": 1,
+            "total_attempt_count": 2,
+            "cost_coverage": {
+                "complete_attempt_count": 0,
+                "missing_dimensions_by_attempt": {"gpu_seconds": 2},
+                "excluded_dimensions": ["provider_invoice"],
+                "pricing_model_versions": ["relative-resource-index-v1:1"],
+            },
+        }
+
+        payload = playback_qoe_report_payload(report)
+        response = self.pb2.PlaybackQoEReportResponse(**payload)
+
+        self.assertFalse(response.total_estimated_cost_available)
+        self.assertTrue(response.partial_estimated_cost_available)
+        self.assertEqual(response.partial_estimated_cost, 1.75)
+        self.assertEqual(response.complete_attempt_count, 0)
+        self.assertEqual(
+            dict(response.missing_cost_dimensions_by_attempt),
+            {"gpu_seconds": 2},
+        )
+        self.assertEqual(
+            list(response.excluded_cost_dimensions),
+            ["provider_invoice"],
+        )
+        self.assertEqual(
+            list(response.pricing_model_versions),
+            ["relative-resource-index-v1:1"],
+        )
+
     def test_processing_finished_requires_durable_publication_completion(self):
         from video_streaming.core.constants import (
             CacheKeysTemplates,
