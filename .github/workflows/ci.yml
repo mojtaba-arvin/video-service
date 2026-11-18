@@ -92,7 +92,14 @@ jobs:
         env:
           BASE_SHA: ${{ needs.detect-changes.outputs.base_sha }}
           HEAD_SHA: ${{ needs.detect-changes.outputs.head_sha }}
-        run: python3 scripts/check_markdown_links.py --base "$BASE_SHA" --head "$HEAD_SHA"
+        shell: bash
+        run: |
+          if git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null && \
+             git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            python3 scripts/check_markdown_links.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 scripts/check_markdown_links.py --all
+          fi
 
   unit-tests:
     name: Legacy runtime regression (Python 3.9)
