@@ -6,6 +6,7 @@ from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.metrics import configured_pricing
 from .base import BaseStreamingTask
 from .mixins import UploadDirectoryMixin
 
@@ -182,6 +183,7 @@ def upload_directory(self,
                     publication["validation_report"].get("errors", [])
                 ),
             },
+            pricing=configured_pricing(settings),
         )
     except Exception as exc:
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
