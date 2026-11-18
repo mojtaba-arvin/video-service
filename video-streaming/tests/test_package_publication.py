@@ -16,6 +16,7 @@ class FakeObjectStorage:
         self.objects = {}
         self.upload_order = []
         self.fail_upload_key = None
+        self.partial_fail_upload_key = None
         self.unreadable_key = None
         self.events = []
 
@@ -37,6 +38,9 @@ class FakeObjectStorage:
     def upload_file_by_path(self, key, file_path, bucket_name=None,
                             callback=None, **kwargs):
         self.events.append(("upload", key))
+        if key == self.partial_fail_upload_key:
+            self.objects[key] = b"partial-upload"
+            raise IOError("simulated partial object upload failure")
         if key == self.fail_upload_key:
             raise IOError("simulated object upload failure")
         value = Path(file_path).read_bytes()
@@ -150,6 +154,15 @@ class PackagePublicationTests(unittest.TestCase):
             self.publish()
         self.assertNotIn("vod/master.m3u8", self.storage.objects)
         self.assertNotIn("vod/variant.m3u8", self.storage.objects)
+
+    def test_partial_segment_upload_is_removed_after_failure(self):
+        self.storage.partial_fail_upload_key = "vod/segment_000.ts"
+        with self.assertRaises(IOError):
+            self.publish()
+        self.assertNotIn("vod/segment_000.ts", self.storage.objects)
+        self.assertNotIn("vod/segment_001.ts", self.storage.objects)
+        self.assertNotIn("vod/variant.m3u8", self.storage.objects)
+        self.assertNotIn(self.root_key, self.storage.objects)
 
     def test_unreadable_segment_prevents_variant_and_master_publication(self):
         self.storage.unreadable_key = "vod/segment_000.ts"
