@@ -83,7 +83,7 @@ class WorkflowRecord(Base):
     workflow_version = Column(String(64), nullable=True)
     execution_plan_schema_version = Column(Integer, nullable=True)
     execution_plan_fingerprint = Column(String(64), nullable=True)
-    execution_plan_json = Column(JSON, nullable=True)
+    execution_plan_json = Column(JSON(none_as_null=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
