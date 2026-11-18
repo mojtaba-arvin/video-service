@@ -1,9 +1,11 @@
 """FFmpeg-backed thumbnail rendering and output validation."""
 
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import ffmpeg
+
+from video_streaming.execution.process_control import run_cancellable_process
 
 
 class ThumbnailValidationError(RuntimeError):
@@ -89,7 +91,9 @@ def render_thumbnail(
         scale_width: int = -1,
         scale_height: int = -1,
         ffmpeg_bin_path: str = "ffmpeg",
-        ffprobe_bin_path: str = "ffprobe"
+        ffprobe_bin_path: str = "ffprobe",
+        timeout_seconds: int = 300,
+        should_cancel: Optional[Callable[[], bool]] = None
         ) -> str:
     """Render one frame and return only after FFprobe validates the artifact."""
     scale_width, scale_height = normalize_thumbnail_scale(
@@ -97,17 +101,21 @@ def render_thumbnail(
         scale_height
     )
 
-    (
+    stream = (
         ffmpeg
         .input(video_path, ss=thumbnail_time)
         .filter("scale", scale_width, scale_height)
         .output(output_path, vframes=1)
-        .run(
-            cmd=ffmpeg_bin_path,
-            capture_stdout=True,
-            capture_stderr=True,
-            overwrite_output=True
-        )
+    )
+    command = ffmpeg.compile(
+        stream,
+        cmd=ffmpeg_bin_path,
+        overwrite_output=True,
+    )
+    run_cancellable_process(
+        command,
+        timeout_seconds=timeout_seconds,
+        should_cancel=should_cancel,
     )
 
     validate_thumbnail_output(
