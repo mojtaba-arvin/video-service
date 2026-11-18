@@ -10,12 +10,17 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    JSON, BigInteger, Column, DateTime, Float, ForeignKey, Index, Integer,
-    Numeric, String, Text, UniqueConstraint, create_engine, select, func,
+    JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    Index, Integer, Numeric, String, Text, UniqueConstraint, create_engine,
+    select, func,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from .execution_plan import (
+    execution_plan_sha256,
+    validate_execution_plan,
+)
 from .domain import (
     AttemptState,
     IdempotencyConflict,
@@ -55,6 +60,17 @@ class JobRecord(Base):
 
 class WorkflowRecord(Base):
     __tablename__ = "workflow_workflows"
+    __table_args__ = (
+        CheckConstraint(
+            "(execution_plan_json IS NULL AND "
+            "execution_plan_fingerprint IS NULL AND "
+            "execution_plan_schema_version IS NULL AND workflow_version IS NULL) "
+            "OR (execution_plan_json IS NOT NULL AND "
+            "execution_plan_fingerprint IS NOT NULL AND "
+            "execution_plan_schema_version IS NOT NULL AND workflow_version IS NOT NULL)",
+            name="ck_workflow_execution_plan_snapshot_complete",
+        ),
+    )
 
     id = Column(String(36), primary_key=True)
     job_id = Column(
@@ -64,6 +80,10 @@ class WorkflowRecord(Base):
     name = Column(String(128), nullable=False)
     state = Column(String(24), nullable=False, default=WorkflowState.QUEUED.value)
     execution_backend = Column(String(64), nullable=True)
+    workflow_version = Column(String(64), nullable=True)
+    execution_plan_schema_version = Column(Integer, nullable=True)
+    execution_plan_fingerprint = Column(String(64), nullable=True)
+    execution_plan_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -317,8 +337,42 @@ class WorkflowRepository:
             reference_id="",
             workflow_name="video.vod",
             stage_specs=None,
-            metadata=None):
-        """Create the durable workflow once, or return the prior job on replay."""
+            metadata=None,
+            execution_plan=None):
+        """Atomically create job, workflow, stages and an optional immutable plan."""
+        plan = None
+        plan_fingerprint = None
+        if execution_plan is not None:
+            plan = validate_execution_plan(execution_plan)
+            if plan["job_id"] != job_id:
+                raise ValueError("execution plan job_id must match job_id")
+            if plan["workflow_name"] != workflow_name:
+                raise ValueError("execution plan workflow_name must match workflow_name")
+            plan_fingerprint = execution_plan_sha256(plan)
+            plan_stage_specs = [{
+                "stage_key": node["stage_key"],
+                "operation": node["operation"],
+                "ordinal": index,
+                "input": node["parameters"],
+                "output": {},
+            } for index, node in enumerate(plan["nodes"])]
+            if stage_specs is None:
+                stage_specs = plan_stage_specs
+            else:
+                supplied = list(stage_specs)
+                expected = [
+                    (item["stage_key"], item["operation"])
+                    for item in plan_stage_specs
+                ]
+                actual = [
+                    (item["stage_key"], item["operation"])
+                    for item in supplied
+                ]
+                if actual != expected:
+                    raise ValueError(
+                        "stage_specs must match execution plan node order, keys and operations"
+                    )
+                stage_specs = supplied
         stage_specs = list(stage_specs or [])
         try:
             with self._session.begin() as session:
@@ -332,6 +386,22 @@ class WorkflowRepository:
                         raise IdempotencyConflict(
                             "Idempotency key was already used with a different request"
                         )
+                    existing_workflow = session.execute(
+                        select(WorkflowRecord).where(
+                            WorkflowRecord.job_id == existing.id
+                        )
+                    ).scalar_one()
+                    if (
+                            plan_fingerprint is not None
+                            and existing_workflow.execution_plan_fingerprint
+                            is not None
+                            and existing_workflow.execution_plan_fingerprint
+                            != plan_fingerprint):
+                        raise IdempotencyConflict(
+                            "Idempotency key resolves to a different execution plan"
+                        )
+                    # A legacy workflow without a plan remains legacy on replay;
+                    # never mutate already-accepted work during a deployment.
                     return existing.id, False
 
                 job = JobRecord(
@@ -348,11 +418,14 @@ class WorkflowRepository:
                     job_id=job_id,
                     name=workflow_name,
                     state=WorkflowState.QUEUED.value,
+                    workflow_version=(plan["workflow_version"] if plan else None),
+                    execution_plan_schema_version=(plan["schema_version"] if plan else None),
+                    execution_plan_fingerprint=plan_fingerprint,
+                    execution_plan_json=plan,
                 )
                 session.add_all([job, workflow])
-                # Insert parent rows before dependent events and stages. This
-                # explicit flush avoids relying on unit-of-work table ordering
-                # for unrelated ORM objects submitted in one batch.
+                # Parent rows, immutable plan and all stage projections commit
+                # together; no accepted plan can exist without its stages.
                 session.flush()
                 _record_event(
                     session,
@@ -361,7 +434,13 @@ class WorkflowRepository:
                     "JOB_CREATED",
                     from_state=None,
                     to_state=JobState.QUEUED.value,
-                    payload={"workflow_name": workflow_name},
+                    payload={
+                        "workflow_name": workflow_name,
+                        "execution_plan_schema_version": (
+                            plan["schema_version"] if plan else None
+                        ),
+                        "execution_plan_fingerprint": plan_fingerprint,
+                    },
                 )
                 for index, spec in enumerate(stage_specs):
                     session.add(StageRecord(
@@ -389,7 +468,37 @@ class WorkflowRepository:
                     raise IdempotencyConflict(
                         "Idempotency key was already used with a different request"
                     )
+                existing_workflow = session.execute(
+                    select(WorkflowRecord).where(
+                        WorkflowRecord.job_id == existing.id
+                    )
+                ).scalar_one()
+                if (
+                        plan_fingerprint is not None
+                        and existing_workflow.execution_plan_fingerprint is not None
+                        and existing_workflow.execution_plan_fingerprint != plan_fingerprint):
+                    raise IdempotencyConflict(
+                        "Idempotency key resolves to a different execution plan"
+                    )
                 return existing.id, False
+
+    def get_execution_plan(self, job_id):
+        """Return a detached immutable plan snapshot and its verification metadata."""
+        with self._session() as session:
+            workflow = session.execute(
+                select(WorkflowRecord).where(WorkflowRecord.job_id == job_id)
+            ).scalar_one_or_none()
+            if workflow is None:
+                return None
+            if workflow.execution_plan_json is None:
+                return None
+            return {
+                "workflow_id": workflow.id,
+                "workflow_version": workflow.workflow_version,
+                "schema_version": workflow.execution_plan_schema_version,
+                "fingerprint": workflow.execution_plan_fingerprint,
+                "plan": workflow.execution_plan_json,
+            }
 
     def _find_stage(self, session, job_id, stage_key, lock=False):
         query = (
@@ -1525,6 +1634,10 @@ class WorkflowRepository:
                     "id": workflow.id,
                     "name": workflow.name,
                     "status": workflow.state,
+                    "version": workflow.workflow_version,
+                    "execution_plan_schema_version": workflow.execution_plan_schema_version,
+                    "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
+                    "execution_plan": workflow.execution_plan_json,
                 },
                 "stages": [],
                 "events": [{
