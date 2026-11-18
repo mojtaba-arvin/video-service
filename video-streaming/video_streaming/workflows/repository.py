@@ -606,6 +606,20 @@ class WorkflowRepository:
                     StageRecord.workflow_id == workflow.id
                 )
             ).scalars().all()
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_FINISHED",
+                from_state=previous_status,
+                to_state=StageState.FINISHED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "artifact_count": len(artifacts),
+                    "output_bytes": metrics.get("output_bytes"),
+                },
+            )
             if stages and all(
                     item.status == StageState.FINISHED.value
                     for item in stages):
@@ -623,20 +637,6 @@ class WorkflowRepository:
                     from_state=JobState.RUNNING.value,
                     to_state=JobState.FINISHED.value,
                 )
-            _record_event(
-                session,
-                job_id,
-                workflow.id,
-                "STAGE_FINISHED",
-                from_state=previous_status,
-                to_state=StageState.FINISHED.value,
-                stage_id=stage.id,
-                attempt_id=attempt_id,
-                payload={
-                    "artifact_count": len(artifacts),
-                    "output_bytes": metrics.get("output_bytes"),
-                },
-            )
         return True
 
     def fail_attempt(
