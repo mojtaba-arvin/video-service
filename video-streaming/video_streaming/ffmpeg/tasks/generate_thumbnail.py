@@ -122,6 +122,11 @@ def generate_thumbnail(
     )
     Path(directory).mkdir(parents=True, exist_ok=True)
 
+    usage_metrics = {}
+
+    def capture_usage(metrics):
+        usage_metrics.update(metrics)
+
     try:
         render_thumbnail(
             video_path=video_path,
@@ -136,6 +141,7 @@ def generate_thumbnail(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            usage_callback=capture_usage,
         )
         dimensions = validate_thumbnail_output(
             output_path=output_path,
@@ -165,7 +171,10 @@ def generate_thumbnail(
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
                 metrics={
                     "input_bytes": input_bytes,
-                    "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                    "cpu_seconds": usage_metrics.get(
+                        "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                    ),
+                    "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
                 },
                 pricing=configured_pricing(settings),
             )
@@ -185,7 +194,10 @@ def generate_thumbnail(
             error_message=str(exc),
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
             },
             pricing=configured_pricing(settings),
         )
@@ -216,7 +228,10 @@ def generate_thumbnail(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        cpu_seconds=usage_metrics.get(
+            "cpu_seconds", child_cpu_seconds_since(cpu_started)
+        ),
+        peak_memory_bytes=usage_metrics.get("peak_memory_bytes"),
         validation_report=validation_report,
         artifact_type="image_thumbnail",
         media_type="image/{}".format(
