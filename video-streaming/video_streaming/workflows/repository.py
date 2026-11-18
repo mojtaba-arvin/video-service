@@ -498,6 +498,25 @@ class WorkflowRepository:
                     )
                 return existing.id, False
 
+    @staticmethod
+    def _verify_execution_plan_snapshot(workflow, job_id):
+        """Verify plan bytes and their denormalized version/identity columns."""
+        plan = workflow.execution_plan_json
+        if plan is None:
+            return
+        actual_fingerprint = execution_plan_sha256(plan)
+        if not hmac.compare_digest(
+                actual_fingerprint,
+                workflow.execution_plan_fingerprint or ""):
+            raise RuntimeError("Persisted execution plan fingerprint mismatch")
+        if (
+                plan.get("job_id") != job_id
+                or plan.get("workflow_name") != workflow.name
+                or plan.get("schema_version")
+                != workflow.execution_plan_schema_version
+                or plan.get("workflow_version") != workflow.workflow_version):
+            raise RuntimeError("Persisted execution plan metadata mismatch")
+
     def get_execution_plan(self, job_id):
         """Return a detached immutable plan snapshot and its verification metadata."""
         with self._session() as session:
@@ -508,13 +527,7 @@ class WorkflowRepository:
                 return None
             if workflow.execution_plan_json is None:
                 return None
-            actual_fingerprint = execution_plan_sha256(
-                workflow.execution_plan_json
-            )
-            if not hmac.compare_digest(
-                    actual_fingerprint,
-                    workflow.execution_plan_fingerprint or ""):
-                raise RuntimeError("Persisted execution plan fingerprint mismatch")
+            self._verify_execution_plan_snapshot(workflow, job_id)
             return {
                 "workflow_id": workflow.id,
                 "workflow_version": workflow.workflow_version,
@@ -1646,16 +1659,7 @@ class WorkflowRepository:
                     WorkflowEventRecord.job_id == job_id
                 ).order_by(WorkflowEventRecord.occurred_at, WorkflowEventRecord.id)
             ).scalars().all()
-            if workflow.execution_plan_json is not None:
-                actual_fingerprint = execution_plan_sha256(
-                    workflow.execution_plan_json
-                )
-                if not hmac.compare_digest(
-                        actual_fingerprint,
-                        workflow.execution_plan_fingerprint or ""):
-                    raise RuntimeError(
-                        "Persisted execution plan fingerprint mismatch"
-                    )
+            self._verify_execution_plan_snapshot(workflow, job_id)
             snapshot = {
                 "id": job.id,
                 "idempotency_key": job.idempotency_key,
