@@ -175,6 +175,7 @@ def generate_thumbnail(
                         "cpu_seconds", child_cpu_seconds_since(cpu_started)
                     ),
                     "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                    "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
                 },
                 pricing=configured_pricing(settings),
             )
@@ -215,7 +216,11 @@ def generate_thumbnail(
             reason="CANCELLED_AFTER_THUMBNAIL_VALIDATION",
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
             },
             pricing=configured_pricing(settings),
         )
@@ -232,6 +237,7 @@ def generate_thumbnail(
             "cpu_seconds", child_cpu_seconds_since(cpu_started)
         ),
         peak_memory_bytes=usage_metrics.get("peak_memory_bytes"),
+        memory_duration_ms=usage_metrics.get("memory_duration_ms"),
         validation_report=validation_report,
         artifact_type="image_thumbnail",
         media_type="image/{}".format(
