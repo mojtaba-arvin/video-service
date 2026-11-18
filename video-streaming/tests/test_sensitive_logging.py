@@ -68,8 +68,9 @@ class SensitiveLoggingTests(unittest.TestCase):
 
         self.assertTrue(result)
         rendered = "\\n".join(captured.output)
-        self.assertIn("204", rendered)
-        self.assertIn("job-123", rendered)
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].http_status, 204)
+        self.assertEqual(captured.records[0].request_id, "job-123")
         self.assertNotIn(secret, rendered)
         self.assertNotIn(url, rendered)
 
