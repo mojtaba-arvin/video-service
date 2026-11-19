@@ -979,7 +979,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(output.file_size, 512)
         self.assertEqual(output.spent_time, 2.0)
-        self.assertEqual(output.cpu_usage, 0.8)
+        self.assertAlmostEqual(output.cpu_usage, 0.8, places=6)
         self.assertEqual(output.memory_usage, 2048)
 
 
