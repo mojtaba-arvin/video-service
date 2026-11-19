@@ -1,3 +1,5 @@
+import grpc
+
 from video_streaming.core.constants import ErrorMessages, ErrorCodes
 from video_streaming.core.exceptions import GrpcBaseException
 
@@ -11,7 +13,8 @@ __all__ = [
     'JobIsFailedException',
     'JobIsRevokedException',
     'JobIsFinishedException',
-    'NoWatermarkToUseException'
+    'NoWatermarkToUseException',
+    'ResourceNotFoundOrDeniedException',
 ]
 
 
@@ -58,3 +61,10 @@ class JobIsFinishedException(GrpcBaseException):
 class NoWatermarkToUseException(GrpcBaseException):
     status_code = ErrorCodes.NO_WATERMARK_TO_USE
     message = ErrorMessages.NO_WATERMARK_TO_USE
+
+
+class ResourceNotFoundOrDeniedException(GrpcBaseException):
+    """Non-enumerating authorization denial for tenant-scoped resources."""
+
+    status_code = grpc.StatusCode.NOT_FOUND
+    message = "Resource not found"
