@@ -108,6 +108,21 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 3600)
 
+    def test_playlist_execution_timeout_is_configurable(self):
+        settings = load_settings({
+            "FFMPEG_PLAYLIST_TIMEOUT_SECONDS": "5400",
+        })
+        self.assertEqual(settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS, 5400)
+
+    def test_playlist_execution_timeout_has_safe_default(self):
+        settings = load_settings({})
+        self.assertEqual(settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS, 7200)
+
+    def test_playlist_execution_timeout_must_be_bounded(self):
+        with self.assertRaisesRegex(
+                ValueError, "FFMPEG_PLAYLIST_TIMEOUT_SECONDS"):
+            load_settings({"FFMPEG_PLAYLIST_TIMEOUT_SECONDS": "0"})
+
     def test_webhook_timeout_defaults_are_bounded(self):
         settings = load_settings({})
 
