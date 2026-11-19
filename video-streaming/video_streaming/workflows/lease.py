@@ -62,6 +62,11 @@ class AttemptLeaseHeartbeat:
         self._last_renewed = monotonic()
         self._lost = False
 
+    def __reduce__(self):
+        raise TypeError(
+            "AttemptLeaseHeartbeat is process-local and cannot be serialized"
+        )
+
     def __repr__(self):
         return (
             "AttemptLeaseHeartbeat(job_id={!r}, stage_key={!r}, "
