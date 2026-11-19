@@ -12,7 +12,9 @@ from video_streaming.workflows.domain import (
     StageAlreadyRunning,
     StageState,
 )
-from video_streaming.workflows.repository import WorkflowRepository, utcnow
+from video_streaming.workflows.repository import WorkflowRepository, WorkflowRecord, utcnow
+from video_streaming.workflows.execution_plan import execution_plan_sha256
+from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
 
 @unittest.skipUnless(
@@ -79,6 +81,186 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         snapshot = self.repository.get_job_snapshot(job_id)
         self.assertEqual(len(snapshot["stages"]), 1)
+
+
+    def build_plan(self, job_id, output_key="master.m3u8"):
+        return build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": "input-media", "key": "source.mp4"},
+                "playlists": [{
+                    "bucket": "output-media",
+                    "key": output_key,
+                    "protocol": "hls",
+                    "quality_names": ["360p"],
+                    "use_watermark": False,
+                    "dont_replace": False,
+                    "create_bucket": False,
+                }],
+                "thumbnails": [],
+            },
+            workflow_version="vod-v1",
+        )
+
+    def test_execution_plan_is_persisted_atomically_with_workflow_and_stages(self):
+        job_id = str(uuid4())
+        plan = self.build_plan(job_id)
+        returned_id, created = self.repository.create_job(
+            job_id,
+            "idem-plan-{}".format(uuid4()),
+            "e" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            stage_specs=[{
+                "stage_key": node["stage_key"],
+                "operation": node["operation"],
+                "input": {"webhook_url": "https://must-not-be-persisted.invalid"},
+            } for node in plan["nodes"]],
+        )
+
+        self.assertEqual((returned_id, created), (job_id, True))
+        persisted = self.repository.get_execution_plan(job_id)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted["plan"], plan)
+        self.assertEqual(persisted["schema_version"], plan["schema_version"])
+        self.assertEqual(persisted["workflow_version"], "vod-v1")
+        self.assertEqual(persisted["fingerprint"], execution_plan_sha256(plan))
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["workflow"]["execution_plan_fingerprint"], persisted["fingerprint"])
+        self.assertNotIn("execution_plan", snapshot["workflow"])
+        self.assertEqual(
+            [(stage["key"], stage["operation"]) for stage in snapshot["stages"]],
+            [(node["stage_key"], node["operation"]) for node in plan["nodes"]],
+        )
+        self.assertTrue(all(not stage["input"] for stage in snapshot["stages"]))
+        created_event = snapshot["events"][0]
+        self.assertEqual(created_event["type"], "JOB_CREATED")
+        self.assertEqual(created_event["payload"]["execution_plan_fingerprint"], persisted["fingerprint"])
+
+    def test_idempotent_replay_rejects_a_different_execution_plan(self):
+        job_id = str(uuid4())
+        key = "idem-plan-conflict-{}".format(uuid4())
+        self.repository.create_job(
+            job_id, key, "f" * 64, execution_plan=self.build_plan(job_id)
+        )
+
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.create_job(
+                job_id,
+                key,
+                "f" * 64,
+                execution_plan=self.build_plan(job_id, "different/master.m3u8"),
+            )
+
+        persisted = self.repository.get_execution_plan(job_id)
+        self.assertEqual(persisted["fingerprint"], execution_plan_sha256(self.build_plan(job_id)))
+
+
+
+    def test_idempotent_plan_replay_rebinds_generated_job_id(self):
+        original_job_id = str(uuid4())
+        key = "idem-plan-generated-id-{}".format(uuid4())
+        self.repository.create_job(
+            original_job_id,
+            key,
+            "4" * 64,
+            execution_plan=self.build_plan(original_job_id),
+        )
+
+        retry_job_id = str(uuid4())
+        replay_id, created = self.repository.create_job(
+            retry_job_id,
+            key,
+            "4" * 64,
+            execution_plan=self.build_plan(retry_job_id),
+        )
+
+        self.assertEqual((replay_id, created), (original_job_id, False))
+        self.assertEqual(
+            self.repository.get_execution_plan(original_job_id)["fingerprint"],
+            execution_plan_sha256(self.build_plan(original_job_id)),
+        )
+
+    def test_execution_plan_fingerprint_detects_persisted_mutation(self):
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-plan-tamper-{}".format(uuid4()),
+            "3" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        with self.repository._session.begin() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            mutated_plan = dict(workflow.execution_plan_json)
+            mutated_plan["workflow_version"] = "tampered"
+            workflow.execution_plan_json = mutated_plan
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan fingerprint mismatch"):
+            self.repository.get_execution_plan(job_id)
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan fingerprint mismatch"):
+            self.repository.get_job_snapshot(job_id)
+
+
+    def test_execution_plan_denormalized_metadata_tampering_is_detected(self):
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-plan-metadata-tamper-{}".format(uuid4()),
+            "5" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        with self.repository._session.begin() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            workflow.workflow_version = "tampered"
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan metadata mismatch"):
+            self.repository.get_execution_plan(job_id)
+
+        with self.assertRaisesRegex(
+                RuntimeError, "execution plan metadata mismatch"):
+            self.repository.get_job_snapshot(job_id)
+
+    def test_legacy_idempotent_replay_does_not_mutate_accepted_workflow(self):
+        job_id = str(uuid4())
+        key = "idem-legacy-plan-{}".format(uuid4())
+        self.repository.create_job(job_id, key, "1" * 64)
+
+        replay_id, created = self.repository.create_job(
+            str(uuid4()),
+            key,
+            "1" * 64,
+            execution_plan=self.build_plan(job_id),
+        )
+
+        self.assertEqual((replay_id, created), (job_id, False))
+        self.assertIsNone(self.repository.get_execution_plan(job_id))
+
+    def test_execution_plan_and_stage_projection_must_match(self):
+        job_id = str(uuid4())
+        plan = self.build_plan(job_id)
+        with self.assertRaises(ValueError):
+            self.repository.create_job(
+                job_id,
+                "idem-plan-stage-mismatch-{}".format(uuid4()),
+                "2" * 64,
+                execution_plan=plan,
+                stage_specs=[{
+                    "stage_key": "wrong-stage",
+                    "operation": "video.hls.package",
+                }],
+            )
+        self.assertIsNone(self.repository.get_job_snapshot(job_id))
 
     def test_state_machine_persists_validation_artifact_and_cost_metrics(self):
         job_id = self.create_job("p0")

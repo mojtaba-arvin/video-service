@@ -159,23 +159,24 @@ Baseline on `develop`:
 - PR #96 merged: public QoE cost-coverage fields and generated-Protobuf integration coverage.
 - PR #97 merged: bounded webhook connect/read waits, no automatic redirect/retry, deterministic cleanup.
 - PR #98 merged: roadmap/governance/runtime status corrected.
-- Current `develop` after PR #100 is `d4f8dd9`; CI passed (Python 3.9 and 3.12 regression, PostgreSQL repository, full VOD integration, Dependency Review and aggregate `Quality gates`).
+- Current `develop` after PR #105 is `2105930`; PR #105 was documentation-only, with Documentation links, Dependency Review and aggregate `Quality gates` passing; runtime suites were correctly skipped.
 - PR #99 merged the product execution plan; PR #100 merged the first versioned execution-plan contract.
-- PR #104 completed the pure VOD plan builder; PR #105 carries the cross-cutting reliability/observability standard and is pending CI at the time of this update.
+- PR #104 merged the pure VOD plan builder; PR #105 merged the mandatory reliability/observability standard and ADR 0006; PR #106 implements atomic immutable execution-plan persistence and is pending CI.
 
 Next execution order:
 1. **#71 — complete VOD DAG builder (merged in PR #104).** The pure transport-neutral builder now represents preflight, input analysis, fan-in, watermark, HLS/DASH, thumbnails, uploads and callback references. Keep the live dispatch path unchanged.
-2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction.** Add secret-store reference resolution; do not copy raw webhook URLs or credentials into plan JSON or broker messages.
-3. **#71 — establish idempotent execution claims and broker-backed failure tests.** Cover commit-before-relay crash, relay crash after publish, concurrent duplicate delivery, broker outage, cancellation and poison messages. Enable the relay only after these pass.
-4. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
-5. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
-6. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
-7. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
-8. **#79/#84 — begin AI workflow state and incremental contracts after the durable plan model stabilizes.**
-9. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
-10. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
+2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction (PR #106).** The plan snapshot, schema/workflow versions, fingerprint, Stage projections and JOB_CREATED event commit atomically. Merge only after PostgreSQL migration, repository, regression and full VOD CI gates pass.
+3. **#71 — implement an authorized secret-reference store and resolution contract.** Do not copy raw webhook URLs or credentials into plan JSON, outbox payloads or broker messages.
+4. **#71 — establish idempotent per-node execution claims and broker-backed failure tests.** Cover commit-before-relay crash, relay crash after publish, concurrent duplicate delivery, broker outage, cancellation and poison messages. Enable the relay only after these pass.
+5. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
+6. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
+7. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
+8. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
+9. **#79/#84 — begin AI workflow state and incremental contracts after the durable plan model stabilizes.**
+10. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
+11. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
 
-The versioned execution-plan contract is merged in PR #100 and the pure complete-VOD graph builder is merged in PR #104. The next increment under #71 is transactional persistence of the immutable plan/version with Job/Workflow/Stage state, followed by complete durable Stage/Attempt claims, secret-reference resolution and broker-backed crash/replay tests. Do not add an outbox table that can dispatch an incompletely durable graph, and do not switch live dispatch until all failure and idempotency gates pass.
+The versioned execution-plan contract (PR #100), complete pure VOD DAG builder (PR #104), and reliability/observability standard (PR #105) are merged. PR #106 implements the atomic immutable plan snapshot. Next: secret-store resolution, durable per-node claims, then broker-backed crash/replay tests. Do not add or activate an outbox relay until every side-effecting node has a durable idempotent claim and all failure gates pass.
 
 ## 7. Explicit no-go decisions for now
 
