@@ -212,36 +212,6 @@ def create_playlist(
         process_usage.update(metrics)
         lease_heartbeat.on_usage(metrics)
 
-    def process_resource_metrics():
-        peak_memory_bytes = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        started_at = self.cache.get(
-            CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        ended_at = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        memory_duration_ms = None
-        if started_at is not None and ended_at is not None:
-            try:
-                memory_duration_ms = max(
-                    0, int((float(ended_at) - float(started_at)) * 1000)
-                )
-            except (TypeError, ValueError):
-                memory_duration_ms = None
-        return {
-            "peak_memory_bytes": (
-                int(peak_memory_bytes) if peak_memory_bytes else None
-            ),
-            "memory_duration_ms": memory_duration_ms,
-        }
 
     try:
         input_bytes = os.path.getsize(video_path)
