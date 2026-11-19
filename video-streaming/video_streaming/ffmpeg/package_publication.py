@@ -163,8 +163,8 @@ def cleanup_abandoned_attempt_package(
 
     The caller must provide a database-backed predicate accepting
     (attempt_id, bucket, attempt_prefix). It must return True only after the
-    Attempt is terminal, outside the recovery grace period, and no AVAILABLE
-    Artifact references this prefix. The function never
+    Attempt is terminal or superseded by a newer Attempt, outside the recovery
+    grace period, and no AVAILABLE Artifact references this prefix. The function never
     lists or deletes a shared prefix; it uses the attempt's ownership inventory.
     """
     if not callable(is_reclaimable):
