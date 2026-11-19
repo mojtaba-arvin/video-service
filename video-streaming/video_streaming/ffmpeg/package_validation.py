@@ -25,6 +25,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from video_streaming.execution.process_control import run_cancellable_process
+
 
 class StreamingPackageValidationError(ValueError):
     """Raised when a generated streaming package is incomplete or invalid."""
@@ -652,7 +654,8 @@ def validate_package(
         expected_renditions: Optional[List[str]],
         manifest_path: str = None,
         ffprobe_bin_path: str = None,
-        metadata_probe_timeout_seconds: int = 10) -> PackageValidationReport:
+        metadata_probe_timeout_seconds: int = 10,
+        should_cancel=None) -> PackageValidationReport:
     """Return a structured reusable validation report for a VOD package.
 
     expected_renditions is a list of HLS rendition playlist paths relative
@@ -710,6 +713,7 @@ def validate_package(
                 manifest_path=manifest,
                 ffprobe_bin_path=ffprobe_bin_path,
                 timeout_seconds=metadata_probe_timeout_seconds,
+                should_cancel=should_cancel,
             ))
     except Exception as exc:
         message = str(exc)
@@ -954,7 +958,7 @@ def reset_package_directory(directory: str, expected_parent: str):
 
 
 
-def _probe_media(path, ffprobe_bin_path, timeout_seconds):
+def _probe_media(path, ffprobe_bin_path, timeout_seconds, should_cancel=None):
     command = [
         ffprobe_bin_path,
         "-v", "error",
@@ -964,14 +968,12 @@ def _probe_media(path, ffprobe_bin_path, timeout_seconds):
         "-of", "json",
         str(path),
     ]
-    result = subprocess.run(
+    stdout, _ = run_cancellable_process(
         command,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
+        timeout_seconds=timeout_seconds,
+        should_cancel=should_cancel,
     )
-    return json.loads(result.stdout or "{}")
+    return json.loads(stdout.decode("utf-8") or "{}")
 
 
 def _hls_attribute_map(line):
@@ -1071,7 +1073,7 @@ def _hls_segment_paths(playlist):
 
 
 def _probe_hls_media_duration(
-        playlist, ffprobe_bin_path, timeout_seconds):
+        playlist, ffprobe_bin_path, timeout_seconds, should_cancel=None):
     """Derive media duration from actual packet timestamps, not EXTINF tags.
 
     Fragmented MP4 media fragments require their initialization section and are
@@ -1104,16 +1106,14 @@ def _probe_hls_media_duration(
             "-show_entries", "packet=pts_time,duration_time",
             "-of", "csv=p=0",
         ]
-        result = subprocess.run(
+        stdout, _ = run_cancellable_process(
             command,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            should_cancel=should_cancel,
         )
         first_pts = None
         last_packet_end = None
-        for line in result.stdout.splitlines():
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
             fields = line.strip().split(",")
             if not fields:
                 continue
@@ -1141,7 +1141,8 @@ def _probe_package_metadata(
         package_type,
         manifest_path,
         ffprobe_bin_path,
-        timeout_seconds):
+        timeout_seconds,
+        should_cancel=None):
     """Probe headers/metadata only; never decode or re-encode media."""
     root = Path(directory).resolve()
     manifest = Path(manifest_path).resolve()
@@ -1156,7 +1157,8 @@ def _probe_package_metadata(
             for rendition_path in sorted(attributes):
                 local_path = (root / rendition_path).resolve()
                 metadata = _probe_media(
-                    local_path, ffprobe_bin_path, timeout_seconds
+                    local_path, ffprobe_bin_path, timeout_seconds,
+                    should_cancel=should_cancel,
                 )
                 streams = metadata.get("streams", [])
                 video_stream = next(
@@ -1226,6 +1228,7 @@ def _probe_package_metadata(
                     local_path,
                     ffprobe_bin_path,
                     timeout_seconds,
+                    should_cancel=should_cancel,
                 )
                 if durations and measured_duration:
                     manifest_duration = sum(durations)
@@ -1245,7 +1248,8 @@ def _probe_package_metadata(
 
         elif package_type == "dash":
             metadata = _probe_media(
-                manifest, ffprobe_bin_path, timeout_seconds
+                manifest, ffprobe_bin_path, timeout_seconds,
+                should_cancel=should_cancel,
             )
             streams = [
                 stream for stream in metadata.get("streams", [])
