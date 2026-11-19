@@ -10,6 +10,7 @@ from .generate_thumbnail import generate_thumbnail
 from .create_playlist import create_playlist
 from .upload_directory import upload_directory
 from .upload_file import upload_file
+from .cleanup_package_attempt import cleanup_package_attempt
 
 from .call_webhook import call_webhook
 
@@ -27,6 +28,7 @@ __all__ = [
     'create_playlist',
     'upload_directory',
     'upload_file',
+    'cleanup_package_attempt',
     'call_webhook',
     'add_watermark'
 ]
