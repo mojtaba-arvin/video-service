@@ -790,6 +790,23 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             published[0]["metadata"]["processing_attempt_id"], processing_id
         )
 
+        self.servicer.cache = InMemoryCache()
+        thumbnail_details = []
+        self.servicer._thumbnails(
+            job_id,
+            ["thumbnail-0"],
+            thumbnail_details,
+            {"thumbnail-0": stage},
+        )
+        self.assertEqual(len(thumbnail_details), 1)
+        self.assertEqual(
+            thumbnail_details[0].uploaded_to.bucket, "vod-output"
+        )
+        self.assertEqual(
+            thumbnail_details[0].uploaded_to.key,
+            result["uri"].split("vod-output/", 1)[1],
+        )
+
 
 
     def test_result_details_expose_authoritative_attempt_scoped_s3_location(self):
