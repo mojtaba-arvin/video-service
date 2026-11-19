@@ -101,7 +101,7 @@ class RevokeOutputsMixin(object):
     def _revoke_job_outputs(self, request, context):
 
         request_id: str = request.tracking_id
-        require_job_access(request_id, "video.jobs:outputs:revoke")
+        require_job_access(request_id, "video.jobs:outputs:revoke", context)
         primary_status: str = self.cache.get(
             CacheKeysTemplates.PRIMARY_STATUS.format(
                 request_id=request_id), decode=False)
