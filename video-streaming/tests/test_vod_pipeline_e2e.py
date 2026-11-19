@@ -841,5 +841,38 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
 
 
 
+    def test_result_metrics_aggregate_processing_and_publication_attempts(self):
+        stage = {
+            "attempts": [
+                {
+                    "duration_ms": 5000,
+                    "cpu_seconds": 1.25,
+                    "peak_memory_bytes": 300,
+                    "output_bytes": None,
+                },
+                {
+                    "duration_ms": 1000,
+                    "cpu_seconds": None,
+                    "peak_memory_bytes": None,
+                    "output_bytes": None,
+                },
+                {
+                    "duration_ms": 2000,
+                    "cpu_seconds": 0.1,
+                    "peak_memory_bytes": 200,
+                    "output_bytes": 512,
+                },
+            ],
+        }
+
+        metrics = self.servicer._durable_stage_metrics(stage)
+
+        self.assertEqual(metrics["duration_ms"], 8000)
+        self.assertAlmostEqual(metrics["cpu_seconds"], 1.35)
+        self.assertEqual(metrics["peak_memory_bytes"], 300)
+        self.assertEqual(metrics["output_bytes"], 512)
+
+
+
 if __name__ == "__main__":
     unittest.main()
