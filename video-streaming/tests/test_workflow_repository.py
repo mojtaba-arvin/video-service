@@ -1178,9 +1178,20 @@ class WorkflowRepositoryTests(unittest.TestCase):
             lease_token=processing_token,
         )
 
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-wrong-processing-proof",
+                processing_attempt_id="not-the-processing-attempt",
+            )
+
         publication_id, number, publication_token, _ = (
             self.repository.claim_publication_attempt(
-                job_id, "p0", lease_owner="worker-publisher"
+                job_id,
+                "p0",
+                lease_owner="worker-publisher",
+                processing_attempt_id=processing_id,
             )
         )
         self.assertNotEqual(processing_id, publication_id)
