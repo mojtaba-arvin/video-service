@@ -1128,6 +1128,7 @@ class WorkflowRepository:
             lease_ttl_seconds=60,
             execution_backend="celery",
             execution_ref=None,
+            processing_attempt_id=None,
             pricing=None):
         """Claim a fresh publication attempt for an already validated artifact.
 
@@ -1201,9 +1202,14 @@ class WorkflowRepository:
             )
             if (
                     processing_attempt is None
-                    or processing_attempt.state != AttemptState.SUCCEEDED.value):
+                    or processing_attempt.state != AttemptState.SUCCEEDED.value
+                    or (
+                        processing_attempt_id is not None
+                        and validation_artifact.attempt_id != processing_attempt_id
+                    )):
                 raise InvalidStateTransition(
-                    "Publication requires a terminal successful processing Attempt"
+                    "Publication requires the requested terminal successful "
+                    "processing Attempt"
                 )
 
             active = session.execute(
