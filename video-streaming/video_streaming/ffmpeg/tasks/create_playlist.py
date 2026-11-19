@@ -326,6 +326,8 @@ def create_playlist(
             lease_token=lease_token,
             metrics={
                 "input_bytes": input_bytes,
+                # Storage is charged to the separate publication Attempt.
+                "output_bytes": 0,
                 "cpu_seconds": child_cpu_seconds_since(cpu_started),
                 **process_resource_metrics(),
                 "local_package": {
