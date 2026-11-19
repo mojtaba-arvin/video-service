@@ -1394,6 +1394,20 @@ class WorkflowRepository:
                         self._complete_processing_attempt_in_session(
                             attempt, metrics, pricing
                         )
+                        _record_event(
+                            session,
+                            job_id,
+                            stage.workflow_id,
+                            "STAGE_PROCESSING_ATTEMPT_COMPLETED",
+                            from_state=AttemptState.RUNNING.value,
+                            to_state=AttemptState.SUCCEEDED.value,
+                            stage_id=stage.id,
+                            attempt_id=attempt_id,
+                            payload={
+                                "validation_artifact_id": existing.id,
+                                "idempotent_validation_replay": True,
+                            },
+                        )
                     return False
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition(
