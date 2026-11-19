@@ -1,15 +1,21 @@
 """Tests for durable lease fencing in FFmpeg progress callbacks."""
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from video_streaming.ffmpeg.utils.ffmpeg_callback import FfmpegCallback
 
 
+@unittest.skipUnless(
+    importlib.util.find_spec("celery"),
+    "Celery is installed only in the dedicated FFmpeg integration environment",
+)
 class FfmpegCallbackLeaseTests(unittest.TestCase):
 
     def test_lease_renewal_failure_terminates_ffmpeg_process(self):
+        from video_streaming.ffmpeg.utils.ffmpeg_callback import FfmpegCallback
+
         task = Mock()
         task.request = SimpleNamespace(
             id="task-1",
