@@ -115,7 +115,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
             self.assertIsNotNone(secret)
             self.assertNotIn(plaintext, secret.ciphertext)
             self.assertNotIn(plaintext, repr(secret))
-            events = session.query
             self.assertIsNotNone(job)
 
         stored = self.repository.get_job_secret_envelope(
