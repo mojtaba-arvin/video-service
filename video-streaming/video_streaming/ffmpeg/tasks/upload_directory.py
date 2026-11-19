@@ -161,7 +161,7 @@ def upload_directory(self,
                     int(peak_memory_bytes) if peak_memory_bytes else None
                 ),
                 "memory_duration_ms": memory_duration_ms,
-                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "input_bytes": None,
                 "output_bytes": int(publication["directory_size"]),
                 "artifact_count": int(publication["files"]),
                 "validation_errors": len(
@@ -182,7 +182,7 @@ def upload_directory(self,
                 request_id, output_id, publication_id,
                 reason="CANCELLED_DURING_PACKAGE_PUBLICATION",
                 metrics={
-                    "input_bytes": int(kwargs.get("input_bytes") or 0),
+                    "input_bytes": None,
                     "cpu_seconds": cpu_seconds,
                     "peak_memory_bytes": (
                         int(peak_memory_bytes) if peak_memory_bytes else None
@@ -210,7 +210,7 @@ def upload_directory(self,
             ),
             error_message=str(exc),
             metrics={
-                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "input_bytes": None,
                 "cpu_seconds": cpu_seconds,
                 "peak_memory_bytes": (
                     int(peak_memory_bytes) if peak_memory_bytes else None
