@@ -138,9 +138,6 @@ jobs:
       - name: Prepare safe environment for settings imports
         run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 
-      - name: Prepare safe environment for settings imports
-        run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
-
       - name: Run regression suite
         env:
           PYTHONPATH: video-streaming
@@ -165,6 +162,9 @@ jobs:
 
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-test-py312.txt
+
+      - name: Prepare safe environment for settings imports
+        run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 
       - name: Run regression suite
         env:
