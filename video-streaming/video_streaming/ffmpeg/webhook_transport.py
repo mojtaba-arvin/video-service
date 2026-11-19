@@ -61,6 +61,22 @@ def _normalize_hostname(hostname):
     return normalized, None
 
 
+def _is_public_address(address):
+    if not address.is_global:
+        return False
+    if address.version == 6:
+        # Reject translation/tunnelling forms that can encode a non-public
+        # IPv4 destination while appearing globally routable as IPv6.
+        if (
+                address.ipv4_mapped is not None
+                or address.sixtofour is not None
+                or address.teredo is not None
+                or address in ipaddress.ip_network("64:ff9b::/96")
+                or address in ipaddress.ip_network("64:ff9b:1::/48")):
+            return False
+    return True
+
+
 def resolve_webhook_target(url, allow_loopback=False, resolver=None):
     """Parse and resolve a callback URL, rejecting unsafe DNS answers.
 
@@ -126,7 +142,7 @@ def resolve_webhook_target(url, allow_loopback=False, resolver=None):
     loopback_only = all(address.is_loopback for address in addresses)
     if loopback_only and allow_loopback:
         pass
-    elif any(not address.is_global for address in addresses):
+    elif any(not _is_public_address(address) for address in addresses):
         raise WebhookDestinationError("Webhook destination is not allowed")
 
     if scheme == "http" and not (allow_loopback and loopback_only):
