@@ -24,6 +24,7 @@ class FfmpegCallbackLeaseTests(unittest.TestCase):
         )
         task.is_forced_to_stop.return_value = False
         task.is_output_forced_to_stop.return_value = False
+        task.cache.get.return_value = 0
         process = SimpleNamespace(pid=12345)
         psutil_process = Mock()
         psutil_process.cpu_times.return_value = (0.0, 0.0)
