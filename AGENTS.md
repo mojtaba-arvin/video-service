@@ -35,6 +35,7 @@ reading implementation details.
 Before material architecture or runtime changes, read:
 - `docs/engineering/reliability-observability-standard.md` — mandatory failure, telemetry, SLO, testing and operational readiness standard.
 - `docs/decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md` — accepted architecture decision.
+- `docs/decisions/0010-celery-attempt-lease-worker-integration.md` — lease ownership, Celery heartbeat, processing/publication split and outbox rollout gates.
 - `docs/decisions/0005-modular-core-and-replaceable-adapters.md` — module boundaries and provider replacement policy.
 - Relevant skill guides under `.agents/skills/`.
 
