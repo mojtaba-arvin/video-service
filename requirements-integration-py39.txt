@@ -1,0 +1,17 @@
+# Isolated dependencies for the Python 3.9 gRPC/Celery/FFmpeg VOD integration test.
+celery==5.6.3
+grpcio==1.78.2
+grpcio-tools==1.78.2
+grpcio-health-checking==1.78.2
+protobuf==6.33.5
+python-ffmpeg-video-streaming==0.1.14
+ffmpeg-python==0.2.0
+python-decouple==3.8
+redis==5.2.1
+boto3==1.17.14
+psutil==5.9.8
+
+# durable workflow state and PostgreSQL adapter
+SQLAlchemy==2.0.58
+alembic==1.16.5
+psycopg2-binary==2.9.12

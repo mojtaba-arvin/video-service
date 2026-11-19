@@ -163,10 +163,6 @@ def _normalize_output(output, kind, index):
             )
         if isinstance(thumbnail_time, str):
             thumbnail_time = thumbnail_time.strip()
-            if not thumbnail_time:
-                raise VODPlanBuildError(
-                    "{}[{}].thumbnail_time cannot be empty".format(kind, index)
-                )
         for field in ("scale_width", "scale_height"):
             value = output.get(field, 0)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

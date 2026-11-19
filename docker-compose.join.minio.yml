@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+    video-streaming:
+        networks:
+            - minio-object-storage-network
+networks:
+    minio-object-storage-network:
+        external:
+            name: minio_object-storage-network
+##                  ^             ^
+##          name: of project    network created inside that project

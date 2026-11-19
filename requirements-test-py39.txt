@@ -1,0 +1,8 @@
+-r requirements-test.txt
+# Matches the currently deployed legacy runtime dependency.
+python-decouple==3.8
+
+# durable state schema/repository tests (Python 3.9-compatible pins)
+SQLAlchemy==2.0.58
+alembic==1.16.5
+psycopg2-binary==2.9.12

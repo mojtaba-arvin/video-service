@@ -1,0 +1,482 @@
+syntax = "proto3";
+
+service Streaming{
+  rpc create_job(JobRequest) returns (JobResponse) {}
+  rpc get_results(JobsResultsRequest) returns (JobsResultsResponse) {}
+  rpc revoke_jobs(RevokeJobsRequest) returns (RevokeJobsResponse) {}
+  rpc revoke_job_outputs(RevokeOutputsRequest) returns (RevokeOutputsResponse) {}
+  rpc start_playback_session(StartPlaybackSessionRequest) returns (StartPlaybackSessionResponse) {}
+  rpc record_playback_event(RecordPlaybackEventRequest) returns (RecordPlaybackEventResponse) {}
+  rpc get_playback_qoe_report(GetPlaybackQoEReportRequest) returns (PlaybackQoEReportResponse) {}
+}
+
+message JobRequest {
+
+  // to call client when the task is finished
+  string webhook_url = 1;
+  string reference_id = 2;
+
+  // the target video on s3 to convert
+  Video video = 3;
+
+  // watermark image
+  Watermark watermark = 4;
+
+  // every output includes destination s3 key, and convert details
+  repeated PlaylistOutput playlists = 5;
+  repeated ThumbnailOutput thumbnails = 6;
+
+  // Client-supplied idempotency key. Empty preserves legacy create-new behavior.
+  string idempotency_key = 7;
+}
+enum Protocol {
+  HLS = 0;
+  DASH = 1;
+}
+message InputFile{
+
+}
+message Video{
+  S3Input s3_input = 1;
+  //
+}
+message Watermark{
+  S3Input s3_input = 1;
+  // upload watermarked video to s3
+  S3Output upload_to = 2;
+  WatermarkPosition position = 3;
+}
+enum WatermarkPosition {
+    CENTER = 0;
+    FIX_TOP_LEFT = 1;
+//    FIX_TOP_RIGHT = 2;
+//    FIX_TOP_CENTER = 3;
+//    FIX_BOTTOM_LEFT = 4;
+//    FIX_BOTTOM_RIGHT = 5;
+//    FIX_BOTTOM_CENTER = 6;
+//    ANIMATE_LEFT_TO_RIGHT = 7;
+//    ANIMATE_TOP_TO_BOTTOM = 8;
+}
+message PlaylistOutput{
+  Protocol protocol = 1;
+  S3Output upload_to = 2;
+  ConvertOptions options = 3;
+  bool use_watermark = 4;
+}
+message ThumbnailOutput{
+  string thumbnail_time = 1;
+  S3Output upload_to = 2;
+  ThumbnailOptions options = 3;
+  bool use_watermark = 4;
+}
+message ThumbnailOptions{
+  int32 scale_width = 1;
+  int32 scale_height = 2;
+}
+message S3Input{
+  string key = 1;
+  string bucket = 2;
+}
+message S3Output{
+  string key = 1;
+  string bucket = 2;
+  bool create_bucket = 3;
+  bool dont_replace = 4;
+}
+message UploadedTo{
+  string key = 1;
+  string bucket = 2;
+}
+message H264{
+  enum VideoCodec {
+    LIBX264 = 0;
+    H264 = 1;
+    H264_AFM = 2;
+    H264_NVENC = 3;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2; // libfaac is not supported anymore. Instead use libvo_aacenc
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
+  }
+  VideoCodec video_codec = 1;
+  AudioCodec audio_codec = 2;
+}
+message Hevc{
+  enum VideoCodec {
+    LIBX265 = 0;
+    H265 = 1;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2;
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
+  }
+  VideoCodec video_codec = 3;
+  AudioCodec audio_codec = 4;
+}
+message Vp9{
+  enum VideoCodec {
+    LIBVPX_VP9 = 0;
+    H265 = 1;
+  }
+  enum AudioCodec {
+    AAC = 0;
+    COPY = 1;
+    LIBVO_AACENC = 2;
+    LIBMP3LAME = 3;
+    LIBFDK_AAC = 4;
+  }
+  VideoCodec video_codec = 3;
+  AudioCodec audio_codec = 4;
+}
+enum QualityName {
+  R_144P = 0;
+  R_240P = 1;
+  R_360P = 2;
+  R_480P = 3;
+  R_720P = 4;
+  R_1080P = 5;
+  R_2K = 6;
+  R_4K = 7;
+}
+message QualitySize{
+  int32 width = 1;  // 256
+  int32 height = 2;  // 144
+}
+message QualityBitrate{
+  int32 video = 1;  // 95 * 1024
+  int32 audio = 2;  // 64 * 1024
+  int32 overall = 3;
+}
+message CustomQuality{
+    QualitySize size = 1;
+    QualityBitrate bitrate = 2;
+}
+message ConvertOptions{
+  // HLS segments can be fmp4 or ts
+  bool fmp4 = 1;
+
+  oneof encode_format {
+     H264 h264 = 2;
+     Hevc hevc = 3;
+     Vp9 vp9 = 4;
+  }
+  repeated QualityName quality_names = 5;
+  repeated CustomQuality custom_qualities = 6;
+}
+message JobResponse {
+  string tracking_id = 1;
+}
+
+message JobsResultsRequest {
+  repeated string tracking_ids = 1;
+}
+message JobsResultsResponse {
+  repeated ResultDetails results = 1;
+}
+enum PrimaryStatus {
+
+  QUEUING_CHECKS = 0;
+  CHECKING = 1;
+  CHECKS_FINISHED = 2;
+
+  QUEUING_INPUTS_DOWNLOADING = 3;
+  INPUTS_DOWNLOADING = 4;
+  ALL_INPUTS_DOWNLOADED = 5;
+
+  QUEUING_OUTPUTS = 6;
+  OUTPUTS_PROGRESSING = 7;
+  FINISHED = 8;
+
+  REVOKED = 9;
+  FAILED = 10;
+
+}
+enum StopReason{
+  NO_REASON = 0;
+
+  FORCE_REVOKED = 1;
+  INTERNAL_ERROR = 2;
+
+  INPUT_VIDEO_ON_S3_IS_404_OR_403 = 3;
+
+  FAILED_INPUT_KEY_CHECKING = 4;
+
+  FAILED_OUTPUT_BUCKET_CHECKING = 5;
+  OUTPUT_BUCKET_ON_S3_IS_404_OR_403 = 6;
+
+  FAILED_OUTPUT_KEY_CHECKING = 7;
+  OUTPUT_KEY_IS_ALREADY_EXIST = 8;
+
+  DOWNLOADING_FAILED = 9;
+
+  FAILED_ANALYZE_INPUT = 10;
+  INPUT_VIDEO_CODEC_TYPE_IN_NOT_VIDEO = 11;
+  AGGREGATE_INPUTS_FAILED = 12;
+
+  FAILED_CREATE_PLAYLIST = 13;
+  INPUT_VIDEO_SIZE_CAN_NOT_BE_ZERO = 14;
+  REPRESENTATION_NEEDS_BOTH_SIZE_AND_BITRATE = 15;
+
+  FAILED_UPLOAD_DIRECTORY = 16;
+  FAILED_GENERATE_THUMBNAIL = 17;
+  FAILED_UPLOAD_FILE = 18;
+  FAILED_ADD_WATERMARK = 19;
+  JOB_TIMEOUT = 20;
+
+}
+message ResultDetails {
+  string tracking_id = 1;
+  string reference_id = 2;
+  PrimaryStatus status = 3;
+  StopReason reason = 4;
+  int32 total_outputs = 5;
+  int32 revoked_outputs = 6; // when job force stopped, is equal to total_outputs
+  int32 ready_outputs = 7; // number of outputs that successfully finished
+  int32 failed_outputs = 8; // number of outputs that failed
+  Checks checks = 9;
+  repeated InputDetails inputs = 10;
+  Playlists playlists = 11;
+  Thumbnails thumbnails = 12;
+  WatermarkedVideoDetails watermarked_video = 13;
+}
+message GeneralInfo{
+    float duration = 1; // 68.843000
+    int64 file_size = 2;
+    int64 bit_rate = 3;
+    // ffprobe gives a list of formats inside the format_name value
+    string file_formats = 4; // 'mov,mp4,m4a,3gp,3g2,mj2'
+}
+message VideoInfo{
+    string codec = 1;
+    int64 width = 2;
+    int64 height = 3;
+    string frame_rate = 4;  // '30/1'
+    int64 bit_rate = 5;
+}
+message AudioInfo{
+    string codec = 1;
+    int64 sample_rate = 2;
+    int64 bit_rate = 3;
+    string channel_layout = 4;  // 'stereo'
+}
+message OriginalFileInfo{
+    GeneralInfo general = 1;
+    VideoInfo video = 2;
+    AudioInfo audio = 3;
+}
+message Checks {
+    int64 total = 3;
+    int64 passed = 4;
+}
+enum OutputStatus {
+  PREPARATION_PROCESSING = 0;
+  PROCESSING = 1;
+  PROCESSING_FINISHED = 2;
+
+  QUEUING_UPLOADING = 3;
+  UPLOADING = 4;
+  UPLOADING_FINISHED = 5;
+
+  OUTPUT_REVOKED = 6;
+  OUTPUT_FAILED = 7;
+}
+message Playlists{
+  repeated PlaylistDetails outputs = 1;
+}
+message Thumbnails{
+  repeated ThumbnailDetails outputs = 1;
+}
+message WatermarkedVideoDetails{
+    string id = 1;
+    OutputStatus status = 2;
+    Progress output_progress = 3;
+//    bool has_upload_flag = 4;
+
+    // cost :
+    float spent_time = 5;
+    float cpu_usage = 6;
+    int64 memory_usage = 7;
+
+    // details :
+    int64 file_size = 8;
+    UploadedTo uploaded_to = 9;
+}
+message PlaylistDetails {
+    string id = 1;
+    OutputStatus status = 2;
+    Progress output_progress = 3;
+
+    // cost :
+    float spent_time = 5;
+    float cpu_usage = 6;
+    int64 memory_usage = 7;
+
+    // details :
+    int64 directory_size = 8;
+    UploadedTo uploaded_to = 9;
+}
+message ThumbnailDetails{
+    string id = 1;
+    OutputStatus status = 2;
+
+    // details :
+    int64 file_size = 3;
+    // int32 width = 4; TODO
+    // int64 height = 5; TODO
+    UploadedTo uploaded_to = 6;
+}
+message ResourceUsage{
+  float seconds= 1;
+  float used = 2;
+}
+message Progress{
+    int64 total = 1;
+    int64 current = 2;
+}
+enum InputStatus {
+    PREPARATION_DOWNLOAD = 0;
+    DOWNLOADING = 1;
+    DOWNLOADING_FINISHED = 2;
+
+    QUEUING_TO_ANALYZE = 3;
+    ANALYZING = 4;
+    ANALYZING_FINISHED = 5;
+
+    INPUT_REVOKED = 6;
+    INPUT_FAILED = 7;
+}
+message InputDetails {
+    int32 id = 1;
+    InputStatus status = 2;
+    Progress input_progress = 3;
+    OriginalFileInfo file_info = 4;
+}
+
+message RevokeJobsRequest {
+  repeated string tracking_ids = 1;
+}
+message RevokeJobsResponse{
+  repeated RevokeDetails results = 1;
+}
+enum RevokeSignalStatus {
+  REQUEST_NOT_FOUND = 0;
+  REVOKE_SIGNAL_SENT = 1;
+}
+message RevokeDetails{
+    string tracking_id = 1;
+    string reference_id = 2;
+    RevokeSignalStatus has_been_sent = 3;
+}
+
+
+message RevokeOutputsRequest{
+  string tracking_id = 1;
+  repeated int32 playlists_numbers = 2;
+  repeated int32 thumbnails_numbers = 3;
+}
+message RevokeOutputsResponse{
+    // returns gRPC error if tracking_id not found
+    string tracking_id = 1;
+    string reference_id = 2;
+    repeated OutputsToRevoke playlists_to_revoke = 3;
+    repeated OutputsToRevoke thumbnails_to_revoke = 4;
+}
+message OutputsToRevoke{
+  int32 output_number = 1;
+  oneof signal_status {
+     bool signal_has_been_sent = 2;
+     signalFailedReason signal_failed_reason = 3;
+  }
+}
+
+enum signalFailedReason{
+  OUTPUT_NUMBER_IS_INVALID = 0; // when output number is not valid
+  OUTPUT_HAS_BEEN_FAILED = 1; // when output status is OUTPUT_FAILED
+  OUTPUT_HAS_BEEN_UPLOADED = 2; // when output status is UPLOADING_FINISHED
+  OUTPUT_UPLOADING_COULD_NOT_BE_STOPPED = 3; // sometimes when output status is PLAYLIST_UPLOADING
+}
+
+
+enum PlaybackEventType {
+  PLAYBACK_EVENT_UNSPECIFIED = 0;
+  PLAYBACK_STARTED = 1;
+  BUFFERING_STARTED = 2;
+  BUFFERING_ENDED = 3;
+  DECODER_ERROR = 4;
+  PLAYBACK_ENDED = 5;
+}
+
+message StartPlaybackSessionRequest {
+  string tracking_id = 1;
+  string output_id = 2;
+  string client_version = 3;
+}
+
+message StartPlaybackSessionResponse {
+  string session_id = 1;
+  string session_token = 2;
+  string manifest_artifact_id = 3;
+}
+
+message RecordPlaybackEventRequest {
+  string session_id = 1;
+  string session_token = 2;
+  // Caller-generated stable key so network retries do not double count events.
+  string event_id = 3;
+  PlaybackEventType event_type = 4;
+  // Required only for PLAYBACK_STARTED; buffering durations use server time.
+  int64 startup_ms = 5;
+  // Required only for DECODER_ERROR.
+  string error_code = 6;
+  string decoder = 7;
+  string client_version = 8;
+}
+
+message RecordPlaybackEventResponse {
+  bool accepted = 1;
+  bool duplicate = 2;
+  int32 rebuffer_count = 3;
+  int64 total_buffering_ms = 4;
+  int32 decoder_error_count = 5;
+  bool ended = 6;
+}
+
+message GetPlaybackQoEReportRequest {
+  string tracking_id = 1;
+  string output_id = 2;
+}
+
+message PlaybackQoEReportResponse {
+  string tracking_id = 1;
+  string output_id = 2;
+  string stage_status = 3;
+  int32 session_count = 4;
+  int32 playback_started_count = 5;
+  int64 average_startup_ms = 6;
+  int32 rebuffer_count = 7;
+  int64 total_buffering_ms = 8;
+  int32 decoder_error_count = 9;
+  float buffering_ratio_percent = 10;
+  double total_cpu_seconds = 11;
+  double total_estimated_cost = 12;
+  string cost_currency = 13;
+  string pricing_model_id = 14;
+  bool cost_estimate_complete = 15;
+  int32 priced_attempt_count = 16;
+  int32 total_attempt_count = 17;
+  // False means total_estimated_cost is not a complete aggregate; zero is not a substitute.
+  bool total_estimated_cost_available = 18;
+  // Partial estimate is diagnostic only and may omit attempts with unknown usage.
+  double partial_estimated_cost = 19;
+  bool partial_estimated_cost_available = 20;
+  int32 complete_attempt_count = 21;
+  map<string, int32> missing_cost_dimensions_by_attempt = 22;
+  repeated string excluded_cost_dimensions = 23;
+  repeated string pricing_model_versions = 24;
+}

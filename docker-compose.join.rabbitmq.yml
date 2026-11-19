@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+    video-streaming:
+        networks:
+            - rabbitmq-broker-network
+networks:
+    rabbitmq-broker-network:
+        external:
+            name: rabbitmq_broker-network
+##                  ^             ^
+##          name: of project    network created inside that project

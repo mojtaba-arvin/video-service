@@ -1,0 +1,27 @@
+from celery import Task
+
+
+class ChainCallbackMixin(object):
+    request: Task.request
+
+    def __call__(self, *args, **kwargs):
+        """
+        args=[None, dict(key1=value1, key2=value2), None, arg1, arg2]
+        kwargs=dict(key3=value3, key4=value4)
+        ->
+        args=[arg1 ,arg2]
+        kwargs=dict(key1=value1, key2=value2, key3=value3, key4=value4)
+        """
+        if args and len(args):
+            args = list(args)
+            result = args.pop(0)
+            if isinstance(result, dict):
+                kwargs.update(result)
+            elif isinstance(result, (list, tuple)):
+                for item in result:
+                    if isinstance(item, dict):
+                        kwargs.update(item)
+            self.request.args = args
+            self.request.kwargs = kwargs
+            args = tuple(args)
+        return super().__call__(*args, **kwargs)

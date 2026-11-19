@@ -1,0 +1,8 @@
+-r requirements-test.txt
+# python-decouple 3.8 removed the distutils dependency used by older releases.
+python-decouple==3.8
+
+# durable state schema/repository tests
+SQLAlchemy==2.0.58
+alembic==1.16.5
+psycopg2-binary==2.9.12

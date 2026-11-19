@@ -1,0 +1,7 @@
+version: '3'
+
+services:
+    video-streaming:
+        ports:
+            - 8081:9999  # GRPC_PORT
+            - 8082:8888  # FLOWER_PORT
