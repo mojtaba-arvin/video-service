@@ -306,15 +306,35 @@ class GetResultsMixin(object):
                 output_details['output_progress'] = self.pb2. \
                     Progress(**progress)
 
-            start_progressing_times: float = self.cache.get(
-                CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
-                    request_id=request_id,
-                    output_id=output_id))
-            end_progressing_times: float = self.cache.get(
-                CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
-                    request_id=request_id,
-                    output_id=output_id))
-            if start_progressing_times and end_progressing_times:
+            if durable_metrics.get("duration_ms") is not None:
+                output_details["spent_time"] = (
+                    durable_metrics["duration_ms"] / 1000.0
+                )
+            if durable_metrics.get("cpu_seconds") is not None:
+                output_details["cpu_usage"] = durable_metrics["cpu_seconds"]
+            if durable_metrics.get("peak_memory_bytes") is not None:
+                output_details["memory_usage"] = (
+                    durable_metrics["peak_memory_bytes"]
+                )
+
+            has_durable_usage = any(
+                durable_metrics.get(key) is not None
+                for key in (
+                    "duration_ms", "cpu_seconds", "peak_memory_bytes"
+                )
+            )
+            start_progressing_times = None
+            end_progressing_times = None
+            if not has_durable_usage:
+                start_progressing_times = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
+                        request_id=request_id,
+                        output_id=output_id))
+                end_progressing_times = self.cache.get(
+                    CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
+                        request_id=request_id,
+                        output_id=output_id))
+            if not has_durable_usage and start_progressing_times and end_progressing_times:
                 output_details['spent_time'] = end_progressing_times - start_progressing_times
                 start_cpu_times: list = self.cache.get(
                     CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
