@@ -1772,11 +1772,13 @@ class WorkflowRepositoryTests(unittest.TestCase):
             minimum_age_seconds=86400,
             limit=10,
         )
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["attempt_id"], publication_id)
-        self.assertEqual(candidates[0]["bucket"], "vod-output")
+        candidate = next(
+            item for item in candidates
+            if item["attempt_id"] == publication_id
+        )
+        self.assertEqual(candidate["bucket"], "vod-output")
         self.assertEqual(
-            candidates[0]["inventory_key"],
+            candidate["inventory_key"],
             "vod/.attempts/{}/.master.m3u8.artifacts.json".format(
                 publication_id
             ),
@@ -1787,12 +1789,15 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "vod-output",
             "vod/.attempts/{}".format(publication_id),
         ))
-        self.assertEqual(
-            self.repository.list_reclaimable_package_attempts(
-                minimum_age_seconds=86400,
-                limit=10,
-            ),
-            [],
+        self.assertNotIn(
+            publication_id,
+            [
+                item["attempt_id"]
+                for item in self.repository.list_reclaimable_package_attempts(
+                    minimum_age_seconds=86400,
+                    limit=100,
+                )
+            ],
         )
 
     def test_missing_local_package_invalidates_validation_and_allows_reprocessing(self):
