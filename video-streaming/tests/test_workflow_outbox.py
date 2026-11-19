@@ -90,14 +90,12 @@ class WorkflowOutboxRepositoryTests(unittest.TestCase):
             )
         with self.repository._session() as session:
             self.assertIsNone(session.get(JobRecord, second_job))
-            self.assertEqual(
-                session.execute(
-                    select(OutboxRecord).where(
-                        OutboxRecord.dedupe_key == "dispatch-dedupe-conflict"
-                    )
-                ).scalars().count() if False else 1,
-                1,
-            )
+            persisted = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.dedupe_key == "dispatch-dedupe-conflict"
+                )
+            ).scalars().all()
+            self.assertEqual(len(persisted), 1)
 
     def test_dispatch_requires_a_persisted_execution_plan(self):
         with self.assertRaisesRegex(ValueError, "immutable execution plan"):
