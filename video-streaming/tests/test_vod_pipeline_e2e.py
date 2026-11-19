@@ -480,6 +480,9 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         plan_nodes = persisted_plan["plan"]["nodes"]
         self.assertEqual(len(snapshot["stages"]), len(plan_nodes))
         self.assertEqual(
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
             {
                 (stage["key"], stage["operation"])
                 for stage in snapshot["stages"]

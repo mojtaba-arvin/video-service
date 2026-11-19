@@ -136,6 +136,64 @@ class WorkflowRepositoryTests(unittest.TestCase):
             {(node["stage_key"], node["operation"]) for node in plan["nodes"]},
         )
 
+    def test_legacy_celery_completes_output_stages_without_faking_internal_nodes(self):
+        job_id = str(uuid4())
+        plan = build_vod_execution_plan(job_id, {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output",
+                "key": "master.m3u8",
+                "protocol": "hls",
+                "output_id": "p0",
+            }],
+        })
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="legacy-plan-{}".format(uuid4()),
+            request_hash="c" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            execution_backend="legacy_celery",
+        )
+        output_node = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.output.upload_directory"
+        )
+        output_key = output_node["stage_key"]
+        attempt_id, _ = self.repository.start_attempt(
+            job_id, output_key, execution_backend="celery",
+            execution_ref="legacy-output-task",
+        )
+        self.repository.mark_validated(
+            job_id, output_key, attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, output_key, attempt_id)
+        self.repository.finish_stage(
+            job_id, output_key, attempt_id, artifacts=[], metrics={},
+        )
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "FINISHED")
+        self.assertEqual(snapshot["workflow"]["status"], "FINISHED")
+        self.assertEqual(
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
+            next(stage for stage in snapshot["stages"]
+                 if stage["key"] == output_key)["status"],
+            "FINISHED",
+        )
+        internal = [
+            stage for stage in snapshot["stages"]
+            if stage["key"] != output_key
+        ]
+        self.assertTrue(internal)
+        self.assertTrue(all(
+            stage["status"] == "PENDING" and not stage["attempts"]
+            for stage in internal
+        ))
+
     def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
         principal = self.make_owner_principal()
         job_id = str(uuid4())

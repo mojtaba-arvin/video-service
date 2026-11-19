@@ -624,6 +624,7 @@ class CreateJobMixin(object):
                 reference_id=request.reference_id,
                 workflow_name="video.vod",
                 execution_plan=execution_plan,
+                execution_backend="legacy_celery",
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": sum(

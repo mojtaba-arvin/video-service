@@ -516,7 +516,8 @@ class WorkflowRepository:
             owner_principal=None,
             secret_envelopes=None,
             enqueue_dispatch=False,
-            outbox_dedupe_key=None):
+            outbox_dedupe_key=None,
+            execution_backend=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -603,6 +604,11 @@ class WorkflowRepository:
                 # the validated plan-derived stage identity and operation.
                 stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
+        if execution_backend is not None and (
+                not isinstance(execution_backend, str)
+                or not execution_backend.strip()
+                or len(execution_backend) > 64):
+            raise ValueError("execution_backend must contain 1 to 64 characters")
         if not isinstance(enqueue_dispatch, bool):
             raise TypeError("enqueue_dispatch must be a boolean")
         if enqueue_dispatch and plan is None:
@@ -717,6 +723,7 @@ class WorkflowRepository:
                     job_id=job_id,
                     name=workflow_name,
                     state=WorkflowState.QUEUED.value,
+                    execution_backend=execution_backend,
                     workflow_version=(plan["workflow_version"] if plan else None),
                     execution_plan_schema_version=(plan["schema_version"] if plan else None),
                     execution_plan_fingerprint=plan_fingerprint,
@@ -2283,9 +2290,21 @@ class WorkflowRepository:
                     "output_bytes": metrics.get("output_bytes"),
                 },
             )
-            if stages and all(
+            completion_stages = stages
+            if workflow.execution_backend == "legacy_celery":
+                # The legacy Celery graph still executes output pipelines as
+                # indivisible chains. Its full plan is durably recorded, but
+                # internal plan nodes are not individually claimed yet.
+                completion_stages = [
+                    item for item in stages
+                    if item.operation in (
+                        "video.output.upload_directory",
+                        "video.output.upload_file",
+                    )
+                ]
+            if completion_stages and all(
                     item.status == StageState.FINISHED.value
-                    for item in stages):
+                    for item in completion_stages):
                 workflow.state = WorkflowState.FINISHED.value
                 workflow.updated_at = finished_at
                 job = session.get(JobRecord, job_id)
@@ -3360,6 +3379,7 @@ class WorkflowRepository:
                     "id": workflow.id,
                     "name": workflow.name,
                     "status": workflow.state,
+                    "execution_backend": workflow.execution_backend,
                     "version": workflow.workflow_version,
                     "execution_plan_schema_version": workflow.execution_plan_schema_version,
                     "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
