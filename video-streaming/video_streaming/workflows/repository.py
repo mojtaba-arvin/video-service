@@ -22,6 +22,7 @@ from .execution_plan import (
     execution_plan_sha256,
     validate_execution_plan,
 )
+from .artifacts import attempt_scoped_object_key
 from .domain import (
     AttemptLeaseLost,
     AttemptState,
@@ -985,6 +986,16 @@ class WorkflowRepository:
                 or not lease_owner.strip()
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
+        if (package_output_key is None) != (package_output_bucket is None):
+            raise ValueError(
+                "package_output_key and package_output_bucket must be supplied together"
+            )
+        if package_output_key is not None:
+            if not isinstance(package_output_bucket, str) or not package_output_bucket:
+                raise ValueError("package_output_bucket is required")
+            # Validate the logical key before creating a durable Attempt.
+            attempt_scoped_object_key(package_output_key, "validation-id")
+
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
         now = utcnow()
         lease_token = secrets.token_urlsafe(32)
@@ -1053,6 +1064,21 @@ class WorkflowRepository:
                 .where(AttemptRecord.stage_id == stage.id)
             ).scalar_one() + 1
             attempt_id = new_id()
+            attempt_metrics = {}
+            if package_output_key is not None:
+                attempt_manifest_key = attempt_scoped_object_key(
+                    package_output_key, attempt_id
+                )
+                attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
+                attempt_metrics["package_publication"] = {
+                    "bucket": package_output_bucket,
+                    "logical_key": package_output_key,
+                    "prefix": attempt_prefix,
+                    "inventory_key": "{}/.{}.artifacts.json".format(
+                        attempt_prefix,
+                        package_output_key.rsplit("/", 1)[-1],
+                    ),
+                }
             session.add(AttemptRecord(
                 id=attempt_id,
                 stage_id=stage.id,
@@ -1065,6 +1091,7 @@ class WorkflowRepository:
                 lease_expires_at=lease_expires_at,
                 heartbeat_at=now,
                 started_at=now,
+                metrics_json=attempt_metrics,
             ))
             stage.status = StageState.PROCESSING.value
             stage.updated_at = now
@@ -1130,7 +1157,9 @@ class WorkflowRepository:
             execution_backend="celery",
             execution_ref=None,
             processing_attempt_id=None,
-            pricing=None):
+            pricing=None,
+            package_output_key=None,
+            package_output_bucket=None):
         """Claim a fresh publication attempt for an already validated artifact.
 
         Processing and publication are separate attempts. The validation report
@@ -1745,7 +1774,11 @@ class WorkflowRepository:
     @staticmethod
     def _apply_attempt_accounting(attempt, metrics, pricing):
         """Persist usage, a frozen price-card snapshot and explicit coverage."""
-        metrics = dict(metrics or {})
+        # Preserve non-sensitive lifecycle metadata (for example the package
+        # inventory namespace) while replacing the measured usage projection.
+        merged_metrics = dict(attempt.metrics_json or {})
+        merged_metrics.update(dict(metrics or {}))
+        metrics = merged_metrics
         accounting = WorkflowRepository._build_cost_accounting(
             metrics, pricing
         )
