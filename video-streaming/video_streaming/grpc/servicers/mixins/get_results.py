@@ -6,6 +6,7 @@ from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
 
 
 class GetResultsMixin(object):
@@ -441,6 +442,7 @@ class GetResultsMixin(object):
     def _get_results(self, request, context):
         results: list[streaming_pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
+            require_job_access(request_id, "video.jobs:read")
             result = self._get_result(request_id)
             if result:
                 results.append(result)
