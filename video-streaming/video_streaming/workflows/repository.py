@@ -986,16 +986,6 @@ class WorkflowRepository:
                 or not lease_owner.strip()
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
-        if (package_output_key is None) != (package_output_bucket is None):
-            raise ValueError(
-                "package_output_key and package_output_bucket must be supplied together"
-            )
-        if package_output_key is not None:
-            if not isinstance(package_output_bucket, str) or not package_output_bucket:
-                raise ValueError("package_output_bucket is required")
-            # Validate the logical key before creating a durable Attempt.
-            attempt_scoped_object_key(package_output_key, "validation-id")
-
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
         now = utcnow()
         lease_token = secrets.token_urlsafe(32)
@@ -1171,6 +1161,16 @@ class WorkflowRepository:
                 or not lease_owner.strip()
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
+        if (package_output_key is None) != (package_output_bucket is None):
+            raise ValueError(
+                "package_output_key and package_output_bucket must be supplied together"
+            )
+        if package_output_key is not None:
+            if not isinstance(package_output_bucket, str) or not package_output_bucket:
+                raise ValueError("package_output_bucket is required")
+            # Validate the logical key before creating a durable Attempt.
+            attempt_scoped_object_key(package_output_key, "validation-id")
+
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
         now = utcnow()
         lease_token = secrets.token_urlsafe(32)
