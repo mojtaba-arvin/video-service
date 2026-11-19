@@ -193,6 +193,9 @@ def cleanup_abandoned_attempt_package(
     if not inventory_key.endswith(".artifacts.json"):
         raise PackagePublicationError("Invalid package inventory key")
 
+    if not is_reclaimable(attempt_id, bucket, prefix):
+        return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
+
     raw = storage.read_object_bytes(key=inventory_key, bucket_name=bucket)
     if raw is None:
         return {"deleted": True, "attempt_id": attempt_id, "objects": 0}
