@@ -8,13 +8,15 @@ from uuid import uuid4
 
 from video_streaming.workflows.domain import (
     AttemptLeaseLost,
+    AttemptState,
     IdempotencyConflict,
     InvalidStateTransition,
     StageAlreadyRunning,
     StageState,
 )
 from video_streaming.workflows.repository import (
-    WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord, utcnow
+    WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
+    WorkflowEventRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -1128,6 +1130,195 @@ class WorkflowRepositoryTests(unittest.TestCase):
             len(self.repository.get_job_snapshot(durable_job_id)["stages"]),
             1,
         )
+
+
+    def test_processing_completion_closes_lease_but_keeps_stage_validated(self):
+        job_id = self.create_job("p0")
+        attempt_id, number, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing-complete"
+        )
+        report = {"valid": True, "errors": []}
+
+        self.assertTrue(self.repository.complete_processing_attempt(
+            job_id,
+            "p0",
+            attempt_id,
+            report,
+            lease_token=token,
+            metrics={"cpu_seconds": 0.25, "input_bytes": 4096},
+        ))
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["number"], number)
+        self.assertEqual(stage["attempts"][0]["status"], AttemptState.SUCCEEDED.value)
+        self.assertEqual(len(stage["artifacts"]), 1)
+        self.assertEqual(stage["artifacts"][0]["metadata"], report)
+
+        with self.repository._session() as session:
+            record = session.get(AttemptRecord, attempt_id)
+            self.assertIsNone(record.lease_owner)
+            self.assertIsNone(record.lease_token_hash)
+            self.assertIsNone(record.lease_expires_at)
+            self.assertIsNone(record.heartbeat_at)
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.renew_attempt_lease(
+                job_id, "p0", attempt_id, token
+            )
+
+    def test_publication_claim_uses_a_new_attempt_and_new_token(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        publication_id, number, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-publisher"
+            )
+        )
+        self.assertNotEqual(processing_id, publication_id)
+        self.assertNotEqual(processing_token, publication_token)
+        self.assertEqual(number, 2)
+
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(
+            [item["status"] for item in stage["attempts"]],
+            ["SUCCEEDED", "RUNNING"],
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.start_publishing(
+                job_id, "p0", publication_id, lease_token=processing_token
+            )
+
+    def test_publication_claim_requires_a_persisted_valid_report(self):
+        job_id = self.create_job("p0")
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-without-report"
+            )
+
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-too-early"
+            )
+
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        stage["artifacts"][0]["metadata"]["valid"] = False
+        # The detached snapshot is not authoritative; the stored proof remains valid.
+        publication = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="worker-valid-proof"
+        )
+        self.assertEqual(publication[1], 2)
+
+    def test_publication_retry_reuses_validation_proof_without_reprocessing(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+            metrics={"cpu_seconds": 1.0},
+        )
+
+        first_publish_id, _, first_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-first"
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", first_publish_id, lease_token=first_token
+        )
+        self.assertTrue(self.repository.fail_attempt(
+            job_id, "p0", first_publish_id,
+            retryable=True,
+            error_code="UPLOAD_TIMEOUT",
+            lease_token=first_token,
+        ))
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_attempt(
+                job_id, "p0", lease_owner="wrong-processing-retry"
+            )
+
+        second_publish_id, second_number, second_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-retry"
+            )
+        )
+        self.assertNotEqual(first_publish_id, second_publish_id)
+        self.assertEqual(second_number, 3)
+        self.repository.start_publishing(
+            job_id, "p0", second_publish_id, lease_token=second_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(len([
+            artifact for artifact in stage["artifacts"]
+            if artifact["logical_name"] == "validation-report"
+        ]), 1)
+
+    def test_concurrent_publication_claim_has_exactly_one_database_winner(self):
+        job_id = self.create_job("p0")
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        )
+
+        barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def claim(owner):
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner=owner
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=claim, args=("publisher-a",)),
+            threading.Thread(target=claim, args=("publisher-b",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], StageAlreadyRunning)
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(len(stage["attempts"]), 2)
+
 
 
 if __name__ == "__main__":
