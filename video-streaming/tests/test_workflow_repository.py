@@ -16,7 +16,8 @@ from video_streaming.workflows.domain import (
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    ArtifactRecord, WorkflowEventRecord, utcnow
+    ArtifactRecord, WorkflowEventRecord, StageRecord,
+    StageDependencyRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -77,6 +78,60 @@ class WorkflowRepositoryTests(unittest.TestCase):
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
+
+    def test_execution_plan_dependencies_are_normalized_and_same_workflow(self):
+        job_id = str(uuid4())
+        request = {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output", "key": "master.m3u8", "protocol": "hls",
+            }],
+        }
+        plan = build_vod_execution_plan(job_id, request)
+        created = self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-plan-deps-{}".format(uuid4()),
+            request_hash="b" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+        )
+        self.assertEqual(created, (job_id, True))
+
+        with self.repository._session() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            stages = session.query(StageRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+            stage_by_key = {stage.stage_key: stage for stage in stages}
+            edges = session.query(StageDependencyRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+
+        expected = {
+            (node["stage_key"], plan_node_by_id["stage_key"])
+            for node in plan["nodes"]
+            for plan_node_by_id in [next(
+                item for item in plan["nodes"]
+                if item["node_id"] in node["depends_on"]
+            )] if node["depends_on"]
+        }
+        actual = {
+            (
+                next(stage.stage_key for stage in stages if stage.id == edge.stage_id),
+                next(
+                    stage.stage_key for stage in stages
+                    if stage.id == edge.depends_on_stage_id
+                ),
+            )
+            for edge in edges
+        }
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(
+            edge.workflow_id == workflow.id for edge in edges
+        ))
+        self.assertEqual(len(stage_by_key), len(plan["nodes"]))
 
     def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
         principal = self.make_owner_principal()

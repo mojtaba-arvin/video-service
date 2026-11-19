@@ -165,6 +165,7 @@ class StageRecord(Base):
     __tablename__ = "workflow_stages"
     __table_args__ = (
         UniqueConstraint("workflow_id", "stage_key", name="uq_workflow_stage_key"),
+        UniqueConstraint("id", "workflow_id", name="uq_workflow_stage_id_workflow"),
         Index("ix_workflow_stages_status_updated", "status", "updated_at"),
     )
 
@@ -182,6 +183,38 @@ class StageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+
+
+class StageDependencyRecord(Base):
+    """Normalized, same-workflow dependency edge between durable stages."""
+
+    __tablename__ = "workflow_stage_dependencies"
+    __table_args__ = (
+        CheckConstraint(
+            "stage_id <> depends_on_stage_id",
+            name="ck_workflow_stage_dependency_not_self",
+        ),
+        ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_stage",
+        ),
+        ForeignKeyConstraint(
+            ["depends_on_stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_parent",
+        ),
+        Index(
+            "ix_workflow_stage_dependencies_workflow",
+            "workflow_id", "stage_id",
+        ),
+    )
+
+    stage_id = Column(String(36), primary_key=True)
+    depends_on_stage_id = Column(String(36), primary_key=True)
+    workflow_id = Column(String(36), nullable=False)
 
 
 class AttemptRecord(Base):
@@ -708,8 +741,9 @@ class WorkflowRepository:
                         "execution_plan_fingerprint": plan_fingerprint,
                     },
                 )
+                stage_records = {}
                 for index, spec in enumerate(stage_specs):
-                    session.add(StageRecord(
+                    stage_record = StageRecord(
                         id=new_id(),
                         workflow_id=workflow_id,
                         stage_key=spec["stage_key"],
@@ -717,7 +751,28 @@ class WorkflowRepository:
                         ordinal=spec.get("ordinal", index),
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
-                    ))
+                    )
+                    stage_records[stage_record.stage_key] = stage_record
+                    session.add(stage_record)
+                session.flush()
+
+                if plan is not None:
+                    plan_nodes = {
+                        node["node_id"]: node for node in plan["nodes"]
+                    }
+                    for node in plan["nodes"]:
+                        stage_record = stage_records[node["stage_key"]]
+                        for dependency_node_id in node["depends_on"]:
+                            dependency_node = plan_nodes[dependency_node_id]
+                            dependency_stage = stage_records[
+                                dependency_node["stage_key"]
+                            ]
+                            session.add(StageDependencyRecord(
+                                workflow_id=workflow_id,
+                                stage_id=stage_record.id,
+                                depends_on_stage_id=dependency_stage.id,
+                            ))
+
                 for envelope in secret_envelopes:
                     context = envelope.context
                     session.add(JobSecretRecord(
