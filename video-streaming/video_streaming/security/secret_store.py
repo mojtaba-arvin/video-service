@@ -129,7 +129,7 @@ class AwsKMSKeyProvider:
     def generate_data_key(self, encryption_context):
         try:
             response = self._kms.generate_data_key(
-                KeyId=key_id or self._key_id,
+                KeyId=self._key_id,
                 KeySpec="AES_256",
                 EncryptionContext=encryption_context,
             )
@@ -143,7 +143,7 @@ class AwsKMSKeyProvider:
         try:
             response = self._kms.decrypt(
                 CiphertextBlob=wrapped_key,
-                KeyId=self._key_id,
+                KeyId=key_id or self._key_id,
                 EncryptionContext=encryption_context,
             )
             return bytearray(response["Plaintext"])
