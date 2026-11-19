@@ -56,6 +56,13 @@ WEBHOOK_READ_TIMEOUT_SECONDS = env_config.get(
     default=10.0,
     cast=float)
 
+# Only test/development harnesses may send callbacks to loopback. Private,
+# link-local and metadata destinations remain blocked in every mode.
+WEBHOOK_ALLOW_LOOPBACK_CALLBACKS = env_config.get(
+    "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS",
+    default=False,
+    cast=bool)
+
 if WEBHOOK_CONNECT_TIMEOUT_SECONDS <= 0:
     raise ValueError("WEBHOOK_CONNECT_TIMEOUT_SECONDS must be greater than zero")
 if WEBHOOK_READ_TIMEOUT_SECONDS <= 0:
