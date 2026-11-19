@@ -433,6 +433,7 @@ class WorkflowRepository:
         if secret_envelopes and owner_principal is None:
             raise ValueError("secret envelopes require an authenticated Job owner")
         seen_purposes = set()
+        seen_secret_ids = set()
         for envelope in secret_envelopes:
             if not isinstance(envelope, SecretEnvelope):
                 raise TypeError("secret_envelopes must contain SecretEnvelope values")
@@ -446,6 +447,15 @@ class WorkflowRepository:
                 raise ValueError("unsupported Job secret purpose")
             if context.purpose in seen_purposes:
                 raise ValueError("only one initial secret per purpose is allowed")
+            if envelope.secret_id in seen_secret_ids:
+                raise ValueError("secret_id values must be unique within a Job")
+            seen_secret_ids.add(envelope.secret_id)
+            if envelope.expires_at is not None:
+                expiry = datetime.fromisoformat(envelope.expires_at)
+                if expiry.tzinfo is None or expiry.utcoffset() is None:
+                    raise ValueError("secret expiry must be timezone-aware")
+                if expiry <= utcnow():
+                    raise ValueError("expired secret envelopes cannot be persisted")
             seen_purposes.add(context.purpose)
 
         plan = None
@@ -753,7 +763,13 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if record is None:
                 raise AuthorizationError("Resource not found or access denied")
-            if record.expires_at is not None and current >= record.expires_at:
+            expires_at = record.expires_at
+            # SQLite drops timezone metadata for DateTime(timezone=True);
+            # PostgreSQL preserves it. Stored values are normalized to UTC.
+            if expires_at is not None and (
+                    expires_at.tzinfo is None or expires_at.utcoffset() is None):
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at is not None and current >= expires_at:
                 raise AuthorizationError("Resource not found or access denied")
 
             context = SecretContext(
@@ -772,8 +788,8 @@ class WorkflowRepository:
                 kms_key_id=record.kms_key_id,
                 created_at=record.created_at.isoformat(),
                 expires_at=(
-                    record.expires_at.isoformat()
-                    if record.expires_at is not None else None
+                    expires_at.isoformat()
+                    if expires_at is not None else None
                 ),
                 algorithm=record.algorithm,
             )
