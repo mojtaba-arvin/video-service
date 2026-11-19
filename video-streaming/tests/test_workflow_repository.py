@@ -1321,5 +1321,86 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_processing_completion_rejects_wrong_or_expired_lease(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _, token, expires_at = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-completion-fence"
+        )
+        report = {"valid": True, "errors": []}
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.complete_processing_attempt(
+                job_id, "p0", attempt_id, report,
+                lease_token="not-the-owner-token",
+            )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=expires_at):
+            with self.assertRaises(AttemptLeaseLost):
+                self.repository.complete_processing_attempt(
+                    job_id, "p0", attempt_id, report,
+                    lease_token=token,
+                )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PROCESSING")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+        self.assertEqual(stage["artifacts"], [])
+
+    def test_processing_completion_rejects_invalid_validation_report(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-invalid-completion-report"
+        )
+        for report in (
+                {"valid": False, "errors": []},
+                {"valid": True, "errors": [{"code": "BROKEN"}]},
+                {"valid": True},
+                None):
+            with self.subTest(report=report):
+                with self.assertRaises(ValueError):
+                    self.repository.complete_processing_attempt(
+                        job_id, "p0", attempt_id, report,
+                        lease_token=token,
+                    )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PROCESSING")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+        self.assertEqual(stage["artifacts"], [])
+
+    def test_publication_claim_event_never_contains_raw_token(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-event-redaction"
+            )
+        )
+
+        with self.repository._session() as session:
+            event = session.query(WorkflowEventRecord).filter_by(
+                attempt_id=publication_id,
+                event_type="STAGE_PUBLICATION_ATTEMPT_CLAIMED",
+            ).one()
+
+        self.assertNotIn(publication_token, repr(event.payload_json))
+        self.assertNotIn("lease_token", event.payload_json)
+        self.assertEqual(
+            event.payload_json["lease_owner"], "worker-event-redaction"
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
