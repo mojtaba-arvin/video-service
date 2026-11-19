@@ -11,6 +11,3 @@ celery_app.autodiscover_tasks(settings.AUTO_DISCOVER_TASKS)
 celery_app.set_default()
 celery_app.set_current()
 
-# Register the database-backed dispatcher explicitly; the outbox task is
-# application infrastructure rather than a task discovered under ffmpeg.
-from video_streaming.workflows import outbox_tasks  # noqa: F401
