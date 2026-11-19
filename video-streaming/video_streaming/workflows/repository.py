@@ -310,12 +310,13 @@ class OutboxRecord(Base):
             name="ck_workflow_outbox_schema_version",
         ),
         CheckConstraint(
-            "(locked_by IS NULL AND lock_token_hash IS NULL AND "
-            "lease_expires_at IS NULL) OR "
-            "(locked_by IS NOT NULL AND lock_token_hash IS NOT NULL AND "
-            "lease_expires_at IS NOT NULL)",
+            "(state = 'PROCESSING' AND locked_by IS NOT NULL AND "
+            "lock_token_hash IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(state <> 'PROCESSING' AND locked_by IS NULL AND "
+            "lock_token_hash IS NULL AND lease_expires_at IS NULL)",
             name="ck_workflow_outbox_lease_complete",
         ),
+        CheckConstraint("attempts >= 0", name="ck_workflow_outbox_attempts"),
         Index(
             "ix_workflow_outbox_ready",
             "state", "available_at", "lease_expires_at",
@@ -909,6 +910,8 @@ class WorkflowRepository:
     def mark_outbox_published(self, outbox_id, lease_token, now=None):
         """Acknowledge only while the caller still owns an unexpired lease."""
         now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
         digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
         with self._session.begin() as session:
             row = session.execute(
