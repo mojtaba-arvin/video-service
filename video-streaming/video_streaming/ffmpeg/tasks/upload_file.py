@@ -123,6 +123,21 @@ def _publish_leased_file(
                 "Uploaded file is not readable through storage"
             )
 
+        if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
+                request_id, output_id):
+            repository.cancel_attempt(
+                request_id,
+                output_id,
+                publication_id,
+                reason="CANCELLED_BEFORE_FILE_ARTIFACT_COMMIT",
+                metrics=metrics,
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
+            if task.is_forced_to_stop(request_id):
+                raise task.raise_revoke(request_id)
+            raise task.raise_revoke_output(request_id, output_id)
+
         artifact_type = kwargs.get("artifact_type") or "media_artifact"
         media_type = kwargs.get("media_type") or (
             mimetypes.guess_type(file_path)[0]
