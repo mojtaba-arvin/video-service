@@ -16,7 +16,7 @@ from video_streaming.workflows.domain import (
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    WorkflowEventRecord, utcnow
+    ArtifactRecord, WorkflowEventRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -1522,6 +1522,91 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertTrue(events[0].payload_json["idempotent_validation_replay"])
 
 
+
+    def test_cancel_attempt_is_lease_fenced_and_clears_lease_tuple(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="cancel-worker"
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.cancel_attempt(
+                job_id, "p0", attempt_id, lease_token="wrong-token"
+            )
+
+        self.assertTrue(self.repository.cancel_attempt(
+            job_id, "p0", attempt_id, lease_token=token
+        ))
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            self.assertEqual(attempt.state, AttemptState.CANCELLED.value)
+            self.assertIsNone(attempt.lease_owner)
+            self.assertIsNone(attempt.lease_token_hash)
+            self.assertIsNone(attempt.lease_expires_at)
+            self.assertIsNone(attempt.heartbeat_at)
+
+    def test_failed_attempt_clears_lease_tuple_for_safe_reclamation(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="failed-worker"
+        )
+        self.assertTrue(self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=False,
+            error_code="SYNTHETIC_FAILURE",
+            error_message="test",
+            lease_token=token,
+        ))
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            self.assertIsNone(attempt.lease_owner)
+            self.assertIsNone(attempt.lease_token_hash)
+            self.assertIsNone(attempt.lease_expires_at)
+            self.assertIsNone(attempt.heartbeat_at)
+
+        self.assertTrue(self.repository.is_attempt_reclaimable(
+            attempt_id,
+            "vod-output",
+            "vod/.attempts/{}".format(attempt_id),
+            minimum_age_seconds=86400,
+        ))
+
+    def test_available_artifact_blocks_attempt_prefix_reclamation(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="failed-with-object"
+        )
+        self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=False,
+            error_code="SYNTHETIC_FAILURE",
+            error_message="test",
+            lease_token=token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            session.add(ArtifactRecord(
+                id=str(uuid4()),
+                job_id=job_id,
+                stage_id=attempt.stage_id,
+                attempt_id=attempt_id,
+                artifact_type="streaming_manifest",
+                logical_name="master.m3u8",
+                uri="s3://vod-output/vod/.attempts/{}/master.m3u8".format(
+                    attempt_id
+                ),
+                status="AVAILABLE",
+                metadata_json={},
+            ))
+
+        self.assertFalse(self.repository.is_attempt_reclaimable(
+            attempt_id,
+            "vod-output",
+            "vod/.attempts/{}".format(attempt_id),
+            minimum_age_seconds=86400,
+        ))
 
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
