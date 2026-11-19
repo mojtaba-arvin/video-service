@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import (
     JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
     ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
-    UniqueConstraint, create_engine,
+    UniqueConstraint, create_engine, and_, or_,
     select, func,
 )
 from sqlalchemy.exc import IntegrityError
@@ -295,6 +295,47 @@ class WorkflowEventRecord(Base):
     payload_json = Column(JSON, nullable=False, default=dict)
 
 
+class OutboxRecord(Base):
+    """Durable, leased delivery intent committed with workflow state."""
+
+    __tablename__ = "workflow_outbox"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_workflow_outbox_dedupe_key"),
+        CheckConstraint(
+            "state IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD')",
+            name="ck_workflow_outbox_state",
+        ),
+        CheckConstraint(
+            "(locked_by IS NULL AND lock_token_hash IS NULL AND "
+            "lease_expires_at IS NULL) OR "
+            "(locked_by IS NOT NULL AND lock_token_hash IS NOT NULL AND "
+            "lease_expires_at IS NOT NULL)",
+            name="ck_workflow_outbox_lease_complete",
+        ),
+        Index(
+            "ix_workflow_outbox_ready",
+            "state", "available_at", "lease_expires_at",
+        ),
+        Index("ix_workflow_outbox_aggregate", "aggregate_id", "created_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    topic = Column(String(128), nullable=False)
+    aggregate_id = Column(String(36), nullable=False)
+    dedupe_key = Column(String(255), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    state = Column(String(16), nullable=False, default="PENDING")
+    attempts = Column(Integer, nullable=False, default=0)
+    available_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    locked_by = Column(String(255), nullable=True)
+    lock_token_hash = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(String(128), nullable=True)
+
+
 class PlaybackSessionRecord(Base):
     __tablename__ = "playback_sessions"
     __table_args__ = (
@@ -425,7 +466,9 @@ class WorkflowRepository:
             metadata=None,
             execution_plan=None,
             owner_principal=None,
-            secret_envelopes=None):
+            secret_envelopes=None,
+            outbox_payload=None,
+            outbox_dedupe_key=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -512,6 +555,17 @@ class WorkflowRepository:
                 # the validated plan-derived stage identity and operation.
                 stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
+        if outbox_payload is not None:
+            if not isinstance(outbox_payload, dict):
+                raise TypeError("outbox_payload must be a JSON object")
+            try:
+                json.dumps(outbox_payload, sort_keys=True, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("outbox_payload must be JSON serializable") from exc
+            if not outbox_dedupe_key:
+                outbox_dedupe_key = "workflow.dispatch:{}".format(job_id)
+            if not isinstance(outbox_dedupe_key, str) or not outbox_dedupe_key.strip():
+                raise ValueError("outbox_dedupe_key must be non-empty")
         try:
             with self._session.begin() as session:
                 existing = session.execute(
@@ -679,6 +733,17 @@ class WorkflowRepository:
                             "kms_key_id": envelope.kms_key_id,
                         },
                     )
+                if outbox_payload is not None:
+                    session.add(OutboxRecord(
+                        id=new_id(),
+                        topic="celery.canvas",
+                        aggregate_id=job_id,
+                        dedupe_key=outbox_dedupe_key,
+                        payload_json=outbox_payload,
+                        state="PENDING",
+                        attempts=0,
+                        available_at=utcnow(),
+                    ))
             return job_id, True
         except IntegrityError:
             # Concurrent duplicate submission: resolve through the unique
@@ -740,6 +805,143 @@ class WorkflowRepository:
                             "Concurrent replay did not persist the expected Job secret"
                         )
                 return existing.id, False
+
+    def claim_outbox_batch(
+            self, owner, lease_ttl_seconds=30, limit=25, now=None):
+        """Claim due outbox rows with SKIP LOCKED and a one-time lease token."""
+        if not isinstance(owner, str) or not owner.strip() or len(owner) > 255:
+            raise ValueError("owner must contain 1 to 255 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if (
+                isinstance(lease_ttl_seconds, bool)
+                or not isinstance(lease_ttl_seconds, (int, float))
+                or lease_ttl_seconds <= 0):
+            raise ValueError("lease_ttl_seconds must be positive")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        claimed = []
+        with self._session.begin() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.available_at <= now,
+                    or_(
+                        OutboxRecord.state == "PENDING",
+                        and_(
+                            OutboxRecord.state == "PROCESSING",
+                            OutboxRecord.lease_expires_at <= now,
+                        ),
+                    ),
+                ).order_by(
+                    OutboxRecord.available_at,
+                    OutboxRecord.created_at,
+                    OutboxRecord.id,
+                ).limit(limit).with_for_update(skip_locked=True)
+            ).scalars().all()
+            for row in rows:
+                token = secrets.token_urlsafe(32)
+                row.state = "PROCESSING"
+                row.locked_by = owner.strip()
+                row.lock_token_hash = hashlib.sha256(
+                    token.encode("utf-8")
+                ).hexdigest()
+                row.lease_expires_at = now + timedelta(
+                    seconds=float(lease_ttl_seconds)
+                )
+                row.attempts += 1
+                row.updated_at = now
+                claimed.append({
+                    "id": row.id,
+                    "topic": row.topic,
+                    "aggregate_id": row.aggregate_id,
+                    "payload": row.payload_json,
+                    "attempts": row.attempts,
+                    "lease_token": token,
+                    "lease_expires_at": row.lease_expires_at.isoformat(),
+                })
+        return claimed
+
+    def mark_outbox_published(self, outbox_id, lease_token, now=None):
+        """Acknowledge only while the caller still owns an unexpired lease."""
+        now = now or utcnow()
+        digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if (
+                    row is None
+                    or row.state != "PROCESSING"
+                    or row.lease_expires_at is None
+                    or row.lease_expires_at <= now
+                    or not hmac.compare_digest(row.lock_token_hash or "", digest)):
+                return False
+            row.state = "PUBLISHED"
+            row.published_at = now
+            row.updated_at = now
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            row.last_error = None
+            return True
+
+    def retry_outbox(
+            self, outbox_id, lease_token, error_code,
+            delay_seconds, max_attempts=20, now=None):
+        """Release a failed delivery for bounded exponential retry or dead-letter."""
+        if (
+                isinstance(delay_seconds, bool)
+                or not isinstance(delay_seconds, (int, float))
+                or delay_seconds < 0):
+            raise ValueError("delay_seconds must be non-negative")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        now = now or utcnow()
+        digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if (
+                    row is None
+                    or row.state != "PROCESSING"
+                    or row.lease_expires_at is None
+                    or row.lease_expires_at <= now
+                    or not hmac.compare_digest(row.lock_token_hash or "", digest)):
+                return False
+            row.state = "DEAD" if row.attempts >= max_attempts else "PENDING"
+            row.available_at = now + timedelta(seconds=float(delay_seconds))
+            row.updated_at = now
+            row.last_error = str(error_code or "dispatch_error")[:128]
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            return row.state == "PENDING"
+
+    def get_outbox_snapshot(self, outbox_id):
+        """Return non-secret operational metadata for one outbox delivery."""
+        with self._session() as session:
+            row = session.get(OutboxRecord, outbox_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "topic": row.topic,
+                "aggregate_id": row.aggregate_id,
+                "dedupe_key": row.dedupe_key,
+                "state": row.state,
+                "attempts": row.attempts,
+                "available_at": row.available_at.isoformat(),
+                "published_at": (
+                    row.published_at.isoformat() if row.published_at else None
+                ),
+                "last_error": row.last_error,
+            }
 
     def get_job_secret_envelope(
             self, job_id, principal, purpose, now=None):
