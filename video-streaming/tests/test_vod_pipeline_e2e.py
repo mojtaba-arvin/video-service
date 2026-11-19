@@ -16,6 +16,7 @@ import unittest
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 
@@ -677,6 +678,118 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         self.assertEqual(
             qoe.pricing_model_id, "relative-resource-index-v1"
         )
+
+
+    def test_leased_thumbnail_publication_uses_attempt_scoped_storage_key(self):
+        from video_streaming.core.constants import OutputStatus
+        from video_streaming.ffmpeg.tasks.upload_file import _publish_leased_file
+        from video_streaming.workflows.service import get_workflow_repository
+
+        repository = get_workflow_repository()
+        job_id = str(uuid4())
+        _, created = repository.create_job(
+            job_id=job_id,
+            idempotency_key="leased-thumbnail-{}".format(job_id),
+            request_hash="f" * 64,
+            stage_specs=[{
+                "stage_key": "thumbnail-0",
+                "operation": "video.package_and_publish",
+            }],
+        )
+        self.assertTrue(created)
+
+        processing_id, _, processing_token, _ = repository.claim_attempt(
+            job_id,
+            "thumbnail-0",
+            lease_owner="thumbnail-worker",
+            execution_ref="thumbnail-task",
+        )
+        validation_report = {
+            "valid": True,
+            "artifact_type": "image_thumbnail",
+            "width": 64,
+            "height": 64,
+            "size_bytes": 8,
+            "errors": [],
+        }
+        repository.complete_processing_attempt(
+            job_id,
+            "thumbnail-0",
+            processing_id,
+            validation_report,
+            lease_token=processing_token,
+            metrics={"input_bytes": 1024, "cpu_seconds": 0.1},
+        )
+
+        local_file = self.root / "leased-thumbnail.jpg"
+        local_file.write_bytes(b"thumbnail")
+        public_key = "jobs/{}/thumbnail.jpg".format(job_id)
+        self.storage.buckets.setdefault("vod-output", {})
+        statuses = []
+
+        class TaskDouble:
+            pass
+
+        task = TaskDouble()
+        task.request = SimpleNamespace(
+            id="leased-thumbnail-publisher",
+            hostname="test-worker",
+            retries=0,
+            kwargs={},
+            called_directly=False,
+        )
+        task.cache = InMemoryCache()
+        task.s3_service = self.storage
+        task.output_status = OutputStatus
+        task.save_output_status = lambda *args: statuses.append(args)
+        task.save_output_progress = lambda **kwargs: None
+        task.is_forced_to_stop = lambda _job_id: False
+        task.is_output_forced_to_stop = lambda _job_id, _stage: False
+
+        result = _publish_leased_file(
+            task,
+            repository,
+            str(local_file),
+            local_file.stat().st_size,
+            public_key,
+            "vod-output",
+            job_id,
+            "thumbnail-0",
+            processing_id,
+            {
+                "artifact_type": "thumbnail",
+                "media_type": "image/jpeg",
+            },
+        )
+
+        expected_prefix = "jobs/{}/.attempts/".format(job_id)
+        self.assertIn(expected_prefix, result["uri"])
+        self.assertEqual(result["durable_stage_status"], "FINISHED")
+        self.assertIsNone(self.storage.head(
+            key=public_key, bucket_name="vod-output"
+        ))
+        self.assertIsNotNone(self.storage.head(
+            key=result["uri"].split("vod-output/", 1)[1],
+            bucket_name="vod-output",
+        ))
+
+        stage = repository.get_stage_snapshot(job_id, "thumbnail-0")
+        self.assertEqual(stage["status"], "FINISHED")
+        self.assertEqual(
+            [attempt["status"] for attempt in stage["attempts"]],
+            ["SUCCEEDED", "SUCCEEDED"],
+        )
+        published = [
+            item for item in stage["artifacts"]
+            if item["type"] == "thumbnail"
+        ]
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["uri"], result["uri"])
+        self.assertTrue(published[0]["metadata"]["attempt_scoped"])
+        self.assertEqual(
+            published[0]["metadata"]["processing_attempt_id"], processing_id
+        )
+
 
 
 if __name__ == "__main__":
