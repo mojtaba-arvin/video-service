@@ -2606,8 +2606,9 @@ class WorkflowRepository:
                         AttemptState.RETRYABLE.value,
                     ]),
                     AttemptRecord.finished_at <= cutoff,
+                    AttemptRecord.metrics_json["package_publication"].is_not(None),
                 ).order_by(AttemptRecord.finished_at.asc())
-                .limit(limit * 10)
+                .limit(limit)
             ).scalars().all()
             metadata = []
             for attempt in candidates:
