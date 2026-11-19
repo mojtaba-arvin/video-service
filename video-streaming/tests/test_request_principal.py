@@ -37,6 +37,10 @@ class RequestPrincipalTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.make_principal(**{field: " "})
 
+    def test_rejects_scalar_scope_string(self):
+        with self.assertRaises(TypeError):
+            self.make_principal(scopes="video.jobs:read")
+
     def test_rejects_naive_expiry(self):
         with self.assertRaises(ValueError):
             self.make_principal(expires_at=datetime(2030, 1, 1))
