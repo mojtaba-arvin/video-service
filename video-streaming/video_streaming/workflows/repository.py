@@ -2578,6 +2578,72 @@ class WorkflowRepository:
             return report
 
 
+    def list_reclaimable_package_attempts(
+            self, minimum_age_seconds=86400, limit=100, now=None):
+        """Return old package Attempts whose exact namespaces pass DB guards."""
+        if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 1000):
+            raise ValueError("limit must be between 1 and 1000")
+        if (
+                isinstance(minimum_age_seconds, bool)
+                or not isinstance(minimum_age_seconds, (int, float))
+                or not math.isfinite(float(minimum_age_seconds))
+                or minimum_age_seconds <= 0):
+            raise ValueError("minimum_age_seconds must be finite and positive")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        cutoff = now - timedelta(seconds=float(minimum_age_seconds))
+
+        with self._session() as session:
+            candidates = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.state.in_([
+                        AttemptState.FAILED.value,
+                        AttemptState.CANCELLED.value,
+                        AttemptState.RETRYABLE.value,
+                    ]),
+                    AttemptRecord.finished_at <= cutoff,
+                ).order_by(AttemptRecord.finished_at.asc())
+                .limit(limit * 10)
+            ).scalars().all()
+            metadata = []
+            for attempt in candidates:
+                namespace = (
+                    (attempt.metrics_json or {}).get("package_publication")
+                )
+                if not isinstance(namespace, dict):
+                    continue
+                required = ("bucket", "prefix", "inventory_key", "logical_key")
+                if not all(
+                        isinstance(namespace.get(key), str)
+                        and namespace.get(key)
+                        for key in required):
+                    continue
+                metadata.append({
+                    "attempt_id": attempt.id,
+                    "bucket": namespace["bucket"],
+                    "prefix": namespace["prefix"],
+                    "inventory_key": namespace["inventory_key"],
+                    "logical_key": namespace["logical_key"],
+                })
+
+        reclaimable = []
+        for item in metadata:
+            if self.is_attempt_reclaimable(
+                    item["attempt_id"],
+                    item["bucket"],
+                    item["prefix"],
+                    minimum_age_seconds=minimum_age_seconds,
+                    now=now):
+                reclaimable.append(item)
+                if len(reclaimable) >= limit:
+                    break
+        return reclaimable
+
+
     def is_attempt_reclaimable(
             self, attempt_id, bucket, attempt_prefix,
             minimum_age_seconds=86400, now=None):
