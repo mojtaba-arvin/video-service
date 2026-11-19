@@ -182,6 +182,50 @@ class WorkflowOutboxRepositoryTests(unittest.TestCase):
             "PUBLISHED",
         )
 
+    def test_repeated_relay_crashes_dead_letter_after_attempt_limit(self):
+        job_id = str(uuid4())
+        self.create_job(job_id=job_id)
+        outbox_id = self.outbox_id(job_id)
+        first_claim_at = utcnow() + timedelta(seconds=1)
+        first = self.repository.claim_outbox_batch(
+            owner="relay-crash-1",
+            lease_ttl_seconds=2,
+            limit=1,
+            now=first_claim_at,
+            max_attempts=1,
+        )
+        self.assertEqual(len(first), 1)
+
+        # Simulate a process crash: no retry_outbox() call is made. The next
+        # relay must dead-letter the expired row rather than claim it forever.
+        recovered_at = first_claim_at + timedelta(seconds=3)
+        recovered = self.repository.claim_outbox_batch(
+            owner="relay-crash-2",
+            lease_ttl_seconds=2,
+            limit=1,
+            now=recovered_at,
+            max_attempts=1,
+        )
+        self.assertEqual(recovered, [])
+        snapshot = self.repository.get_outbox_snapshot(outbox_id)
+        self.assertEqual(snapshot["state"], "DEAD")
+        self.assertEqual(snapshot["attempts"], 1)
+        self.assertEqual(snapshot["last_error"], "lease_expired_retry_limit")
+        self.assertFalse(self.repository.mark_outbox_published(
+            outbox_id, first[0]["lease_token"], now=recovered_at
+        ))
+        self.assertIn(
+            "OUTBOX_DEAD_LETTERED",
+            [event["type"] for event in self.repository.get_job_snapshot(job_id)["events"]],
+        )
+
+    def test_claim_rejects_invalid_attempt_budget(self):
+        with self.assertRaisesRegex(ValueError, "max_attempts"):
+            self.repository.claim_outbox_batch(
+                owner="relay",
+                max_attempts=0,
+            )
+
     def test_retry_is_bounded_and_dead_letters_after_attempt_limit(self):
         job_id = str(uuid4())
         self.create_job(job_id=job_id)
