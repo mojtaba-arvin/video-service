@@ -1,6 +1,6 @@
 # ADR 0010: Celery worker integration for durable Attempt leases
 
-- **Status:** Proposed implementation sequence
+- **Status:** Partially implemented in PR #127; verification pending
 - **Date:** 2026-11-19
 - **Parent issue:** #71
 - **Depends on:** PR #123 (durable Attempt lease primitives)
@@ -25,7 +25,11 @@ PR #123 introduces lease columns, hashed one-time tokens, `claim_attempt()`, `re
 
 The existing FFmpeg process supervisor invokes usage callbacks while polling. This is a suitable heartbeat hook for long-running supervised media commands, but it is not sufficient for blocking storage SDK calls or other operations that do not return to the polling loop.
 
-PR #127 proposes the first runtime slice: thumbnail and watermark processing claim processing leases, use attempt-scoped local scratch directories, renew from supervised FFmpeg usage callbacks, and close the processing Attempt with a durable validation proof. The single-file publisher claims a separate publication Attempt, writes to an immutable attempt-scoped S3 key, renews from transfer progress, verifies remote size/readback, and commits the authoritative Artifact pointer only while the publication lease is valid. The gRPC result projection resolves that AVAILABLE Artifact into the existing `UploadedTo` bucket/key fields and aggregates metrics across processing/publication Attempts. These changes remain proposed until PR #127 is merged and its PostgreSQL, process-control, and fake-storage tests pass.
+PR #127 now contains runtime code for thumbnail, watermark, and HLS/DASH playlist processing. Those processing workers claim processing leases, keep tokens process-local, renew from FFmpeg progress callbacks, and close the processing Attempt after validation. If renewal fails inside the FFmpeg callback, the callback terminates the process tree before propagating the failure.
+
+The single-file and directory publishers independently claim publication Attempts. Single-file output and every HLS/DASH package object use immutable `.attempts/<publication_attempt_id>/...` keys. Package uploads renew from transfer callbacks, preserve manifest-last publication, and commit the authoritative Artifact pointer only under the publication lease. The gRPC result projection resolves AVAILABLE Artifacts into the existing `UploadedTo` bucket/key fields and aggregates metrics across processing/publication Attempts.
+
+The package publisher also exposes a guarded orphan-cleanup primitive. It only reads an Attempt's inventory and deletes keys inside that Attempt namespace, and it requires a caller-supplied database-backed reclaimability predicate. A scheduled janitor and its retention/grace-period policy are not yet integrated. The code and tests are present in PR #127, but the branch has not been executed in CI or locally; none of these behaviors is yet verified by a passing test run.
 
 ## Required implementation increments
 
@@ -52,11 +56,11 @@ PR #127 proposes the first runtime slice: thumbnail and watermark processing cla
 
 - Claim a distinct publication Attempt inside the upload task; never serialize or forward the processing token.
 - Before upload, verify the referenced validation artifact belongs to the expected Job, Stage and completed processing Attempt.
-- Upload to an attempt-scoped staging key, not directly to the stable public key.
-- Verify remote object size/checksum/readback. For HLS/DASH, verify all package objects and the manifest before publishing the stable manifest/reference last.
-- Make promotion to the stable output identity conditional or otherwise concurrency-safe. If the storage adapter cannot provide safe conditional promotion, retain attempt-scoped immutable object keys and atomically update the authoritative Artifact pointer in PostgreSQL.
+- Upload to an attempt-scoped immutable key, not directly to the stable public key. This is implemented for single-file and HLS/DASH package publishers in PR #127.
+- Verify remote object size/readback. For HLS/DASH, verify package dependencies and publish the root manifest last. This is implemented in the package publisher; checksum verification remains a separate enhancement.
+- Do not promote by overwriting a shared stable key. Keep immutable attempt-scoped keys and atomically update the authoritative Artifact pointer in PostgreSQL.
 - Check lease ownership before every externally visible publication boundary and immediately before final repository completion.
-- A stale publisher may leave an unreferenced staging object, but it must never overwrite the current Artifact pointer or make stale output discoverable. Add bounded orphan cleanup separately.
+- A stale publisher may leave an unreferenced attempt-scoped object, but it must never overwrite another Attempt's key or commit the authoritative Artifact pointer. PR #127 adds inventory-scoped cleanup guarded by a database predicate; scheduling, retention grace period, and production DB predicate wiring remain outstanding.
 
 ### D. Failure and retry semantics
 
@@ -88,15 +92,15 @@ PR #127 proposes the first runtime slice: thumbnail and watermark processing cla
 
 1. Merge and deploy the repository lease primitives only after their required review and migration-order checks.
 2. Implement and test repository processing/publication lifecycle transitions.
-3. Integrate one processing task and one publication task behind a disabled-by-default feature flag; run PostgreSQL plus real FFmpeg/S3-compatible integration tests.
-4. Extend the integration to every workflow-managed task and verify no token appears in broker payloads, Redis, task results, logs or events.
-5. Add stale-worker publication races, crash/replay tests, bounded retry accounting and orphan cleanup.
+3. Complete the playlist-processing and directory-publication integration in PR #127; run PostgreSQL plus real FFmpeg/S3-compatible integration tests before enabling it.
+4. Extend the integration to every remaining workflow-managed task and verify no token appears in broker payloads, Redis, task results, logs or events.
+5. Complete end-to-end stale-worker publication races, crash/replay tests, bounded retry accounting, and scheduled orphan cleanup with a database-backed retention predicate.
 6. Enable for an isolated test cohort; observe lease-renewal failures, expired attempts, publication conflicts and orphan artifacts.
 7. Only after all stage classes satisfy the acceptance matrix may Issue #71 outbox dispatch/replay be activated.
 
 ## Explicit non-goals
 
-- This ADR does not implement worker integration, a heartbeat daemon, S3 fencing, an outbox relay, or production rollout.
+- This ADR does not claim production rollout, complete workflow coverage, a scheduled orphan janitor, or an outbox relay.
 - It does not authorize passing raw lease tokens between Celery tasks.
 - It does not assume S3-compatible providers all support the same conditional-write semantics.
 - It does not claim that repository fencing alone prevents a stale process from writing files or remote objects.
