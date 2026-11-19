@@ -1802,13 +1802,22 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         self.repository.complete_processing_attempt(
             job_id, "p0", processing_id,
-            {
-                "valid": True,
-                "errors": [],
-                "local_output_directory": "/missing/package",
-                "local_manifest_path": "/missing/package/master.m3u8",
-            },
+            {"valid": True, "errors": []},
             lease_token=token,
+            metrics={
+                "local_package": {
+                    "directory": "/missing/package",
+                    "manifest_path": "/missing/package/master.m3u8",
+                    "expected_renditions": ["master_144p.m3u8"],
+                    "package_type": "hls",
+                },
+            },
+        )
+        self.assertEqual(
+            self.repository.get_attempt_local_package(processing_id)[
+                "directory"
+            ],
+            "/missing/package",
         )
 
         self.assertTrue(
