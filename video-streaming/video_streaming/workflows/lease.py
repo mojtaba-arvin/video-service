@@ -47,7 +47,9 @@ class AttemptLeaseHeartbeat:
             if renew_interval_seconds is not None else ttl / 3.0
         )
         if not math.isfinite(interval) or interval <= 0 or interval >= ttl:
-            raise ValueError("Heartbeat interval must be positive and shorter than the lease TTL")
+            raise ValueError(
+                "Heartbeat interval must be positive and shorter than the lease TTL"
+            )
 
         self._repository = repository
         self._job_id = job_id
