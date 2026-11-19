@@ -17,6 +17,7 @@ from video_streaming.workflows.metrics import (
     configured_pricing,
 )
 from video_streaming.execution.process_control import run_streaming_process
+from video_streaming.execution.media_probe import probe_media
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
 
@@ -190,7 +191,15 @@ def add_watermark(
         if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
             raise RuntimeError("Watermarked output is missing or empty")
 
-        probe = ffmpeg.probe(output_path, cmd=settings.FFPROBE_BIN_PATH)
+        probe = probe_media(
+            output_path,
+            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+            timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
+        )
         video_stream = next(
             (item for item in probe.get("streams", [])
              if item.get("codec_type") == "video"),

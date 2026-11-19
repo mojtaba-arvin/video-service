@@ -230,6 +230,15 @@ FFPROBE_BIN_PATH = env_config.get(
     "FFPROBE_BIN_PATH",
     default="/usr/local/bin/ffprobe",
     cast=str)
+
+# Independent wall-time budget for metadata validation subprocesses.
+FFPROBE_TIMEOUT_SECONDS = env_config.get(
+    "FFPROBE_TIMEOUT_SECONDS",
+    default=30,
+    cast=int)
+
+if FFPROBE_TIMEOUT_SECONDS <= 0:
+    raise ValueError("FFPROBE_TIMEOUT_SECONDS must be greater than zero")
 FFMPEG_BIN_PATH = env_config.get(
     "FFMPEG_BIN_PATH",
     default="/usr/local/bin/ffmpeg",
