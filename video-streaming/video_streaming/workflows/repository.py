@@ -2571,6 +2571,14 @@ class WorkflowRepository:
         now = now or utcnow()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
+        prefix_parts = attempt_prefix.split("/")
+        if (
+                len(prefix_parts) < 2
+                or prefix_parts[-2] != ".attempts"
+                or prefix_parts[-1] != attempt_id):
+            raise ValueError(
+                "attempt_prefix must end with .attempts/<attempt_id>"
+            )
         uri_prefix = "s3://{}/{}/".format(bucket, attempt_prefix.rstrip("/"))
 
         with self._session() as session:
