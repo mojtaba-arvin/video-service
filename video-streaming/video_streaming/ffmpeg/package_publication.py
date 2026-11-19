@@ -152,6 +152,95 @@ def _artifact_record(bucket, prefix, file_path, relative_path, file_size,
     }
 
 
+
+def cleanup_abandoned_attempt_package(
+        storage,
+        bucket,
+        inventory_key,
+        attempt_prefix,
+        is_reclaimable):
+    """Delete only one terminal, unreferenced package Attempt's objects.
+
+    The caller must provide a database-backed predicate that returns True only
+    after the Attempt is terminal, outside the recovery grace period, and none
+    of its objects are referenced by an AVAILABLE Artifact. The function never
+    lists or deletes a shared prefix; it uses the attempt's ownership inventory.
+    """
+    if not callable(is_reclaimable):
+        raise ValueError("is_reclaimable must be a database-backed predicate")
+
+    prefix = _safe_inventory_path(attempt_prefix)
+    parts = prefix.split("/")
+    try:
+        attempts_index = parts.index(".attempts")
+        attempt_id = parts[attempts_index + 1]
+    except (ValueError, IndexError):
+        raise PackagePublicationError(
+            "Cleanup requires an explicit .attempts/<attempt-id> prefix"
+        )
+    if (
+            attempts_index != len(parts) - 2
+            or not attempt_id
+            or any(part in ("", ".", "..") for part in parts)):
+        raise PackagePublicationError("Invalid attempt cleanup prefix")
+
+    inventory_key = _safe_inventory_path(inventory_key)
+    if not inventory_key.startswith(prefix + "/."):
+        raise PackagePublicationError(
+            "Inventory must be inside the selected attempt prefix"
+        )
+    if not inventory_key.endswith(".artifacts.json"):
+        raise PackagePublicationError("Invalid package inventory key")
+
+    if not is_reclaimable(attempt_id):
+        return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
+
+    raw = storage.read_object_bytes(key=inventory_key, bucket_name=bucket)
+    if raw is None:
+        return {"deleted": True, "attempt_id": attempt_id, "objects": 0}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise PackagePublicationError(
+            "Cannot reclaim package with an unreadable inventory"
+        ) from exc
+    if payload.get("format_version") != 1:
+        raise PackagePublicationError("Unsupported package inventory version")
+    relatives = payload.get("artifacts")
+    if not isinstance(relatives, list):
+        raise PackagePublicationError("Invalid package inventory artifacts")
+
+    safe_relatives = sorted(set(
+        _safe_inventory_path(value) for value in relatives
+    ))
+    object_keys = [
+        _object_key(prefix, relative) for relative in safe_relatives
+    ]
+    if any(not key.startswith(prefix + "/") for key in object_keys):
+        raise PackagePublicationError(
+            "Inventory escaped the selected attempt namespace"
+        )
+
+    manifest_relative = payload.get("manifest")
+    if manifest_relative is not None:
+        manifest_relative = _safe_inventory_path(manifest_relative)
+        manifest_key = _object_key(prefix, manifest_relative)
+        object_keys = [key for key in object_keys if key != manifest_key]
+        # Withdraw the root manifest only after its dependencies are removed.
+        for key in object_keys:
+            storage.delete_object(key=key, bucket_name=bucket)
+        storage.delete_object(key=manifest_key, bucket_name=bucket)
+    else:
+        for key in object_keys:
+            storage.delete_object(key=key, bucket_name=bucket)
+
+    storage.delete_object(key=inventory_key, bucket_name=bucket)
+    return {
+        "deleted": True,
+        "attempt_id": attempt_id,
+        "objects": len(safe_relatives),
+    }
+
 def publish_package(
         directory,
         manifest_path,
