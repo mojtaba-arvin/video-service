@@ -248,6 +248,12 @@ FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
     default=3600,
     cast=int)
 
+# Maximum wall time for one FFprobe validation command.
+FFPROBE_VALIDATION_TIMEOUT_SECONDS = env_config.get(
+    "FFPROBE_VALIDATION_TIMEOUT_SECONDS",
+    default=10,
+    cast=int)
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
