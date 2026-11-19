@@ -246,8 +246,11 @@ class CreateJobMixin(object):
                 no_watermarked_tasks.append(
                     chain_tasks)
 
-    @staticmethod
-    def _build_job_canvas(ordered_levels):
+    def _apply_job(
+            self,
+            request_id,
+            ordered_levels):
+
         chain_items = []
         for level_tasks in ordered_levels:
             if not level_tasks:
@@ -259,18 +262,29 @@ class CreateJobMixin(object):
                 chain_items.append(level_tasks[0])
             else:
                 chain_items.append(group(*level_tasks))
-        return chain(*chain_items)
 
-    def _apply_job(self, request_id, ordered_levels):
-        """Legacy direct dispatcher retained for non-outbox callers."""
-        job = self._build_job_canvas(ordered_levels)
+        job = chain(*chain_items)
+
+        # set first primary status as QUEUING_CHECKS
         self.cache.set(
-            CacheKeysTemplates.PRIMARY_STATUS.format(request_id=request_id),
+            CacheKeysTemplates.PRIMARY_STATUS.format(
+                request_id=request_id),
             PrimaryStatus.QUEUING_CHECKS
         )
+
+        # apply tasks
         result = job.apply_async()
+
+        # is GroupResult or AsyncResult
+        # if len(ordered_levels[-1]) > 1:
+        #     result: celery_result.GroupResult
+        #     result.save()
+
+        # saving celery result id of the request
         self.cache.set(
-            CacheKeysTemplates.REQUEST_RESULT_ID.format(request_id=request_id),
+            CacheKeysTemplates.REQUEST_RESULT_ID.format(
+                request_id=request_id
+            ),
             str(result.id)
         )
 
@@ -565,20 +579,6 @@ class CreateJobMixin(object):
                 },
             })
 
-        ordered_levels = [
-            first_level,
-            second_level,
-            third_level,
-            fourth_level,
-            fifth_level,
-        ]
-        # Celery Canvas signatures are JSON-native dictionaries. Persist the
-        # complete graph before acknowledging the request; no broker publish
-        # happens in this request transaction.
-        dispatch_payload = json.loads(json.dumps(
-            self._build_job_canvas(ordered_levels)
-        ))
-
         request_for_hash = self.pb2.JobRequest()
         request_for_hash.CopyFrom(request)
         request_for_hash.idempotency_key = ""
@@ -595,8 +595,6 @@ class CreateJobMixin(object):
                 reference_id=request.reference_id,
                 workflow_name="video.vod",
                 stage_specs=stage_specs,
-                outbox_payload=dispatch_payload,
-                outbox_dedupe_key="workflow.dispatch:{}".format(request_id),
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": len(stage_specs),
@@ -647,24 +645,15 @@ class CreateJobMixin(object):
             ),
             json.dumps(job_details))
 
-        self.cache.set(
-            CacheKeysTemplates.PRIMARY_STATUS.format(request_id=request_id),
-            PrimaryStatus.QUEUING_CHECKS
-        )
-        # A failed wake-up is harmless: Celery Beat continuously polls the
-        # durable outbox. Never roll back an accepted Job because a nudge failed.
-        self.cache.set(
-            CacheKeysTemplates.REQUEST_RESULT_ID.format(request_id=request_id),
-            request_id
-        )
-        try:
-            from video_streaming.workflows.outbox_tasks import (
-                publish_workflow_outbox,
-            )
-            publish_workflow_outbox.delay()
-        except Exception:
-            logger.warning(
-                "Outbox relay wake-up failed; scheduled polling will recover",
-                extra={"job_id": request_id},
-            )
+        ordered_levels = [
+            first_level,  # checks
+            second_level,  # checks
+
+            third_level,  # downloads
+            fourth_level,  # wait
+
+            fifth_level  # outputs
+        ]
+
+        self._apply_job(request_id, ordered_levels)
         return self._job_response(request_id)
