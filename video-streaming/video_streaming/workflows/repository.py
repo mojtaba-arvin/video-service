@@ -581,14 +581,6 @@ class WorkflowRepository:
             if not isinstance(outbox_dedupe_key, str) or not outbox_dedupe_key.strip():
                 raise ValueError("outbox_dedupe_key must be non-empty")
         try:
-                json.dumps(outbox_payload, sort_keys=True, allow_nan=False)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("outbox_payload must be JSON serializable") from exc
-            if not outbox_dedupe_key:
-                outbox_dedupe_key = "workflow.dispatch:{}".format(job_id)
-            if not isinstance(outbox_dedupe_key, str) or not outbox_dedupe_key.strip():
-                raise ValueError("outbox_dedupe_key must be non-empty")
-        try:
             with self._session.begin() as session:
                 existing = session.execute(
                     select(JobRecord).where(
