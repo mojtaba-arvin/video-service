@@ -1726,8 +1726,8 @@ class WorkflowRepository:
     def recover_expired_attempts(self, now=None, pricing=None, limit=100):
         """Recover only running attempts whose durable worker lease has expired.
 
-        Stage rows are locked before Attempt rows, matching claim/heartbeat and
-        completion lock ordering so concurrent recoverers cannot double-recover.
+        Candidate discovery is unlocked. Mutations lock Stage then Attempt,
+        matching claim/heartbeat/completion order and allowing safe pollers.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
@@ -1736,8 +1736,8 @@ class WorkflowRepository:
             raise ValueError("now must be timezone-aware")
         recovered = 0
         with self._session.begin() as session:
-            candidate_ids = session.execute(
-                select(AttemptRecord.id).where(
+            candidates = session.execute(
+                select(AttemptRecord.id, AttemptRecord.stage_id).where(
                     AttemptRecord.state == AttemptState.RUNNING.value,
                     AttemptRecord.lease_token_hash.is_not(None),
                     AttemptRecord.lease_expires_at <= now,
@@ -1745,23 +1745,22 @@ class WorkflowRepository:
                     AttemptRecord.lease_expires_at,
                     AttemptRecord.id,
                 ).limit(limit)
-            ).scalars().all()
+            ).all()
 
-            for attempt_id in candidate_ids:
-                candidate = session.get(AttemptRecord, attempt_id)
-                if candidate is None:
-                    continue
+            for attempt_id, stage_id in candidates:
                 stage = session.execute(
                     select(StageRecord).where(
-                        StageRecord.id == candidate.stage_id
-                    ).with_for_update()
+                        StageRecord.id == stage_id
+                    ).with_for_update(skip_locked=True)
                 ).scalar_one_or_none()
                 if stage is None:
                     continue
                 attempt = session.execute(
                     select(AttemptRecord).where(
                         AttemptRecord.id == attempt_id
-                    ).with_for_update()
+                    ).with_for_update().execution_options(
+                        populate_existing=True
+                    )
                 ).scalar_one_or_none()
                 if attempt is None:
                     continue
@@ -1770,20 +1769,47 @@ class WorkflowRepository:
                     recovered += 1
         return recovered
 
-    def recover_stale_attempts(self, older_than, pricing=None):
-        """Move abandoned running attempts to RETRY_WAIT without Redis TTL."""
+    def recover_stale_attempts(self, older_than, pricing=None, limit=100):
+        """Recover legacy non-leased attempts by age without racing lease owners."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if older_than.tzinfo is None or older_than.utcoffset() is None:
+            raise ValueError("older_than must be timezone-aware")
         recovered = 0
         now = utcnow()
         with self._session.begin() as session:
-            attempts = session.execute(
-                select(AttemptRecord).where(
+            candidates = session.execute(
+                select(AttemptRecord.id, AttemptRecord.stage_id).where(
                     AttemptRecord.state == AttemptState.RUNNING.value,
                     AttemptRecord.started_at < older_than,
                     AttemptRecord.lease_token_hash.is_(None),
-                ).with_for_update()
-            ).scalars().all()
-            for attempt in attempts:
-                stage = session.get(StageRecord, attempt.stage_id)
+                ).order_by(
+                    AttemptRecord.started_at,
+                    AttemptRecord.id,
+                ).limit(limit)
+            ).all()
+
+            for attempt_id, stage_id in candidates:
+                stage = session.execute(
+                    select(StageRecord).where(
+                        StageRecord.id == stage_id
+                    ).with_for_update(skip_locked=True)
+                ).scalar_one_or_none()
+                if stage is None:
+                    continue
+                attempt = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.id == attempt_id
+                    ).with_for_update().execution_options(
+                        populate_existing=True
+                    )
+                ).scalar_one_or_none()
+                if (
+                        attempt is None
+                        or attempt.state != AttemptState.RUNNING.value
+                        or attempt.lease_token_hash is not None
+                        or attempt.started_at >= older_than):
+                    continue
                 if stage.status not in (
                         StageState.PROCESSING.value,
                         StageState.VALIDATED.value,
