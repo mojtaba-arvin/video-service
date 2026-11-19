@@ -5,6 +5,27 @@
 - **Parent issue:** #71
 - **Scope:** Reliable dispatch of durable VOD workflows from PostgreSQL to Celery or a future execution adapter
 
+## Implementation status (2026-11-19)
+
+PR #123 adds the first durable Attempt lease primitives on top of the encrypted
+Job Secret Store work in PRs #119/#121. The implementation adds one-time
+worker lease tokens (persisted only as SHA-256 digests), lease owner/expiry and
+heartbeat timestamps, guarded renewal, expiry recovery and token checks on
+leased-attempt validation/publication/completion/failure writes.
+
+This is **not yet live worker integration**. Existing Celery task call sites
+still use the legacy `start_attempt()` API; no production task has switched to
+`claim_attempt()` or periodic heartbeat renewal. The lease API is not proof
+that FFmpeg/S3 side effects are fenced after a worker loses its lease.
+Attempt-scoped deterministic artifacts and side-effect idempotency remain
+required before dispatch replay can be enabled.
+
+PR #123 is open and unmerged. The transactional outbox and relay are not
+implemented. Do not activate broker-backed plan dispatch until authenticated
+CreateJob/secret resolution, complete stage coverage, worker lease/heartbeat
+integration, external side-effect fencing, crash recovery and duplicate
+delivery tests all pass.
+
 ## Context
 
 The current create path persists Job, Workflow and Stage records with
