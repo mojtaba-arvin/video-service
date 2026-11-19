@@ -1178,6 +1178,9 @@ class WorkflowRepositoryTests(unittest.TestCase):
             lease_token=processing_token,
         )
 
+        stage_version_before_claim = self.repository.get_stage_snapshot(
+            job_id, "p0"
+        )["version"]
         with self.assertRaises(InvalidStateTransition):
             self.repository.claim_publication_attempt(
                 job_id,
@@ -1197,6 +1200,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertNotEqual(processing_id, publication_id)
         self.assertNotEqual(processing_token, publication_token)
         self.assertEqual(number, 2)
+        self.assertGreater(
+            self.repository.get_stage_snapshot(job_id, "p0")["version"],
+            stage_version_before_claim,
+        )
 
         self.repository.start_publishing(
             job_id, "p0", publication_id, lease_token=publication_token
