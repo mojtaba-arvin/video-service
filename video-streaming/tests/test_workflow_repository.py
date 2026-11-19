@@ -1789,6 +1789,13 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "vod-output",
             "vod/.attempts/{}".format(publication_id),
         ))
+        with self.repository._session() as session:
+            cleaned_attempt = session.get(AttemptRecord, publication_id)
+            self.assertTrue(
+                cleaned_attempt.metrics_json["package_publication"][
+                    "cleanup_completed_at"
+                ]
+            )
         self.assertNotIn(
             publication_id,
             [
