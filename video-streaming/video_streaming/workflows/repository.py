@@ -836,12 +836,23 @@ class WorkflowRepository:
                 return existing.id, False
 
     def claim_outbox_batch(
-            self, owner, lease_ttl_seconds=30, limit=25, now=None):
-        """Claim due outbox rows with SKIP LOCKED and a one-time lease token."""
+            self, owner, lease_ttl_seconds=30, limit=25, now=None,
+            max_attempts=20):
+        """Claim due outbox rows with SKIP LOCKED and a one-time lease token.
+
+        Expired claims consume the same bounded delivery budget as explicit
+        failures. Once the budget is exhausted, the row is dead-lettered
+        instead of being reclaimed forever after repeated relay crashes.
+        """
         if not isinstance(owner, str) or not owner.strip() or len(owner) > 255:
             raise ValueError("owner must contain 1 to 255 characters")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
+        if (
+                isinstance(max_attempts, bool)
+                or not isinstance(max_attempts, int)
+                or not 1 <= max_attempts <= 100):
+            raise ValueError("max_attempts must be between 1 and 100")
         if (
                 isinstance(lease_ttl_seconds, bool)
                 or not isinstance(lease_ttl_seconds, (int, float))
@@ -870,6 +881,31 @@ class WorkflowRepository:
                 ).limit(limit).with_for_update(skip_locked=True)
             ).scalars().all()
             for row in rows:
+                # A relay can die after claiming but before it reports a
+                # publish failure. Expiry must therefore consume the bounded
+                # attempt budget too; otherwise crash loops never dead-letter.
+                if (
+                        row.state == "PROCESSING"
+                        and row.attempts >= max_attempts):
+                    row.state = "DEAD"
+                    row.locked_by = None
+                    row.lock_token_hash = None
+                    row.lease_expires_at = None
+                    row.last_error = "lease_expired_retry_limit"
+                    row.updated_at = now
+                    _record_event(
+                        session,
+                        row.job_id,
+                        row.workflow_id,
+                        "OUTBOX_DEAD_LETTERED",
+                        payload={
+                            "outbox_id": row.id,
+                            "attempt": row.attempts,
+                            "error_code": row.last_error,
+                            "reason": "lease_expired",
+                        },
+                    )
+                    continue
                 token = secrets.token_urlsafe(32)
                 row.state = "PROCESSING"
                 row.locked_by = owner.strip()
