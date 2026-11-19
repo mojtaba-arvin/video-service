@@ -363,9 +363,40 @@ REDIS_URL = env_config.get(
 )
 
 
-# Run the guarded package-attempt janitor hourly. The task rechecks each
-# candidate against PostgreSQL immediately before deleting its inventory.
+WORKFLOW_OUTBOX_BATCH_SIZE = env_config.get(
+    "WORKFLOW_OUTBOX_BATCH_SIZE",
+    default=25,
+    cast=int)
+WORKFLOW_OUTBOX_LEASE_TTL_SECONDS = env_config.get(
+    "WORKFLOW_OUTBOX_LEASE_TTL_SECONDS",
+    default=30,
+    cast=int)
+WORKFLOW_OUTBOX_MAX_ATTEMPTS = env_config.get(
+    "WORKFLOW_OUTBOX_MAX_ATTEMPTS",
+    default=20,
+    cast=int)
+WORKFLOW_OUTBOX_MAX_RETRY_DELAY_SECONDS = env_config.get(
+    "WORKFLOW_OUTBOX_MAX_RETRY_DELAY_SECONDS",
+    default=300,
+    cast=int)
+
+if not 1 <= WORKFLOW_OUTBOX_BATCH_SIZE <= 500:
+    raise ValueError("WORKFLOW_OUTBOX_BATCH_SIZE must be between 1 and 500")
+if not 5 <= WORKFLOW_OUTBOX_LEASE_TTL_SECONDS <= 3600:
+    raise ValueError("WORKFLOW_OUTBOX_LEASE_TTL_SECONDS must be between 5 and 3600")
+if not 1 <= WORKFLOW_OUTBOX_MAX_ATTEMPTS <= 100:
+    raise ValueError("WORKFLOW_OUTBOX_MAX_ATTEMPTS must be between 1 and 100")
+if not 1 <= WORKFLOW_OUTBOX_MAX_RETRY_DELAY_SECONDS <= 3600:
+    raise ValueError("WORKFLOW_OUTBOX_MAX_RETRY_DELAY_SECONDS must be between 1 and 3600")
+
+# Both relays are database-backed. Outbox polling is intentionally frequent;
+# an API-side wake-up is only a latency optimization, never the recovery path.
 CELERY_BEAT_SCHEDULE = {
+    "publish-workflow-outbox": {
+        "task": "publish_workflow_outbox",
+        "schedule": 5.0,
+        "options": {"expires": 4},
+    },
     "cleanup-abandoned-package-attempts": {
         "task": "cleanup_abandoned_packages",
         "schedule": 3600.0,
