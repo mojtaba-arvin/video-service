@@ -27,10 +27,21 @@ class OIDCAuthenticator:
         self.algorithms = tuple(
             item.strip() for item in algorithms if item and item.strip()
         )
-        if not self.algorithms or any(
-                item.lower() == "none" or item.startswith("HS")
-                for item in self.algorithms):
-            raise ValueError("OIDC_ALLOWED_ALGORITHMS must contain asymmetric algorithms")
+        supported_asymmetric_algorithms = {
+            "RS256", "RS384", "RS512",
+            "PS256", "PS384", "PS512",
+            "ES256", "ES384", "ES512",
+            "EdDSA",
+        }
+        if (
+                not self.algorithms
+                or any(
+                    item not in supported_asymmetric_algorithms
+                    for item in self.algorithms
+                )):
+            raise ValueError(
+                "OIDC_ALLOWED_ALGORITHMS must use supported asymmetric algorithms"
+            )
         self.tenant_claim = self._required(tenant_claim, "OIDC_TENANT_CLAIM")
         self.subject_claim = self._required(subject_claim, "OIDC_SUBJECT_CLAIM")
         self.scopes_claim = scopes_claim
