@@ -2,3 +2,5 @@
 ffmpeg-python==0.2.0
 # Process-tree termination regression tests
 psutil==5.9.8
+# gRPC server interceptor contract tests
+grpcio==1.78.2
