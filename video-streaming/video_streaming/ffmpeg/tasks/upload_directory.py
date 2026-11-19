@@ -10,6 +10,7 @@ from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.lease import AttemptLeaseHeartbeat
 from video_streaming.workflows.artifacts import attempt_scoped_object_key
 from video_streaming.workflows.metrics import configured_pricing
+from video_streaming.workflows.resource_meter import ProcessResourceMeter
 from .base import BaseStreamingTask
 from .mixins import UploadDirectoryMixin
 
@@ -108,6 +109,12 @@ def upload_directory(self,
     attempt_output_key = attempt_scoped_object_key(
         s3_output_key, publication_id
     )
+    resource_meter = ProcessResourceMeter().start()
+    metrics = {
+        "input_bytes": None,
+        "output_bytes": None,
+        "artifact_count": 0,
+    }
 
     if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
             request_id, output_id):
@@ -115,10 +122,8 @@ def upload_directory(self,
             request_id, output_id, publication_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
             metrics={
-                "input_bytes": None,
-                "cpu_seconds": None,
-                "peak_memory_bytes": None,
-                "memory_duration_ms": None,
+                **metrics,
+                **resource_meter.stop(),
             },
             pricing=configured_pricing(settings),
             lease_token=lease_token,
@@ -130,11 +135,6 @@ def upload_directory(self,
     repository.start_publishing(
         request_id, output_id, publication_id, lease_token=lease_token
     )
-    # Processing usage belongs to the processing Attempt. Do not copy it into
-    # publication metrics or aggregate the same CPU/memory spend twice.
-    cpu_seconds = None
-    peak_memory_bytes = None
-    memory_duration_ms = None
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
@@ -159,12 +159,8 @@ def upload_directory(self,
             attempt_id=publication_id,
             artifacts=publication["artifacts"],
             metrics={
-                "cpu_seconds": cpu_seconds,
-                "peak_memory_bytes": (
-                    int(peak_memory_bytes) if peak_memory_bytes else None
-                ),
-                "memory_duration_ms": memory_duration_ms,
-                "input_bytes": None,
+                **metrics,
+                **resource_meter.stop(),
                 "output_bytes": int(publication["directory_size"]),
                 "artifact_count": int(publication["files"]),
                 "validation_errors": len(
@@ -177,21 +173,16 @@ def upload_directory(self,
     except AttemptLeaseLost:
         # Attempt-scoped package keys isolate stale publishers. Only the
         # current lease holder may publish the Artifact pointer.
+        resource_meter.stop()
         raise
     except Exception as exc:
+        metrics.update(resource_meter.stop())
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
                 request_id, output_id, publication_id,
                 reason="CANCELLED_DURING_PACKAGE_PUBLICATION",
-                metrics={
-                    "input_bytes": None,
-                    "cpu_seconds": cpu_seconds,
-                    "peak_memory_bytes": (
-                        int(peak_memory_bytes) if peak_memory_bytes else None
-                    ),
-                    "memory_duration_ms": memory_duration_ms,
-                },
+                metrics=metrics,
                 pricing=configured_pricing(settings),
                 lease_token=lease_token,
             )
@@ -212,14 +203,7 @@ def upload_directory(self,
                 if retries_available else "PACKAGE_PUBLICATION_FAILED"
             ),
             error_message=str(exc),
-            metrics={
-                "input_bytes": None,
-                "cpu_seconds": cpu_seconds,
-                "peak_memory_bytes": (
-                    int(peak_memory_bytes) if peak_memory_bytes else None
-                ),
-                "memory_duration_ms": memory_duration_ms,
-            },
+            metrics=metrics,
             pricing=configured_pricing(settings),
             lease_token=lease_token,
         )
