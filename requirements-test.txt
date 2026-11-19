@@ -5,6 +5,7 @@ psutil==5.9.8
 
 # gRPC authentication interceptor tests
 grpcio==1.78.2
+grpcio-health-checking==1.78.2
 
 # OIDC/JWKS bearer authentication tests
 PyJWT[crypto]==2.15.1
