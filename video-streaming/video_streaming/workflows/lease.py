@@ -8,6 +8,7 @@ before committing their result.
 """
 
 import math
+import threading
 import time
 
 from .domain import AttemptLeaseLost
@@ -27,6 +28,7 @@ class AttemptLeaseHeartbeat:
         "_monotonic",
         "_last_renewed",
         "_lost",
+        "_lock",
     )
 
     def __init__(
@@ -63,6 +65,7 @@ class AttemptLeaseHeartbeat:
         self._monotonic = monotonic
         self._last_renewed = monotonic()
         self._lost = False
+        self._lock = threading.Lock()
 
     def __reduce__(self):
         raise TypeError(
@@ -79,7 +82,8 @@ class AttemptLeaseHeartbeat:
 
     @property
     def lost(self):
-        return self._lost
+        with self._lock:
+            return self._lost
 
     def _renew(self):
         if self._lost:
@@ -102,11 +106,12 @@ class AttemptLeaseHeartbeat:
 
     def on_progress(self, *_args, **_kwargs):
         """Callback adapter for SDK/transfer progress callbacks."""
-        if self._lost:
-            raise AttemptLeaseLost("Attempt lease is no longer owned")
-        if self._monotonic() - self._last_renewed >= self._renew_interval:
-            return self._renew()
-        return False
+        with self._lock:
+            if self._lost:
+                raise AttemptLeaseLost("Attempt lease is no longer owned")
+            if self._monotonic() - self._last_renewed >= self._renew_interval:
+                return self._renew()
+            return False
 
     def on_usage(self, _metrics):
         """Callback adapter for process-tree usage samples."""
@@ -114,4 +119,5 @@ class AttemptLeaseHeartbeat:
 
     def assert_owned(self):
         """Force a DB renewal before a validation or state mutation boundary."""
-        return self._renew()
+        with self._lock:
+            return self._renew()
