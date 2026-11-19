@@ -1,6 +1,6 @@
 # ADR 0010: Celery worker integration for durable Attempt leases
 
-- **Status:** Partially implemented in PR #127; verification pending
+- **Status:** Implemented in PR #127; final CI verification pending
 - **Date:** 2026-11-19
 - **Parent issue:** #71
 - **Depends on:** PR #123 (durable Attempt lease primitives)
@@ -23,13 +23,13 @@ This requires an explicit repository transition for completing a processing Atte
 
 PR #123 introduces lease columns, hashed one-time tokens, `claim_attempt()`, `renew_attempt_lease()`, fenced repository writes, and bounded expired-lease recovery. Its CI verifies repository-level behavior. It does not yet change live Celery task call sites or fence external side effects.
 
-The existing FFmpeg process supervisor invokes usage callbacks while polling. This is a suitable heartbeat hook for long-running supervised media commands, but it is not sufficient for blocking storage SDK calls or other operations that do not return to the polling loop.
+The shared FFmpeg process supervisor invokes usage callbacks while polling, checks cancellation and deadlines, and terminates the complete process tree when callbacks fail. Playlist generation now uses this supervisor directly rather than the `ffmpeg-streaming` library's internal monitor thread. The playlist timeout is bounded by `FFMPEG_PLAYLIST_TIMEOUT_SECONDS` (default 7,200 seconds); usage polling renews the lease even when FFmpeg emits no progress line. Blocking storage SDK calls still renew from transfer callbacks.
 
-PR #127 now contains runtime code for thumbnail, watermark, and HLS/DASH playlist processing. Those processing workers claim processing leases, keep tokens process-local, renew from FFmpeg progress callbacks, and close the processing Attempt after validation. If renewal fails inside the FFmpeg callback, the callback terminates the process tree before propagating the failure.
+PR #127 now contains runtime code for thumbnail, watermark, and HLS/DASH playlist processing. Those workers claim processing leases, keep tokens process-local, renew from process-usage/progress callbacks, and close the processing Attempt after validation. Thumbnail, watermark, and playlist commands run under the process-tree supervisor; timeout, cancellation, callback failure, or lease loss terminates the full process tree before validation or repository completion.
 
 The single-file and directory publishers independently claim publication Attempts. Single-file output and every HLS/DASH package object use immutable `.attempts/<publication_attempt_id>/...` keys. Package uploads renew from transfer callbacks, preserve manifest-last publication, and commit the authoritative Artifact pointer only under the publication lease. The gRPC result projection resolves AVAILABLE Artifacts into the existing `UploadedTo` bucket/key fields and aggregates metrics across processing/publication Attempts.
 
-The package publisher also exposes a guarded orphan-cleanup primitive. It only reads an Attempt's inventory and deletes keys inside that Attempt namespace, and it requires a caller-supplied database-backed reclaimability predicate. The repository now exposes `is_attempt_reclaimable()`: only failed/cancelled Attempts, or retryable Attempts superseded by a newer Attempt, can qualify after the grace period; any AVAILABLE Artifact under the exact bucket/prefix blocks deletion. The cleanup helper requires this database-backed predicate. Two Celery tasks are registered: `cleanup_package_attempt` for a known Attempt and `cleanup_abandoned_packages` for the scheduled janitor. The janitor runs hourly through `CELERY_BEAT_SCHEDULE` and a dedicated Circus Beat watcher, using a configurable one-day default retention grace period. Publication namespace metadata is persisted with each package Attempt so the janitor can enumerate candidates without listing shared S3 prefixes. PostgreSQL revalidates each candidate immediately before deletion. The manual invocation and eligibility rules are documented in the operations runbook added by PR #127. The code and tests are present in PR #127, but the branch has not been executed in CI or locally; none of these behaviors is yet verified by a passing test run.
+Orphan cleanup covers both package and single-file publication Attempts. HLS/DASH Attempts persist an inventory and exact prefix; single-file Attempts persist the exact immutable object key. The repository exposes `is_attempt_reclaimable()`: failed/cancelled Attempts, or retryable Attempts superseded by a newer Attempt, qualify only after the retention grace period; any AVAILABLE Artifact under the exact bucket/prefix blocks deletion. The cleanup helpers require this database-backed predicate and never list or delete a shared prefix. Two Celery tasks are registered: `cleanup_package_attempt` for a known Attempt and `cleanup_abandoned_packages` for the hourly janitor. The janitor runs through `CELERY_BEAT_SCHEDULE` and a dedicated production Circus Beat watcher, using a configurable one-day default retention grace period. Namespace metadata is persisted with each publication Attempt, so candidates are enumerated from PostgreSQL rather than bucket listings. PostgreSQL revalidates each candidate immediately before deletion, and a durable cleanup marker prevents repeat scans. The manual invocation and eligibility rules are documented in the operations runbook added by PR #127. Repository-level PostgreSQL tests and real FFmpeg/S3-compatible VOD integration tests have passed on an earlier stacked head; the latest process-supervisor and cancellation-race changes are undergoing a fresh CI run.
 
 ## Required implementation increments
 
@@ -92,9 +92,9 @@ The package publisher also exposes a guarded orphan-cleanup primitive. It only r
 
 1. Merge and deploy the repository lease primitives only after their required review and migration-order checks.
 2. Implement and test repository processing/publication lifecycle transitions.
-3. Complete the playlist-processing and directory-publication integration in PR #127; run PostgreSQL plus real FFmpeg/S3-compatible integration tests before enabling it.
+3. Complete the playlist-processing and directory-publication integration in PR #127; the implementation is present, with the final CI run required before enabling it.
 4. Extend the integration to every remaining workflow-managed task and verify no token appears in broker payloads, Redis, task results, logs or events.
-5. Complete end-to-end stale-worker publication races, crash/replay tests, bounded retry accounting, and scheduled orphan cleanup with a database-backed retention predicate.
+5. Keep extending crash/replay and cancellation-race coverage as new side-effect paths are added; the current VOD slice includes stale publisher fencing, post-upload/pre-commit recovery, readback failure, local scratch loss/requeue, and scheduled orphan cleanup with a database-backed retention predicate.
 6. Enable for an isolated test cohort; observe lease-renewal failures, expired attempts, publication conflicts and orphan artifacts.
 7. Only after all stage classes satisfy the acceptance matrix may Issue #71 outbox dispatch/replay be activated.
 
