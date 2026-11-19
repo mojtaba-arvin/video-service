@@ -235,6 +235,10 @@ def create_playlist(
             metadata_probe_timeout_seconds=(
                 settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
             ),
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
         )
         validation_report.require_valid()
         workflow_repository.mark_validated(
