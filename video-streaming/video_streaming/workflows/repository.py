@@ -949,6 +949,7 @@ class WorkflowRepository:
             "usage_capture": "incomplete_worker_lost",
         }
         self._apply_attempt_accounting(attempt, metrics, pricing)
+        self._clear_attempt_lease(attempt)
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
         workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -1504,6 +1505,10 @@ class WorkflowRepository:
         WorkflowRepository._apply_attempt_accounting(attempt, usage, pricing)
         # The process-local token is no longer useful after the processing
         # attempt is terminal. Clear the complete lease tuple atomically.
+        WorkflowRepository._clear_attempt_lease(attempt)
+
+    @staticmethod
+    def _clear_attempt_lease(attempt):
         attempt.lease_owner = None
         attempt.lease_token_hash = None
         attempt.lease_expires_at = None
@@ -1795,6 +1800,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             prior_artifact_count = session.execute(
                 select(func.count()).select_from(ArtifactRecord).where(
                     ArtifactRecord.stage_id == stage.id,
@@ -1902,6 +1908,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             attempt.error_code = error_code
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -1943,13 +1950,15 @@ class WorkflowRepository:
             attempt_id,
             reason="CANCELLED",
             metrics=None,
-            pricing=None):
+            pricing=None,
+            lease_token=None):
         """Persist cancellation of a running attempt and its workflow stage."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
             if attempt.state != AttemptState.RUNNING.value:
                 return False
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
@@ -1977,6 +1986,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason
             workflow = session.get(WorkflowRecord, stage.workflow_id)
