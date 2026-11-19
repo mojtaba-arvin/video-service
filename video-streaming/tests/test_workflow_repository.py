@@ -110,12 +110,11 @@ class WorkflowRepositoryTests(unittest.TestCase):
             ).all()
 
         expected = {
-            (node["stage_key"], plan_node_by_id["stage_key"])
+            (node["stage_key"], dependency["stage_key"])
             for node in plan["nodes"]
-            for plan_node_by_id in [next(
-                item for item in plan["nodes"]
-                if item["node_id"] in node["depends_on"]
-            )] if node["depends_on"]
+            for dependency_node_id in node["depends_on"]
+            for dependency in plan["nodes"]
+            if dependency["node_id"] == dependency_node_id
         }
         actual = {
             (
