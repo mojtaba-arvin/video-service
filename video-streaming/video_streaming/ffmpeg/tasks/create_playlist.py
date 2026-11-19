@@ -340,7 +340,7 @@ def create_playlist(
             raise self.raise_revoke(request_id)
         raise self.raise_revoke_output(request_id, output_id)
 
-    # Processing completion is deferred until publication has been verified.
+    # Processing is terminal here; the chained publisher owns a separate lease.
     return dict(
         directory=directory,
         expected_renditions=expected_renditions,
