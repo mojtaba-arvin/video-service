@@ -2827,6 +2827,7 @@ class WorkflowRepository:
                     "Cannot requeue while another Attempt is active"
                 )
 
+            previous_status = stage.status
             validation_artifact = session.execute(
                 select(ArtifactRecord).where(
                     ArtifactRecord.stage_id == stage.id,
@@ -2876,7 +2877,7 @@ class WorkflowRepository:
                 job_id,
                 workflow.id,
                 "PROCESSING_REQUEUED_AFTER_LOCAL_PACKAGE_LOSS",
-                from_state=StageState.VALIDATED.value,
+                from_state=previous_status,
                 to_state=StageState.RETRY_WAIT.value,
                 stage_id=stage.id,
                 attempt_id=processing_attempt_id,
