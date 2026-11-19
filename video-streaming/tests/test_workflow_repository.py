@@ -1649,6 +1649,63 @@ class WorkflowRepositoryTests(unittest.TestCase):
             old_id, "vod-output", prefix, minimum_age_seconds=86400
         ))
 
+    def test_publication_cancellation_wins_before_artifact_pointer_commit(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="publisher-cancel-race",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        self.repository.cancel_attempt(
+            job_id,
+            "p0",
+            publication_id,
+            reason="CANCELLED_BEFORE_PACKAGE_ARTIFACT_COMMIT",
+            lease_token=publication_token,
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id,
+                "p0",
+                publication_id,
+                artifacts=[{
+                    "artifact_type": "streaming_manifest",
+                    "logical_name": "master",
+                    "uri": "s3://vod-output/vod/.attempts/{}/master.m3u8".format(
+                        publication_id
+                    ),
+                }],
+                lease_token=publication_token,
+            )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "CANCELLED")
+        self.assertFalse(any(
+            item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+            for item in stage["artifacts"]
+        ))
+        self.assertEqual(
+            stage["attempts"][-1]["status"],
+            "CANCELLED",
+        )
+
     def test_crash_after_package_upload_retries_with_a_new_namespace(self):
         job_id = self.create_job("p0")
         processing_id, _, processing_token, _ = self.repository.claim_attempt(
