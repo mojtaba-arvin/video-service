@@ -96,6 +96,8 @@ def generate_thumbnail(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
+    input_bytes = os.path.getsize(video_path)
+    cpu_started = capture_child_cpu_seconds()
     repository = get_workflow_repository()
     attempt_id, attempt_number, lease_token, _ = repository.claim_attempt(
         job_id=request_id,
@@ -114,29 +116,6 @@ def generate_thumbnail(
         lease_token,
         lease_ttl_seconds=60,
     )
-    input_bytes = os.path.getsize(video_path)
-    cpu_started = capture_child_cpu_seconds()
-
-    # save primary status using request_id
-    self.save_primary_status(
-        self.primary_status.OUTPUTS_PROGRESSING,
-        request_id)
-
-    self.save_output_status(
-        self.output_status.PREPARATION_PROCESSING,
-        output_id,
-        request_id)
-
-    output_path, directory = self.ensure_set_output_location(
-        request_id,
-        output_id,
-        output_path=output_path,
-        s3_output_key=s3_output_key,
-    )
-    directory = os.path.join(directory, ".attempts", attempt_id)
-    output_path = os.path.join(directory, os.path.basename(output_path))
-    Path(directory).mkdir(parents=True, exist_ok=True)
-
     usage_metrics = {}
 
     def capture_usage(metrics):
@@ -144,6 +123,26 @@ def generate_thumbnail(
         lease_heartbeat.on_usage(metrics)
 
     try:
+        # Redis status is a projection; the PostgreSQL lease remains authoritative.
+        lease_heartbeat.assert_owned()
+        self.save_primary_status(
+            self.primary_status.OUTPUTS_PROGRESSING,
+            request_id)
+        self.save_output_status(
+            self.output_status.PREPARATION_PROCESSING,
+            output_id,
+            request_id)
+
+        output_path, directory = self.ensure_set_output_location(
+            request_id,
+            output_id,
+            output_path=output_path,
+            s3_output_key=s3_output_key,
+        )
+        directory = os.path.join(directory, ".attempts", attempt_id)
+        output_path = os.path.join(directory, os.path.basename(output_path))
+        Path(directory).mkdir(parents=True, exist_ok=True)
+
         lease_heartbeat.assert_owned()
         render_thumbnail(
             video_path=video_path,
