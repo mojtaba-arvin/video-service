@@ -134,7 +134,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(
             {(stage.stage_key, stage.operation) for stage in stages},
             {(node["stage_key"], node["operation"]) for node in plan["nodes"]},
-        ))
+        )
 
     def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
         principal = self.make_owner_principal()

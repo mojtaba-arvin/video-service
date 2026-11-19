@@ -18,7 +18,6 @@ from video_streaming.ffmpeg.constants import VideoEncodingFormats, \
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
-from video_streaming.workflows.operations import OperationKind
 
 
 class CreateJobMixin(object):
