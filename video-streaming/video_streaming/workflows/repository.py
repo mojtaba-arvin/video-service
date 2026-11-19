@@ -2738,6 +2738,14 @@ class WorkflowRepository:
             stage = session.get(StageRecord, attempt.stage_id)
             if stage is None:
                 return False
+            namespace = (
+                (attempt.metrics_json or {}).get("package_publication")
+            )
+            if (
+                    not isinstance(namespace, dict)
+                    or namespace.get("bucket") != bucket
+                    or namespace.get("prefix") != attempt_prefix):
+                return False
             if attempt.state not in (
                     AttemptState.FAILED.value,
                     AttemptState.CANCELLED.value,
