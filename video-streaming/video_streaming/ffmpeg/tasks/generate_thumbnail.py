@@ -102,6 +102,7 @@ def generate_thumbnail(
     attempt_id, attempt_number, lease_token, _ = repository.claim_attempt(
         job_id=request_id,
         stage_key=output_id,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
         lease_owner=("celery:{}".format(
             getattr(self.request, "hostname", None) or "worker"
         ))[:255],
@@ -114,7 +115,7 @@ def generate_thumbnail(
         output_id,
         attempt_id,
         lease_token,
-        lease_ttl_seconds=60,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
     output_path = None
     usage_metrics = {}
