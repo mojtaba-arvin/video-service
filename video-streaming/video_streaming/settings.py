@@ -282,6 +282,17 @@ WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
     default=5,
     cast=int)
 
+# Lease duration shared by processing and publication worker integrations.
+WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS = env_config.get(
+    "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS",
+    default=60,
+    cast=int)
+
+if not 1 <= WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS <= 86400:
+    raise ValueError(
+        "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS must be between 1 and 86400"
+    )
+
 # Optional infrastructure price card. Resource measurements are persisted
 # even when no monetary rates are configured.
 WORKFLOW_PRICING_MODEL_ID = env_config.get(
