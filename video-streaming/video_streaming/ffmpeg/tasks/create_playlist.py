@@ -323,10 +323,27 @@ def create_playlist(
 
     if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
             request_id, output_id):
+        # Processing is already terminal. Record cancellation on a distinct
+        # publication Attempt rather than mutating the completed processing
+        # Attempt whose lease tuple has been cleared.
+        publication_id, _, publication_token, _ = (
+            workflow_repository.claim_publication_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
+                lease_owner=("celery:{}".format(
+                    getattr(self.request, "hostname", None) or "worker"
+                ))[:255],
+                execution_backend="celery",
+                execution_ref=str(self.request.id),
+                processing_attempt_id=attempt_id,
+                pricing=configured_pricing(settings),
+            )
+        )
         workflow_repository.cancel_attempt(
             job_id=request_id,
             stage_key=output_id,
-            attempt_id=attempt_id,
+            attempt_id=publication_id,
             reason="CANCELLED_AFTER_PACKAGE_VALIDATION",
             metrics={
                 "input_bytes": input_bytes,
@@ -334,7 +351,7 @@ def create_playlist(
                 **process_resource_metrics(),
             },
             pricing=configured_pricing(settings),
-            lease_token=lease_token,
+            lease_token=publication_token,
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
