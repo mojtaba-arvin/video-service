@@ -2,10 +2,39 @@
 
 import unittest
 
-from video_streaming.workflows.artifacts import attempt_scoped_object_key
+from video_streaming.workflows.artifacts import (
+    attempt_scoped_local_output_path,
+    attempt_scoped_object_key,
+)
 
 
 class AttemptScopedObjectKeyTests(unittest.TestCase):
+
+    def test_local_output_path_is_isolated_by_processing_attempt(self):
+        first_path, first_directory = attempt_scoped_local_output_path(
+            "/tmp/vod/job-1/master.m3u8", "processing-a"
+        )
+        second_path, second_directory = attempt_scoped_local_output_path(
+            "/tmp/vod/job-1/master.m3u8", "processing-b"
+        )
+
+        self.assertNotEqual(first_path, second_path)
+        self.assertNotEqual(first_directory, second_directory)
+        self.assertTrue(first_path.endswith(
+            "/.attempts/processing-a/master.m3u8"
+        ))
+        self.assertTrue(second_path.endswith(
+            "/.attempts/processing-b/master.m3u8"
+        ))
+
+    def test_local_output_path_rejects_invalid_attempt_ids_and_names(self):
+        for base_path, attempt_id in (
+                ("", "attempt-1"),
+                ("/tmp/vod/", "attempt-1"),
+                ("/tmp/vod/master.m3u8", "../escape")):
+            with self.subTest(base_path=base_path, attempt_id=attempt_id):
+                with self.assertRaises(ValueError):
+                    attempt_scoped_local_output_path(base_path, attempt_id)
 
     def test_namespaced_key_preserves_logical_prefix_and_filename(self):
         self.assertEqual(
