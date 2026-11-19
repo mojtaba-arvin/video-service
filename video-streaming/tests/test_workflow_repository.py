@@ -1482,7 +1482,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             {"valid": True, "errors": []},
         )
 
-        with self.assertRaises(InvalidStateTransition):
+        with self.assertRaises(StageAlreadyRunning):
             self.repository.claim_publication_attempt(
                 job_id, "p0", lease_owner="publisher-before-terminal"
             )
