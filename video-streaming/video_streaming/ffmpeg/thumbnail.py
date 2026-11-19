@@ -6,6 +6,7 @@ from typing import Callable, Dict, Optional, Tuple
 import ffmpeg
 
 from video_streaming.execution.process_control import run_cancellable_process
+from video_streaming.ffmpeg.probe import FFprobeExecutionError, probe_media
 
 
 class ThumbnailValidationError(RuntimeError):
@@ -32,7 +33,9 @@ def validate_thumbnail_output(
         output_path: str,
         ffprobe_bin_path: str = "ffprobe",
         expected_width: Optional[int] = None,
-        expected_height: Optional[int] = None
+        expected_height: Optional[int] = None,
+        probe_timeout_seconds: int = 10,
+        should_cancel: Optional[Callable[[], bool]] = None
         ) -> Dict[str, int]:
     """Require a non-empty, probeable image with the requested dimensions."""
     path = Path(output_path)
@@ -46,8 +49,13 @@ def validate_thumbnail_output(
         )
 
     try:
-        probe = ffmpeg.probe(str(path), cmd=ffprobe_bin_path)
-    except ffmpeg.Error as exc:
+        probe = probe_media(
+            str(path),
+            ffprobe_bin_path=ffprobe_bin_path,
+            timeout_seconds=probe_timeout_seconds,
+            should_cancel=should_cancel,
+        )
+    except FFprobeExecutionError as exc:
         raise ThumbnailValidationError(
             "FFprobe could not read the generated thumbnail"
         ) from exc
@@ -93,6 +101,7 @@ def render_thumbnail(
         ffmpeg_bin_path: str = "ffmpeg",
         ffprobe_bin_path: str = "ffprobe",
         timeout_seconds: int = 300,
+        probe_timeout_seconds: int = 10,
         should_cancel: Optional[Callable[[], bool]] = None,
         usage_callback: Optional[Callable[[Dict[str, float]], None]] = None
         ) -> str:
@@ -125,5 +134,7 @@ def render_thumbnail(
         ffprobe_bin_path=ffprobe_bin_path,
         expected_width=scale_width if scale_width > 0 else None,
         expected_height=scale_height if scale_height > 0 else None,
+        probe_timeout_seconds=probe_timeout_seconds,
+        should_cancel=should_cancel,
     )
     return output_path
