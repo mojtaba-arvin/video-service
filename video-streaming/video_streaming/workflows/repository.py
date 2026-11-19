@@ -1133,7 +1133,8 @@ class WorkflowRepository:
             processing_attempt_id=None,
             pricing=None,
             package_output_key=None,
-            package_output_bucket=None):
+            package_output_bucket=None,
+            package_output_kind="package"):
         """Claim a fresh publication attempt for an already validated artifact.
 
         Processing and publication are separate attempts. The validation report
@@ -1152,6 +1153,8 @@ class WorkflowRepository:
         if package_output_key is not None:
             if not isinstance(package_output_bucket, str) or not package_output_bucket:
                 raise ValueError("package_output_bucket is required")
+            if package_output_kind not in ("package", "single_file"):
+                raise ValueError("unsupported package_output_kind")
             # Validate the logical key before creating a durable Attempt.
             attempt_scoped_object_key(package_output_key, "validation-id")
 
@@ -1263,15 +1266,22 @@ class WorkflowRepository:
                     package_output_key, attempt_id
                 )
                 attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
-                attempt_metrics["package_publication"] = {
+                namespace = {
+                    "kind": package_output_kind,
                     "bucket": package_output_bucket,
                     "logical_key": package_output_key,
                     "prefix": attempt_prefix,
-                    "inventory_key": "{}/.{}.artifacts.json".format(
-                        attempt_prefix,
-                        package_output_key.rsplit("/", 1)[-1],
-                    ),
                 }
+                if package_output_kind == "package":
+                    namespace["inventory_key"] = (
+                        "{}/.{}.artifacts.json".format(
+                            attempt_prefix,
+                            package_output_key.rsplit("/", 1)[-1],
+                        )
+                    )
+                else:
+                    namespace["object_key"] = attempt_manifest_key
+                attempt_metrics["package_publication"] = namespace
             session.add(AttemptRecord(
                 id=attempt_id,
                 stage_id=stage.id,
@@ -2663,17 +2673,27 @@ class WorkflowRepository:
                         not isinstance(namespace, dict)
                         or namespace.get("cleanup_completed_at")):
                     continue
-                required = ("bucket", "prefix", "inventory_key", "logical_key")
+                required = ("bucket", "prefix", "logical_key", "kind")
                 if not all(
                         isinstance(namespace.get(key), str)
                         and namespace.get(key)
                         for key in required):
                     continue
+                if namespace["kind"] == "package":
+                    if not namespace.get("inventory_key"):
+                        continue
+                elif namespace["kind"] == "single_file":
+                    if not namespace.get("object_key"):
+                        continue
+                else:
+                    continue
                 metadata.append({
                     "attempt_id": attempt.id,
                     "bucket": namespace["bucket"],
                     "prefix": namespace["prefix"],
-                    "inventory_key": namespace["inventory_key"],
+                    "kind": namespace["kind"],
+                    "inventory_key": namespace.get("inventory_key"),
+                    "object_key": namespace.get("object_key"),
                     "logical_key": namespace["logical_key"],
                 })
 
@@ -2789,6 +2809,15 @@ class WorkflowRepository:
                 ).limit(1)
             ).scalar_one_or_none()
             return referenced is None
+
+
+    def get_attempt_publication_namespace(self, attempt_id):
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return None
+            namespace = (attempt.metrics_json or {}).get("package_publication")
+            return dict(namespace) if isinstance(namespace, dict) else None
 
 
     def get_attempt_local_package(self, attempt_id):
