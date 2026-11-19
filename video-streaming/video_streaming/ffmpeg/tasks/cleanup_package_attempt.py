@@ -1,7 +1,5 @@
 """Explicit, database-guarded cleanup for one abandoned package Attempt."""
 
-import os
-
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
