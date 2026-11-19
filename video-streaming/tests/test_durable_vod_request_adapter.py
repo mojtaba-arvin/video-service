@@ -96,6 +96,34 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
         self.assertIn("video.watermark.apply", operations)
         self.assertIn("video.output.upload_file", operations)
 
+    def test_custom_quality_mapping_omits_absent_bitrate_components(self):
+        request = self.make_request()
+        quality = request.playlists[0].options.custom_qualities.add()
+        quality.size.width = 1280
+        quality.size.height = 720
+        normalized = self.adapter._build_durable_vod_request(request)
+        self.assertEqual(
+            normalized["playlists"][0]["custom_qualities"][0],
+            {"size": [1280, 720], "bitrate": None},
+        )
+
+    def test_custom_quality_mapping_preserves_only_configured_bitrates(self):
+        request = self.make_request()
+        quality = request.playlists[0].options.custom_qualities.add()
+        quality.bitrate.video = 900000
+        quality.bitrate.overall = 1000000
+        normalized = self.adapter._build_durable_vod_request(request)
+        self.assertEqual(
+            normalized["playlists"][0]["custom_qualities"][0],
+            {"size": None, "bitrate": [900000, None, 1000000]},
+        )
+
+    def test_rejects_unknown_playlist_protocol_instead_of_treating_it_as_dash(self):
+        request = self.make_request()
+        request.playlists[0].protocol = 99
+        with self.assertRaisesRegex(ValueError, "unsupported VOD playlist protocol"):
+            self.adapter._build_durable_vod_request(request)
+
     def test_rejects_invalid_thumbnail_timestamp_during_plan_compilation(self):
         normalized = self.adapter._build_durable_vod_request(self.make_request())
         normalized["thumbnails"][0]["thumbnail_time"] = "not-a-timestamp"

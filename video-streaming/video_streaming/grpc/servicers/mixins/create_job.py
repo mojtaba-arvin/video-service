@@ -94,12 +94,17 @@ class CreateJobMixin(object):
         playlists = []
         for output in request.playlists:
             encode_format, video_codec, audio_codec = self._get_format(output)
+            if output.protocol == self.pb2.Protocol.HLS:
+                protocol = "hls"
+            elif output.protocol == self.pb2.Protocol.DASH:
+                protocol = "dash"
+            else:
+                raise ValueError("unsupported VOD playlist protocol")
+
             playlists.append({
                 "bucket": output.upload_to.bucket,
                 "key": output.upload_to.key,
-                "protocol": (
-                    "hls" if output.protocol == self.pb2.Protocol.HLS else "dash"
-                ),
+                "protocol": protocol,
                 "quality_names": self._parse_quality_names(
                     output.options.quality_names
                 ),
@@ -188,10 +193,7 @@ class CreateJobMixin(object):
 
             quality_dict = dict(
                 size=size,
-                bitrate=[
-                    quality.bitrate.video,
-                    quality.bitrate.audio,
-                    quality.bitrate.overall]
+                bitrate=bitrate
             )
             custom_qualities.append(quality_dict)
         # sample : [dict(size=[256, 144], bitrate=[97280, 65536])]
