@@ -13,3 +13,5 @@ status changes. Do not turn roadmap items into implemented-feature claims.
 
 Use the specialist profiles under .github/agents/ for focused media-pipeline,
 read-only security-review, or orchestration/MCP design tasks when appropriate.
+
+For multi-role work, follow `docs/engineering/agent-engineering-standard.md` and load `.agents/skills/agent-task-orchestration/SKILL.md`. Use `.github/agents/orchestrator.agent.md` to plan and integrate. Assign one writer per shared file/interface and require evidence-based handoffs. Do not claim independent subagents or hooks unless the active runtime supports and verifies them.
