@@ -184,5 +184,28 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertTrue(settings.DEFAULT_PLAYLIST_IS_HLS)
 
 
+    def test_attempt_lease_ttl_has_a_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS, 60)
+
+    def test_attempt_lease_ttl_is_configurable(self):
+        settings = load_settings({
+            "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS": "120",
+        })
+
+        self.assertEqual(settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS, 120)
+
+    def test_attempt_lease_ttl_rejects_out_of_range_values(self):
+        for value in ("0", "-1", "86401"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        ValueError, "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS"):
+                    load_settings({
+                        "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS": value,
+                    })
+
+
+
 if __name__ == "__main__":
     unittest.main()
