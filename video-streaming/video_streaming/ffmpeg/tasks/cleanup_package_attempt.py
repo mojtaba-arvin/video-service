@@ -38,7 +38,7 @@ def cleanup_package_attempt(
     inventory_key = "{}/.{}.artifacts.json".format(
         attempt_prefix, os.path.basename(s3_output_key)
     )
-    return cleanup_abandoned_attempt_package(
+    result = cleanup_abandoned_attempt_package(
         storage=self.s3_service,
         bucket=s3_output_bucket,
         inventory_key=inventory_key,
@@ -54,6 +54,11 @@ def cleanup_package_attempt(
             )
         ),
     )
+    if result["deleted"]:
+        repository.mark_package_attempt_cleaned(
+            attempt_id, s3_output_bucket, attempt_prefix
+        )
+    return result
 
 
 @celery_app.task(
@@ -72,7 +77,7 @@ def cleanup_abandoned_packages(self, limit=100):
     )
     results = []
     for item in candidates:
-        results.append(cleanup_abandoned_attempt_package(
+        result = cleanup_abandoned_attempt_package(
             storage=self.s3_service,
             bucket=item["bucket"],
             inventory_key=item["inventory_key"],
@@ -87,7 +92,12 @@ def cleanup_abandoned_packages(self, limit=100):
                     ),
                 )
             ),
-        ))
+        )
+        results.append(result)
+        if result["deleted"]:
+            repository.mark_package_attempt_cleaned(
+                item["attempt_id"], item["bucket"], item["prefix"]
+            )
     return {
         "candidates": len(candidates),
         "deleted": sum(1 for result in results if result["deleted"]),
