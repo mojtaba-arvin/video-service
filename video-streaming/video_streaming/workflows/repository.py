@@ -1502,6 +1502,9 @@ class WorkflowRepository:
         attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
         attempt.input_bytes = usage.get("input_bytes")
         attempt.output_bytes = usage.get("output_bytes")
+        # The validation report is the processing Attempt's durable artifact.
+        # Publication artifacts are counted later on the separate Attempt.
+        attempt.artifact_count = max(1, int(attempt.artifact_count or 0))
         WorkflowRepository._apply_attempt_accounting(attempt, usage, pricing)
         # The process-local token is no longer useful after the processing
         # attempt is terminal. Clear the complete lease tuple atomically.
