@@ -13,6 +13,36 @@ from unittest.mock import Mock, patch
 )
 class FfmpegCallbackLeaseTests(unittest.TestCase):
 
+    def test_direct_progress_callback_handles_missing_duration_metadata(self):
+        from video_streaming.ffmpeg.utils.ffmpeg_callback import FfmpegCallback
+
+        task = Mock()
+        task.request = SimpleNamespace(
+            id="task-1",
+            called_directly=True,
+            kwargs={},
+        )
+        task.is_forced_to_stop.return_value = False
+        task.is_output_forced_to_stop.return_value = False
+        process = SimpleNamespace(pid=12345)
+        psutil_process = Mock()
+        psutil_process.cpu_times.return_value = (0.0, 0.0)
+        psutil_process.memory_info.return_value = SimpleNamespace(rss=1024)
+
+        callback = FfmpegCallback(
+            task=task,
+            task_id="task-1",
+            output_id="output-1",
+            request_id="job-1",
+        )
+        with patch(
+                "video_streaming.ffmpeg.utils.ffmpeg_callback.psutil.Process",
+                return_value=psutil_process):
+            callback.progress("ffmpeg banner", 0.0, 0.0, 0.0, process)
+
+        task.save_output_progress.assert_called_once()
+        task.request.kwargs = {}
+
     def test_lease_renewal_failure_terminates_ffmpeg_process(self):
         from video_streaming.ffmpeg.utils.ffmpeg_callback import FfmpegCallback
 
