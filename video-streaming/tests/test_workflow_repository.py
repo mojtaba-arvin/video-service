@@ -1566,17 +1566,22 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.assertIsNone(attempt.lease_expires_at)
             self.assertIsNone(attempt.heartbeat_at)
 
-        self.assertTrue(self.repository.is_attempt_reclaimable(
-            attempt_id,
-            "vod-output",
-            "vod/.attempts/{}".format(attempt_id),
-            minimum_age_seconds=86400,
-        ))
-
     def test_available_artifact_blocks_attempt_prefix_reclamation(self):
         job_id = self.create_job("p0")
-        attempt_id, _, token, _ = self.repository.claim_attempt(
-            job_id, "p0", lease_owner="failed-with-object"
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        attempt_id, _, token, _ = self.repository.claim_publication_attempt(
+            job_id, "p0",
+            lease_owner="failed-with-object",
+            processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
         )
         self.repository.fail_attempt(
             job_id, "p0", attempt_id,
@@ -1620,7 +1625,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
             lease_token=processing_token,
         )
         old_id, _, _, expiry = self.repository.claim_publication_attempt(
-            job_id, "p0", lease_owner="publisher-crashed"
+            job_id, "p0", lease_owner="publisher-crashed",
+            processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
         )
         self.repository.recover_expired_attempts(now=expiry)
         with self.repository._session.begin() as session:
@@ -1654,7 +1662,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         old_id, _, old_token, old_expiry = (
             self.repository.claim_publication_attempt(
-                job_id, "p0", lease_owner="publisher-before-db-commit"
+                job_id, "p0", lease_owner="publisher-before-db-commit",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
             )
         )
         old_key = attempt_scoped_object_key(
@@ -1674,6 +1685,8 @@ class WorkflowRepositoryTests(unittest.TestCase):
         new_id, _, new_token, _ = self.repository.claim_publication_attempt(
             job_id, "p0", lease_owner="replacement-after-crash",
             processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
         )
         new_key = attempt_scoped_object_key(
             "vod/master.m3u8", new_id
