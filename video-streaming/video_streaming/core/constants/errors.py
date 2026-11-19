@@ -29,6 +29,7 @@ class ErrorMessages:
     INPUT_SIZE_CAN_NOT_BE_ZERO = "input file size can not be zero."
     INPUT_FILE_IS_NOT_FOUND = "input file is not found."
     WEBHOOK_URL_MUST_NOT_BE_REDIRECTED = "webhook url must not be redirected."
+    WEBHOOK_URL_NOT_ALLOWED = "webhook destination is not allowed."
     WEBHOOK_HTTP_FAILED = "webhook task failed" \
                            ", HTTP response status: '{status}'" \
                            ", reason: '{reason}'" \
