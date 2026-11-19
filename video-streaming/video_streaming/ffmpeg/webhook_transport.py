@@ -55,7 +55,10 @@ def _normalize_hostname(hostname):
             or len(label) > 63
             or label.startswith("-")
             or label.endswith("-")
-            or not all(character.isalnum() or character == "-" for character in label)
+            or not all(
+                character.isalnum() or character == "-"
+                for character in label
+            )
             for label in labels):
         raise WebhookDestinationError("Webhook destination is not allowed")
     return normalized, None
@@ -118,9 +121,15 @@ def resolve_webhook_target(url, allow_loopback=False, resolver=None):
         lookup = resolver or socket.getaddrinfo
         try:
             records = lookup(hostname, port, type=socket.SOCK_STREAM)
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
+            # DNS infrastructure failures are transient transport failures;
+            # malformed or unsafe resolved addresses remain terminal denials.
+            raise WebhookTransportError(
+                "Webhook destination resolution failed"
+            ) from exc
+        except ValueError as exc:
             raise WebhookDestinationError(
-                "Webhook destination could not be resolved"
+                "Webhook destination could not be validated"
             ) from exc
         addresses = []
         for record in records or ():
@@ -137,7 +146,7 @@ def resolve_webhook_target(url, allow_loopback=False, resolver=None):
                 addresses.append(address)
 
     if not addresses:
-        raise WebhookDestinationError("Webhook destination could not be resolved")
+        raise WebhookTransportError("Webhook destination resolution returned no addresses")
 
     loopback_only = all(address.is_loopback for address in addresses)
     if loopback_only and allow_loopback:
