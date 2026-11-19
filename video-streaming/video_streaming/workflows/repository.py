@@ -2697,9 +2697,10 @@ class WorkflowRepository:
             minimum_age_seconds=86400, now=None):
         """Return whether a failed package Attempt is safe for orphan cleanup.
 
-        Only FAILED/CANCELLED attempts older than the grace period qualify.
-        An AVAILABLE Artifact anywhere under the exact bucket/prefix blocks
-        deletion, including an Artifact owned by another Attempt.
+        FAILED/CANCELLED attempts and superseded RETRYABLE attempts qualify
+        only after the grace period. The exact bucket/prefix must match the
+        namespace recorded on the Attempt, and any AVAILABLE Artifact under
+        that prefix blocks deletion.
         """
         if (
                 isinstance(minimum_age_seconds, bool)
