@@ -296,7 +296,7 @@ class WorkflowEventRecord(Base):
 
 
 class OutboxRecord(Base):
-    """Durable, leased delivery intent committed with workflow state."""
+    """Durable, leased reference to an immutable workflow execution plan."""
 
     __tablename__ = "workflow_outbox"
     __table_args__ = (
@@ -304,6 +304,10 @@ class OutboxRecord(Base):
         CheckConstraint(
             "state IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD')",
             name="ck_workflow_outbox_state",
+        ),
+        CheckConstraint(
+            "schema_version >= 1",
+            name="ck_workflow_outbox_schema_version",
         ),
         CheckConstraint(
             "(locked_by IS NULL AND lock_token_hash IS NULL AND "
@@ -316,12 +320,22 @@ class OutboxRecord(Base):
             "ix_workflow_outbox_ready",
             "state", "available_at", "lease_expires_at",
         ),
-        Index("ix_workflow_outbox_aggregate", "aggregate_id", "created_at"),
+        Index("ix_workflow_outbox_job_created", "job_id", "created_at"),
     )
 
     id = Column(String(36), primary_key=True)
-    topic = Column(String(128), nullable=False)
-    aggregate_id = Column(String(36), nullable=False)
+    job_id = Column(
+        String(36), ForeignKey("workflow_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_id = Column(
+        String(36), ForeignKey("workflow_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type = Column(String(80), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=1)
+    plan_version = Column(String(64), nullable=False)
+    plan_fingerprint = Column(String(64), nullable=False)
     dedupe_key = Column(String(255), nullable=False)
     payload_json = Column(JSON, nullable=False)
     state = Column(String(16), nullable=False, default="PENDING")
@@ -467,7 +481,7 @@ class WorkflowRepository:
             execution_plan=None,
             owner_principal=None,
             secret_envelopes=None,
-            outbox_payload=None,
+            enqueue_dispatch=False,
             outbox_dedupe_key=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
@@ -555,10 +569,18 @@ class WorkflowRepository:
                 # the validated plan-derived stage identity and operation.
                 stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
-        if outbox_payload is not None:
-            if not isinstance(outbox_payload, dict):
-                raise TypeError("outbox_payload must be a JSON object")
-            try:
+        if not isinstance(enqueue_dispatch, bool):
+            raise TypeError("enqueue_dispatch must be a boolean")
+        if enqueue_dispatch and plan is None:
+            raise ValueError(
+                "dispatch outbox requires a persisted immutable execution plan"
+            )
+        if enqueue_dispatch:
+            if not outbox_dedupe_key:
+                outbox_dedupe_key = "workflow.dispatch:{}".format(job_id)
+            if not isinstance(outbox_dedupe_key, str) or not outbox_dedupe_key.strip():
+                raise ValueError("outbox_dedupe_key must be non-empty")
+        try:
                 json.dumps(outbox_payload, sort_keys=True, allow_nan=False)
             except (TypeError, ValueError) as exc:
                 raise ValueError("outbox_payload must be JSON serializable") from exc
@@ -733,13 +755,22 @@ class WorkflowRepository:
                             "kms_key_id": envelope.kms_key_id,
                         },
                     )
-                if outbox_payload is not None:
+                if enqueue_dispatch:
                     session.add(OutboxRecord(
                         id=new_id(),
-                        topic="celery.canvas",
-                        aggregate_id=job_id,
+                        job_id=job_id,
+                        workflow_id=workflow_id,
+                        event_type="WORKFLOW_PLAN_DISPATCH",
+                        schema_version=1,
+                        plan_version=plan["workflow_version"],
+                        plan_fingerprint=plan_fingerprint,
                         dedupe_key=outbox_dedupe_key,
-                        payload_json=outbox_payload,
+                        payload_json={
+                            "schema_version": 1,
+                            "job_id": job_id,
+                            "workflow_version": plan["workflow_version"],
+                            "plan_fingerprint": plan_fingerprint,
+                        },
                         state="PENDING",
                         attempts=0,
                         available_at=utcnow(),
@@ -853,8 +884,12 @@ class WorkflowRepository:
                 row.updated_at = now
                 claimed.append({
                     "id": row.id,
-                    "topic": row.topic,
-                    "aggregate_id": row.aggregate_id,
+                    "job_id": row.job_id,
+                    "workflow_id": row.workflow_id,
+                    "event_type": row.event_type,
+                    "schema_version": row.schema_version,
+                    "plan_version": row.plan_version,
+                    "plan_fingerprint": row.plan_fingerprint,
                     "payload": row.payload_json,
                     "attempts": row.attempts,
                     "lease_token": token,
@@ -931,8 +966,11 @@ class WorkflowRepository:
                 return None
             return {
                 "id": row.id,
-                "topic": row.topic,
-                "aggregate_id": row.aggregate_id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "event_type": row.event_type,
+                "plan_version": row.plan_version,
+                "plan_fingerprint": row.plan_fingerprint,
                 "dedupe_key": row.dedupe_key,
                 "state": row.state,
                 "attempts": row.attempts,
