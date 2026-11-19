@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import ffmpeg
+from video_streaming.execution.media_probe import probe_media
 
 from video_streaming.ffmpeg.thumbnail import (
     ThumbnailValidationError,
@@ -75,9 +75,10 @@ class ThumbnailRenderingIntegrationTests(unittest.TestCase):
             ffprobe_bin_path=shutil.which("ffprobe"),
         )
 
-        probe = ffmpeg.probe(
+        probe = probe_media(
             str(output_path),
-            cmd=shutil.which("ffprobe"),
+            ffprobe_bin_path=shutil.which("ffprobe"),
+            timeout_seconds=10,
         )
         video_stream = next(
             stream for stream in probe["streams"]
