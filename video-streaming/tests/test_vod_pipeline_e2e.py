@@ -790,14 +790,18 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             published[0]["metadata"]["processing_attempt_id"], processing_id
         )
 
+        previous_cache = self.servicer.cache
         self.servicer.cache = InMemoryCache()
-        thumbnail_details = []
-        self.servicer._thumbnails(
-            job_id,
-            ["thumbnail-0"],
-            thumbnail_details,
-            {"thumbnail-0": stage},
-        )
+        try:
+            thumbnail_details = []
+            self.servicer._thumbnails(
+                job_id,
+                ["thumbnail-0"],
+                thumbnail_details,
+                {"thumbnail-0": stage},
+            )
+        finally:
+            self.servicer.cache = previous_cache
         self.assertEqual(len(thumbnail_details), 1)
         self.assertEqual(
             thumbnail_details[0].uploaded_to.bucket, "vod-output"
