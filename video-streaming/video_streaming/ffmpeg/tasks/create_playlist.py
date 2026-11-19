@@ -11,6 +11,8 @@ from video_streaming.ffmpeg.package_validation import (
 )
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.domain import AttemptLeaseLost
+from video_streaming.workflows.lease import AttemptLeaseHeartbeat
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
@@ -120,11 +122,24 @@ def create_playlist(
         raise self.raise_revoke_output(request_id, output_id)
 
     workflow_repository = get_workflow_repository()
-    attempt_id, attempt_number = workflow_repository.start_attempt(
+    attempt_id, attempt_number, lease_token, _ = workflow_repository.claim_attempt(
         job_id=request_id,
         stage_key=output_id,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
+        lease_owner=("celery:{}".format(
+            getattr(self.request, "hostname", None) or "worker"
+        ))[:255],
         execution_backend="celery",
-        execution_ref=self.request.id.__str__(),
+        execution_ref=str(self.request.id),
+        pricing=configured_pricing(settings),
+    )
+    lease_heartbeat = AttemptLeaseHeartbeat(
+        workflow_repository,
+        request_id,
+        output_id,
+        attempt_id,
+        lease_token,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
     input_bytes = 0
     cpu_started = capture_child_cpu_seconds()
@@ -221,11 +236,13 @@ def create_playlist(
                 task_id=self.request.id.__str__(),
                 output_id=output_id,
                 request_id=request_id,
+                on_progress=lease_heartbeat.on_progress,
             ).progress,
             ffmpeg_bin=settings.FFMPEG_BIN_PATH,
             async_run=async_run,
         )
 
+        lease_heartbeat.assert_owned()
         validation_report = validate_package(
             directory=directory,
             manifest_path=output_path,
@@ -241,12 +258,24 @@ def create_playlist(
             ),
         )
         validation_report.require_valid()
-        workflow_repository.mark_validated(
+        lease_heartbeat.assert_owned()
+        workflow_repository.complete_processing_attempt(
             job_id=request_id,
             stage_key=output_id,
             attempt_id=attempt_id,
             validation_report=validation_report.as_dict(),
+            lease_token=lease_token,
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                **process_resource_metrics(),
+            },
+            pricing=configured_pricing(settings),
         )
+    except AttemptLeaseLost:
+        # The callback has already terminated the FFmpeg process tree. A stale
+        # worker must not mutate durable state after losing its lease.
+        raise
     except Exception as exc:
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
                 request_id, output_id):
@@ -261,6 +290,7 @@ def create_playlist(
                     **process_resource_metrics(),
                 },
                 pricing=configured_pricing(settings),
+                lease_token=lease_token,
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -282,6 +312,7 @@ def create_playlist(
                 **process_resource_metrics(),
             },
             pricing=configured_pricing(settings),
+            lease_token=lease_token,
         )
         if retryable:
             raise self.retry(
@@ -303,6 +334,7 @@ def create_playlist(
                 **process_resource_metrics(),
             },
             pricing=configured_pricing(settings),
+            lease_token=lease_token,
         )
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
