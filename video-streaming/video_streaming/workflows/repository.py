@@ -46,6 +46,20 @@ def new_id():
 
 class JobRecord(Base):
     __tablename__ = "workflow_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "(owner_tenant_id IS NULL AND owner_issuer IS NULL AND "
+            "owner_subject IS NULL) OR "
+            "(owner_tenant_id IS NOT NULL AND owner_issuer IS NOT NULL AND "
+            "owner_subject IS NOT NULL)",
+            name="ck_workflow_job_owner_identity_complete",
+        ),
+        Index(
+            "ix_workflow_jobs_owner_tenant_created",
+            "owner_tenant_id",
+            "created_at",
+        ),
+    )
 
     id = Column(String(36), primary_key=True)
     idempotency_key = Column(String(255), nullable=False, unique=True)
@@ -545,6 +559,33 @@ class WorkflowRepository:
                         "Idempotency key resolves to a different execution plan"
                     )
                 return existing.id, False
+
+    def authorize_job_access(self, job_id, principal, required_scope):
+        """Authorize one durable Job without exposing cross-tenant existence."""
+        from video_streaming.security import authorize_tenant_resource
+
+        if principal is None:
+            from video_streaming.security import AuthorizationError
+            raise AuthorizationError("Resource not found or access denied")
+
+        with self._session() as session:
+            job = session.execute(
+                select(JobRecord).where(JobRecord.id == job_id)
+            ).scalar_one_or_none()
+            if job is None:
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+            authorize_tenant_resource(
+                principal,
+                job.owner_tenant_id,
+                required_scope,
+            )
+            if (
+                    job.owner_issuer != principal.issuer
+                    or job.owner_subject != principal.subject):
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+        return True
 
     @staticmethod
     def _verify_execution_plan_snapshot(workflow, job_id):
