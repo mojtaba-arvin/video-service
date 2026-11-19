@@ -2590,11 +2590,12 @@ class WorkflowRepository:
             )
             if attempt is None:
                 return False
-            namespace = (
-                (attempt.metrics_json or {}).get("package_publication")
+            stored_metrics = dict(attempt.metrics_json or {})
+            namespace = dict(
+                stored_metrics.get("package_publication") or {}
             )
             if (
-                    not isinstance(namespace, dict)
+                    not namespace
                     or namespace.get("bucket") != bucket
                     or namespace.get("prefix") != attempt_prefix):
                 raise InvalidStateTransition(
@@ -2616,9 +2617,8 @@ class WorkflowRepository:
                     "Cannot mark an Attempt cleaned while it has a lease"
                 )
             namespace["cleanup_completed_at"] = now.isoformat()
-            metrics = dict(attempt.metrics_json or {})
-            metrics["package_publication"] = namespace
-            attempt.metrics_json = metrics
+            stored_metrics["package_publication"] = namespace
+            attempt.metrics_json = stored_metrics
             return True
 
 
