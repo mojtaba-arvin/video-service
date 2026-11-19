@@ -177,6 +177,53 @@ class VODPlanBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(VODPlanBuildError, "must be a boolean"):
             build_vod_execution_plan("job-123", request)
 
+    def test_validates_custom_quality_shapes_and_values(self):
+        request = {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output",
+                "key": "master.m3u8",
+                "protocol": "hls",
+                "custom_qualities": [
+                    {"size": [1280, 720], "bitrate": None},
+                    {"size": None, "bitrate": [900000, None, 1000000]},
+                ],
+            }],
+        }
+        plan = build_vod_execution_plan("job-custom-quality", request)
+        package = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.hls.package"
+        )
+        self.assertEqual(package["parameters"]["custom_qualities"], [
+            {"size": [1280, 720], "bitrate": None},
+            {"size": None, "bitrate": [900000, None, 1000000]},
+        ])
+
+    def test_rejects_malformed_custom_quality_payloads(self):
+        invalid_values = [
+            "not-a-list",
+            [{"size": [1280, 720], "bitrate": None, "unexpected": True}],
+            [{"size": [1280, 0], "bitrate": None}],
+            [{"size": [True, 720], "bitrate": None}],
+            [{"size": None, "bitrate": [0, None, None]}],
+            [{"size": None, "bitrate": [1, 2]}],
+            [{"size": None, "bitrate": None}],
+        ]
+        for custom_qualities in invalid_values:
+            with self.subTest(custom_qualities=custom_qualities):
+                request = {
+                    "video": {"bucket": "source", "key": "input.mp4"},
+                    "playlists": [{
+                        "bucket": "output",
+                        "key": "master.m3u8",
+                        "protocol": "hls",
+                        "custom_qualities": custom_qualities,
+                    }],
+                }
+                with self.assertRaises(VODPlanBuildError):
+                    build_vod_execution_plan("job-invalid-custom-quality", request)
+
     def test_rejects_raw_webhook_url_instead_of_secret_reference(self):
         request = {
             "video": {"bucket": "source", "key": "input.mp4"},

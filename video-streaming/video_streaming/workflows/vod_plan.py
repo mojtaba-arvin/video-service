@@ -88,6 +88,60 @@ def _node(
     }
 
 
+def _normalize_custom_qualities(value, field):
+    if not isinstance(value, list):
+        raise VODPlanBuildError("{} must be a list".format(field))
+    normalized = []
+    for index, item in enumerate(value):
+        item_field = "{}[{}]".format(field, index)
+        if not isinstance(item, dict) or set(item) != {"size", "bitrate"}:
+            raise VODPlanBuildError(
+                "{} must contain exactly size and bitrate".format(item_field)
+            )
+        size = item["size"]
+        if size is not None and (
+            not isinstance(size, list)
+            or len(size) != 2
+            or any(
+                isinstance(dimension, bool)
+                or not isinstance(dimension, int)
+                or dimension <= 0
+                for dimension in size
+            )
+        ):
+            raise VODPlanBuildError(
+                "{}.size must be two positive integers or null".format(item_field)
+            )
+        bitrate = item["bitrate"]
+        if bitrate is not None and (
+            not isinstance(bitrate, list)
+            or len(bitrate) != 3
+            or any(
+                component is not None and (
+                    isinstance(component, bool)
+                    or not isinstance(component, int)
+                    or component <= 0
+                )
+                for component in bitrate
+            )
+            or not any(component is not None for component in bitrate)
+        ):
+            raise VODPlanBuildError(
+                "{}.bitrate must contain three positive integers or nulls".format(
+                    item_field
+                )
+            )
+        if size is None and bitrate is None:
+            raise VODPlanBuildError(
+                "{} must define a size or bitrate".format(item_field)
+            )
+        normalized.append({
+            "size": list(size) if size is not None else None,
+            "bitrate": list(bitrate) if bitrate is not None else None,
+        })
+    return normalized
+
+
 def _normalize_output(output, kind, index):
     if not isinstance(output, dict):
         raise VODPlanBuildError(
@@ -137,8 +191,9 @@ def _normalize_output(output, kind, index):
             "video_codec": output.get("video_codec"),
             "audio_codec": output.get("audio_codec"),
             "fragmented": _as_bool(output.get("fragmented", False), "{}[{}].fragmented".format(kind, index)),
-            "custom_qualities": deepcopy(
-                output.get("custom_qualities", [])
+            "custom_qualities": _normalize_custom_qualities(
+                output.get("custom_qualities", []),
+                "{}[{}].custom_qualities".format(kind, index),
             ),
         })
     else:
