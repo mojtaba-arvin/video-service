@@ -7,6 +7,7 @@ from pathlib import Path
 
 from video_streaming.ffmpeg.package_publication import (
     PackagePublicationError,
+    cleanup_abandoned_attempt_package,
     publish_package,
 )
 
@@ -196,6 +197,52 @@ class PackagePublicationTests(unittest.TestCase):
             for key in self.storage.objects
             if key != other_attempt_key
         ))
+
+    def test_orphan_cleanup_requires_database_reclaimability(self):
+        result = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-orphan/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+        before = set(self.storage.objects)
+
+        skipped = cleanup_abandoned_attempt_package(
+            self.storage,
+            self.bucket,
+            result["inventory_key"],
+            "vod/.attempts/pub-orphan",
+            is_reclaimable=lambda _attempt_id: False,
+        )
+        self.assertFalse(skipped["deleted"])
+        self.assertEqual(set(self.storage.objects), before)
+
+        removed = cleanup_abandoned_attempt_package(
+            self.storage,
+            self.bucket,
+            result["inventory_key"],
+            "vod/.attempts/pub-orphan",
+            is_reclaimable=lambda attempt_id: attempt_id == "pub-orphan",
+        )
+        self.assertTrue(removed["deleted"])
+        self.assertEqual(removed["objects"], 4)
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-orphan/")
+            for key in self.storage.objects
+        ))
+
+    def test_orphan_cleanup_rejects_inventory_outside_attempt_namespace(self):
+        with self.assertRaises(PackagePublicationError):
+            cleanup_abandoned_attempt_package(
+                self.storage,
+                self.bucket,
+                "vod/.artifacts.json",
+                "vod/.attempts/pub-1",
+                is_reclaimable=lambda _attempt_id: True,
+            )
 
     def test_every_dependency_is_uploaded_and_readable_before_master(self):
         result = self.publish()
