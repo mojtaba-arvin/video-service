@@ -202,7 +202,57 @@ def generate_thumbnail(
     except Exception as exc:
         if isinstance(exc, AttemptLeaseLost):
             raise
-        return dict(
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            repository.cancel_attempt(
+                request_id,
+                output_id,
+                attempt_id,
+                reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
+                metrics={
+                    "input_bytes": input_bytes,
+                    "cpu_seconds": usage_metrics.get(
+                        "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                    ),
+                    "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                    "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                },
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
+            if self.is_forced_to_stop(request_id):
+                raise self.raise_revoke(request_id)
+            raise self.raise_revoke_output(request_id, output_id)
+
+        retryable = (
+            self.request.retries < settings.TASK_RETRY_FFMPEG_COMMAND_MAX
+        )
+        repository.fail_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            retryable=retryable,
+            error_code="THUMBNAIL_RENDER_OR_VALIDATION_FAILED",
+            error_message=str(exc),
+            metrics={
+                "input_bytes": input_bytes,
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+            },
+            pricing=configured_pricing(settings),
+            lease_token=lease_token,
+        )
+        if retryable:
+            raise self.retry(
+                exc=exc,
+                max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX,
+            )
+        raise
+
+    return dict(
         file_path=output_path,
         attempt_id=attempt_id,
         attempt_number=attempt_number,
