@@ -1,6 +1,5 @@
 """Tests for bounded FFprobe metadata inspection."""
 
-import json
 import subprocess
 import tempfile
 import unittest
