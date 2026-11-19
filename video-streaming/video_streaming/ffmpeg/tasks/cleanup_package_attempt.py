@@ -7,6 +7,7 @@ from video_streaming.celery import celery_app
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.ffmpeg.package_publication import (
     cleanup_abandoned_attempt_package,
+    cleanup_abandoned_single_file,
 )
 from video_streaming.workflows.artifacts import attempt_scoped_object_key
 from video_streaming.workflows.service import get_workflow_repository
@@ -35,25 +36,36 @@ def cleanup_package_attempt(
         s3_output_key, attempt_id
     )
     attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
-    inventory_key = "{}/.{}.artifacts.json".format(
-        attempt_prefix, os.path.basename(s3_output_key)
+    namespace = repository.get_attempt_publication_namespace(attempt_id)
+    if not namespace or namespace.get("prefix") != attempt_prefix:
+        raise ValueError("Attempt namespace does not match the supplied key")
+    reclaimable = lambda candidate_id, bucket, prefix: (
+        repository.is_attempt_reclaimable(
+            candidate_id,
+            bucket,
+            prefix,
+            minimum_age_seconds=(
+                settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
+            ),
+        )
     )
-    result = cleanup_abandoned_attempt_package(
-        storage=self.s3_service,
-        bucket=s3_output_bucket,
-        inventory_key=inventory_key,
-        attempt_prefix=attempt_prefix,
-        is_reclaimable=lambda candidate_id, bucket, prefix: (
-            repository.is_attempt_reclaimable(
-                candidate_id,
-                bucket,
-                prefix,
-                minimum_age_seconds=(
-                    settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
-                ),
-            )
-        ),
-    )
+    if namespace.get("kind") == "single_file":
+        result = cleanup_abandoned_single_file(
+            storage=self.s3_service,
+            bucket=s3_output_bucket,
+            object_key=namespace["object_key"],
+            attempt_id=attempt_id,
+            attempt_prefix=attempt_prefix,
+            is_reclaimable=reclaimable,
+        )
+    else:
+        result = cleanup_abandoned_attempt_package(
+            storage=self.s3_service,
+            bucket=s3_output_bucket,
+            inventory_key=namespace["inventory_key"],
+            attempt_prefix=attempt_prefix,
+            is_reclaimable=reclaimable,
+        )
     if result["deleted"]:
         repository.mark_package_attempt_cleaned(
             attempt_id, s3_output_bucket, attempt_prefix
@@ -77,22 +89,33 @@ def cleanup_abandoned_packages(self, limit=100):
     )
     results = []
     for item in candidates:
-        result = cleanup_abandoned_attempt_package(
-            storage=self.s3_service,
-            bucket=item["bucket"],
-            inventory_key=item["inventory_key"],
-            attempt_prefix=item["prefix"],
-            is_reclaimable=lambda candidate_id, bucket, prefix: (
-                repository.is_attempt_reclaimable(
-                    candidate_id,
-                    bucket,
-                    prefix,
-                    minimum_age_seconds=(
-                        settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
-                    ),
-                )
-            ),
+        reclaimable = lambda candidate_id, bucket, prefix: (
+            repository.is_attempt_reclaimable(
+                candidate_id,
+                bucket,
+                prefix,
+                minimum_age_seconds=(
+                    settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
+                ),
+            )
         )
+        if item["kind"] == "single_file":
+            result = cleanup_abandoned_single_file(
+                storage=self.s3_service,
+                bucket=item["bucket"],
+                object_key=item["object_key"],
+                attempt_id=item["attempt_id"],
+                attempt_prefix=item["prefix"],
+                is_reclaimable=reclaimable,
+            )
+        else:
+            result = cleanup_abandoned_attempt_package(
+                storage=self.s3_service,
+                bucket=item["bucket"],
+                inventory_key=item["inventory_key"],
+                attempt_prefix=item["prefix"],
+                is_reclaimable=reclaimable,
+            )
         results.append(result)
         if result["deleted"]:
             repository.mark_package_attempt_cleaned(
