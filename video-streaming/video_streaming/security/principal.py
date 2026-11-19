@@ -46,6 +46,8 @@ class RequestPrincipal:
     def _normalize_claim_values(values: Iterable[str], field_name: str):
         if values is None:
             return frozenset()
+        if isinstance(values, str):
+            raise TypeError("{} must be a collection of strings".format(field_name))
         normalized = set()
         for value in values:
             if not isinstance(value, str) or not value.strip():
