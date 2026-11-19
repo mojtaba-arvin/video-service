@@ -320,25 +320,9 @@ def upload_file(self,
 
     if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
             request_id, output_id):
-        if (
-                durable_stage is not None
-                and durable_stage.get("status") in (
-                    "PROCESSING", "VALIDATED", "PUBLISHING"
-                )
-                and attempt_id):
-            repository.cancel_attempt(
-                job_id=request_id,
-                stage_key=output_id,
-                attempt_id=attempt_id,
-                reason="CANCELLED_BEFORE_FILE_PUBLICATION",
-                metrics={
-                    "input_bytes": int(kwargs.get("input_bytes") or 0),
-                    "cpu_seconds": kwargs.get("cpu_seconds"),
-                    "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
-                    "memory_duration_ms": kwargs.get("memory_duration_ms"),
-                },
-                pricing=configured_pricing(settings),
-            )
+        # This task does not own the processing Attempt's process-local token.
+        # The processing worker observes the cancellation flag and closes its
+        # own lease; the publisher must not attempt an unfenced cancellation.
         if self.is_forced_to_stop(request_id):
             raise self.raise_revoke(request_id)
         raise self.raise_revoke_output(request_id, output_id)
