@@ -135,5 +135,38 @@ class AttemptLeaseHeartbeatTests(unittest.TestCase):
 
 
 
+    def test_concurrent_progress_callbacks_share_one_renewal(self):
+        import threading
+
+        repository = FakeRepository()
+        clock = FakeClock()
+        heartbeat = AttemptLeaseHeartbeat(
+            repository, "job-1", "stage-1", "attempt-1", "secret-token",
+            lease_ttl_seconds=30,
+            renew_interval_seconds=5,
+            monotonic=clock,
+        )
+        clock.advance(5)
+        barrier = threading.Barrier(2)
+        results = []
+
+        def progress():
+            barrier.wait(timeout=2)
+            results.append(heartbeat.on_progress())
+
+        threads = [
+            threading.Thread(target=progress),
+            threading.Thread(target=progress),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+        self.assertEqual(len(repository.renewals), 1)
+        self.assertEqual(sorted(results), [False, True])
+
+
+
 if __name__ == "__main__":
     unittest.main()
