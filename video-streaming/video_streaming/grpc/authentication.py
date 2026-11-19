@@ -2,6 +2,7 @@
 from contextvars import ContextVar
 import grpc
 
+from video_streaming.security import RequestPrincipal
 from video_streaming.security.oidc import AuthenticationError
 
 
@@ -22,7 +23,8 @@ class OIDCBearerInterceptor(grpc.ServerInterceptor):
     ))
 
     def __init__(self, authenticator):
-        if authenticator is None:
+        if authenticator is None or not callable(
+                getattr(authenticator, "authenticate", None)):
             raise ValueError("A configured authenticator is required")
         self._authenticator = authenticator
 
@@ -37,6 +39,8 @@ class OIDCBearerInterceptor(grpc.ServerInterceptor):
             principal = self._authenticator.authenticate(
                 self._authorization_from_details(handler_call_details)
             )
+            if not isinstance(principal, RequestPrincipal) or principal.is_expired():
+                raise AuthenticationError("Invalid access token")
         except Exception:
             # Any verifier or metadata failure must fail closed.
             return self._unauthenticated_handler(handler)
