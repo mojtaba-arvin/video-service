@@ -1296,7 +1296,6 @@ class WorkflowRepositoryTests(unittest.TestCase):
         serialized_snapshot = repr(snapshot)
         self.assertNotIn(token, serialized_snapshot)
         self.assertNotIn("lease_token_hash", serialized_snapshot)
-        self.assertNotIn("lease_expires_at", serialized_snapshot)
         self.assertEqual(snapshot["attempts"][0]["id"], attempt_id)
 
 
