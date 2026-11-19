@@ -6,7 +6,7 @@ LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
 
 FROM python:3.9.2-alpine
 # Recognize musllinux wheels for pinned cryptography builds on Alpine.
-RUN python3 -m pip install --no-cache-dir --upgrade pip==25.3.1
+RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1
 RUN apk add --update --no-cache alpine-sdk linux-headers musl-dev libffi-dev py3-libxml2 libxslt-dev zlib-dev jpeg-dev imagemagick
 COPY --from=ffmpeg /usr/local /usr/local
 
