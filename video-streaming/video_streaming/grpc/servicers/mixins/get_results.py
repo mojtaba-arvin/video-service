@@ -442,7 +442,7 @@ class GetResultsMixin(object):
     def _get_results(self, request, context):
         # Validate every requested owner before reading any cache projection.
         for request_id in request.tracking_ids:
-            require_job_access(request_id, "video.jobs:read")
+            require_job_access(request_id, "video.jobs:read", context)
 
         results: list[streaming_pb2.ResultDetails] = []
         for request_id in request.tracking_ids:
