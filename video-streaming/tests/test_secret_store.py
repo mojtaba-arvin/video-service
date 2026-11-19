@@ -20,6 +20,7 @@ class FakeKeyProvider:
     def __init__(self):
         self.data_key = bytearray(range(32))
         self.contexts = []
+        self.decryption_key_ids = []
 
     def generate_data_key(self, encryption_context):
         self.contexts.append(dict(encryption_context))
@@ -29,6 +30,7 @@ class FakeKeyProvider:
 
     def decrypt_data_key(self, wrapped_key, encryption_context, key_id=None):
         self.contexts.append(dict(encryption_context))
+        self.decryption_key_ids.append(key_id)
         return bytearray(value ^ 0xA5 for value in wrapped_key)
 
 
@@ -63,6 +65,7 @@ class SecretEnvelopeTests(unittest.TestCase):
             resolve_secret(envelope, self.context, self.provider),
             "https://callback.example.test/hook?token=not-logged",
         )
+        self.assertEqual(self.provider.decryption_key_ids, ["kms-test-key"])
 
     def test_cross_job_or_tenant_resolution_is_denied_before_kms(self):
         envelope = prepare_secret("sensitive", self.context, self.provider)
