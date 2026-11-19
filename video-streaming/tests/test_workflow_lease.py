@@ -120,5 +120,20 @@ class AttemptLeaseHeartbeatTests(unittest.TestCase):
             )
 
 
+    def test_heartbeat_cannot_be_serialized_into_a_task_payload(self):
+        import pickle
+
+        heartbeat = AttemptLeaseHeartbeat(
+            FakeRepository(), "job-1", "stage-1", "attempt-1",
+            "very-sensitive-lease-token",
+            lease_ttl_seconds=30,
+            monotonic=FakeClock(),
+        )
+
+        with self.assertRaisesRegex(TypeError, "process-local"):
+            pickle.dumps(heartbeat)
+
+
+
 if __name__ == "__main__":
     unittest.main()
