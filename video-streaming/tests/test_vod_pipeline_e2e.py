@@ -895,5 +895,72 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
 
 
 
+    def test_playlist_result_uses_authoritative_manifest_location(self):
+        stage = {
+            "status": "FINISHED",
+            "attempts": [{"duration_ms": 1000, "output_bytes": 4096}],
+            "artifacts": [{
+                "type": "streaming_manifest",
+                "status": "AVAILABLE",
+                "uri": "s3://video-output/jobs/job-2/.attempts/pub-2/master.m3u8",
+            }],
+        }
+        previous_cache = self.servicer.cache
+        self.servicer.cache = InMemoryCache()
+        try:
+            outputs = []
+            self.servicer._playlists(
+                "job-2", ["playlist-0"], outputs,
+                {"playlist-0": stage},
+            )
+        finally:
+            self.servicer.cache = previous_cache
+
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(
+            outputs[0].uploaded_to.bucket, "video-output"
+        )
+        self.assertEqual(
+            outputs[0].uploaded_to.key,
+            "jobs/job-2/.attempts/pub-2/master.m3u8",
+        )
+
+    def test_watermarked_video_result_uses_authoritative_artifact_location(self):
+        from video_streaming.core.constants import CacheKeysTemplates
+
+        output_id = CacheKeysTemplates.WATERMARKED_VIDEO_OUTPUT_ID.format(
+            number=0
+        )
+        stage = {
+            "status": "FINISHED",
+            "attempts": [{"duration_ms": 2000, "cpu_seconds": 0.8,
+                          "peak_memory_bytes": 2048, "output_bytes": 512}],
+            "artifacts": [{
+                "type": "video_file",
+                "status": "AVAILABLE",
+                "uri": "s3://video-output/jobs/job-3/.attempts/pub-3/video.mp4",
+            }],
+        }
+        previous_cache = self.servicer.cache
+        self.servicer.cache = InMemoryCache()
+        try:
+            output = self.servicer._watermarked_video(
+                "job-3", {output_id: stage}
+            )
+        finally:
+            self.servicer.cache = previous_cache
+
+        self.assertEqual(output.uploaded_to.bucket, "video-output")
+        self.assertEqual(
+            output.uploaded_to.key,
+            "jobs/job-3/.attempts/pub-3/video.mp4",
+        )
+        self.assertEqual(output.file_size, 512)
+        self.assertEqual(output.spent_time, 2.0)
+        self.assertEqual(output.cpu_usage, 0.8)
+        self.assertEqual(output.memory_usage, 2048)
+
+
+
 if __name__ == "__main__":
     unittest.main()
