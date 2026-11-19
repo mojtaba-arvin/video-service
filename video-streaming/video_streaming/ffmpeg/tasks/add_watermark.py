@@ -225,6 +225,8 @@ def add_watermark(
             lease_token=lease_token,
             metrics={
                 "input_bytes": input_bytes,
+                # The publisher owns the storage charge for the final object.
+                "output_bytes": 0,
                 "cpu_seconds": measured_cpu_seconds(),
                 **process_resource_metrics(),
             },
