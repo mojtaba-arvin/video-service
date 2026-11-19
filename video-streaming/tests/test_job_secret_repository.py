@@ -17,6 +17,7 @@ from video_streaming.workflows.repository import (
     JobRecord,
     JobSecretRecord,
     WorkflowRepository,
+    utcnow,
 )
 
 
@@ -207,6 +208,19 @@ class JobSecretRepositoryTests(unittest.TestCase):
         with self.repository._session() as session:
             self.assertIsNone(session.get(JobRecord, job_id))
             self.assertIsNone(session.get(JobSecretRecord, envelope.secret_id))
+
+    def test_expired_secret_record_is_not_returned(self):
+        job_id = str(uuid4())
+        envelope = self.envelope(job_id)
+        self.create_owned_job(job_id, envelope=envelope)
+        with self.repository._session.begin() as session:
+            secret = session.get(JobSecretRecord, envelope.secret_id)
+            secret.expires_at = utcnow() - timedelta(seconds=1)
+
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope(
+                job_id, self.principal, "webhook.callback"
+            )
 
     def test_resolution_requires_the_dedicated_scope(self):
         job_id = str(uuid4())
