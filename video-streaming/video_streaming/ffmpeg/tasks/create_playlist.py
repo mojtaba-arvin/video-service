@@ -290,11 +290,11 @@ def create_playlist(
         def report_progress(line, process):
             nonlocal duration_seconds, current_seconds
             duration_match = re.search(
-                r"Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)",
+                r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
                 line,
             )
             current_match = re.search(
-                r"\\btime=(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)",
+                r"\btime=(\d+):(\d+):(\d+(?:\.\d+)?)",
                 line,
             )
             if duration_match:
