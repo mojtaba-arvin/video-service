@@ -2792,6 +2792,99 @@ class WorkflowRepository:
             return referenced is None
 
 
+    def requeue_processing_after_local_package_loss(
+            self, job_id, stage_key, processing_attempt_id, reason):
+        """Invalidate a local-only validation handoff and safely reprocess it."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason is required")
+        now = utcnow()
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if stage.status not in (
+                    StageState.VALIDATED.value,
+                    StageState.RETRY_WAIT.value):
+                raise InvalidStateTransition(
+                    "Local package loss can only requeue a validated stage"
+                )
+            processing_attempt = session.get(
+                AttemptRecord, processing_attempt_id, with_for_update=True
+            )
+            if (
+                    processing_attempt is None
+                    or processing_attempt.stage_id != stage.id
+                    or processing_attempt.state != AttemptState.SUCCEEDED.value):
+                raise InvalidStateTransition(
+                    "Requeue requires the successful processing Attempt"
+                )
+            active = session.execute(
+                select(AttemptRecord.id).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if active is not None:
+                raise StageAlreadyRunning(
+                    "Cannot requeue while another Attempt is active"
+                )
+
+            validation_artifact = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.attempt_id == processing_attempt_id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                ).with_for_update()
+            ).scalars().first()
+            if validation_artifact is None:
+                raise InvalidStateTransition(
+                    "The successful processing Attempt has no available "
+                    "validation proof to invalidate"
+                )
+            other_available = session.execute(
+                select(ArtifactRecord.id).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.status == "AVAILABLE",
+                    ArtifactRecord.id != validation_artifact.id,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if other_available is not None:
+                raise InvalidStateTransition(
+                    "Cannot reprocess after another Artifact was published"
+                )
+
+            metadata = dict(validation_artifact.metadata_json or {})
+            metadata["invalidated_reason"] = reason.strip()[:500]
+            metadata["invalidated_at"] = now.isoformat()
+            validation_artifact.metadata_json = metadata
+            validation_artifact.status = "UNAVAILABLE"
+            if stage.status != StageState.RETRY_WAIT.value:
+                self._transition(stage, StageState.RETRY_WAIT)
+            else:
+                stage.version += 1
+                stage.updated_at = now
+
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.RUNNING.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.RUNNING.value
+            job.updated_at = now
+            job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "PROCESSING_REQUEUED_AFTER_LOCAL_PACKAGE_LOSS",
+                from_state=StageState.VALIDATED.value,
+                to_state=StageState.RETRY_WAIT.value,
+                stage_id=stage.id,
+                attempt_id=processing_attempt_id,
+                payload={"reason": reason.strip()[:500]},
+            )
+            return True
+
+
     def get_stage_snapshot(self, job_id, stage_key):
         """Return one durable stage, its attempts and artifacts."""
         snapshot = self.get_job_snapshot(job_id)
