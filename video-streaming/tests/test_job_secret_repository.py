@@ -182,7 +182,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
             job_id,
             self.principal,
             "webhook.callback",
-            "video.jobs:callback:resolve",
         )
         self.assertEqual(persisted.secret_id, original.secret_id)
         self.assertEqual(
@@ -209,12 +208,30 @@ class JobSecretRepositoryTests(unittest.TestCase):
             self.assertIsNone(session.get(JobRecord, job_id))
             self.assertIsNone(session.get(JobSecretRecord, envelope.secret_id))
 
+    def test_resolution_requires_the_dedicated_scope(self):
+        job_id = str(uuid4())
+        envelope = self.envelope(job_id)
+        self.create_owned_job(job_id, envelope=envelope)
+        read_only = RequestPrincipal(
+            issuer=self.principal.issuer,
+            subject=self.principal.subject,
+            tenant_id=self.principal.tenant_id,
+            scopes=frozenset(["video.jobs:read"]),
+            roles=self.principal.roles,
+            authentication_method=self.principal.authentication_method,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope(
+                job_id, read_only, "webhook.callback"
+            )
+
     def test_missing_or_expired_secret_is_not_returned(self):
         job_id = str(uuid4())
         envelope = self.envelope(job_id)
         self.create_owned_job(job_id, envelope=envelope)
 
-        with self.assertRaises(AuthorizationError):
+        with self.assertRaises(ValueError):
             self.repository.get_job_secret_envelope(
                 job_id,
                 self.principal,
@@ -235,7 +252,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
                 job_id,
                 expired_principal,
                 "webhook.callback",
-                "video.jobs:callback:resolve",
             )
 
 
