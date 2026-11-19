@@ -111,7 +111,8 @@ def resolve_webhook_target(url, allow_loopback=False, resolver=None):
         raise WebhookDestinationError("Webhook destination is not allowed")
 
     hostname, literal_address = _normalize_hostname(hostname)
-    port = port or (443 if scheme == "https" else 80)
+    if port is None:
+        port = 443 if scheme == "https" else 80
     if port < 1 or port > 65535:
         raise WebhookDestinationError("Webhook destination is not allowed")
 
