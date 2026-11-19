@@ -160,7 +160,8 @@ def publish_package(
         s3_output_key,
         s3_output_bucket,
         storage,
-        callback_factory=None):
+        callback_factory=None,
+        on_progress=None):
     """Validate, replace an owned package and publish its root manifest last.
 
     1. Validate locally before altering the last known good publication.
@@ -280,6 +281,16 @@ def publish_package(
             callback = None
             if callback_factory is not None:
                 callback = callback_factory(index, total_files, total_size)
+            if on_progress is not None:
+                package_callback = callback
+
+                def callback(chunk):
+                    # Lease renewal must happen before the progress projection.
+                    # If renewal fails, the storage transfer is aborted by the
+                    # storage client's callback exception path.
+                    on_progress(chunk)
+                    if package_callback is not None:
+                        package_callback(chunk)
 
             storage.upload_file_by_path(
                 key=object_key,
