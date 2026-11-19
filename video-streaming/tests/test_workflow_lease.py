@@ -101,7 +101,7 @@ class AttemptLeaseHeartbeatTests(unittest.TestCase):
     def test_invalid_heartbeat_intervals_are_rejected(self):
         for ttl, interval in (
                 (30, 0), (30, -1), (30, 30), (30, 31),
-                (30, float("nan")), (30, float("inf"))):
+                (30, float("nan")), (30, float("inf")), (30, True)):
             with self.subTest(ttl=ttl, interval=interval):
                 with self.assertRaises(ValueError):
                     AttemptLeaseHeartbeat(
