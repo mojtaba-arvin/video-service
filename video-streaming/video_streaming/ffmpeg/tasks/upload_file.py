@@ -14,6 +14,7 @@ from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.lease import AttemptLeaseHeartbeat
 from video_streaming.workflows.artifacts import attempt_scoped_object_key
 from video_streaming.workflows.metrics import configured_pricing
+from video_streaming.workflows.resource_meter import ProcessResourceMeter
 from .base import BaseStreamingTask
 from .mixins import UploadFileMixin
 
@@ -84,6 +85,7 @@ def _publish_leased_file(
         task.save_output_status(
             task.output_status.UPLOADING, output_id, request_id
         )
+        resource_meter = ProcessResourceMeter().start()
         progress = S3UploadCallback(
             task=task,
             task_id=str(task.request.id),
@@ -125,6 +127,7 @@ def _publish_leased_file(
                 "Uploaded file is not readable through storage"
             )
 
+        metrics.update(resource_meter.stop())
         if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
@@ -167,8 +170,10 @@ def _publish_leased_file(
     except AttemptLeaseLost:
         # A stale publisher cannot commit an Artifact pointer. Its object key
         # is unique to this Attempt and is therefore not authoritative.
+        resource_meter.stop()
         raise
     except Exception as exc:
+        metrics.update(resource_meter.stop())
         if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
