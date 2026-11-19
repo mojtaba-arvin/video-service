@@ -10,6 +10,8 @@
 
 A lease token is process-local capability material. It is returned by `claim_attempt()`, held only in the worker that claimed the Attempt, and supplied to repository mutations and heartbeat renewal. It must never be included in Celery signatures/kwargs, task results, Redis projections, logs, traces, or durable event payloads.
 
+The first integrated worker paths use `WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS` (default 60 seconds, bounded to 1–86400 seconds). The heartbeat renews at one third of the configured TTL unless a shorter interval is explicitly supplied.
+
 The current task graph separates media processing from S3 publication. Therefore a single lease must not be passed from a processing task to an upload task. The intended model is two independently claimed Attempts for the same Stage:
 
 1. A processing task claims the Stage, creates and validates an attempt-scoped local artifact, persists the validation report, and atomically closes its Attempt while leaving the Stage in VALIDATED.
@@ -22,6 +24,8 @@ This requires an explicit repository transition for completing a processing Atte
 PR #123 introduces lease columns, hashed one-time tokens, `claim_attempt()`, `renew_attempt_lease()`, fenced repository writes, and bounded expired-lease recovery. Its CI verifies repository-level behavior. It does not yet change live Celery task call sites or fence external side effects.
 
 The existing FFmpeg process supervisor invokes usage callbacks while polling. This is a suitable heartbeat hook for long-running supervised media commands, but it is not sufficient for blocking storage SDK calls or other operations that do not return to the polling loop.
+
+PR #127 proposes the first runtime slice: thumbnail and watermark processing claim processing leases, use attempt-scoped local scratch directories, renew from supervised FFmpeg usage callbacks, and close the processing Attempt with a durable validation proof. The single-file publisher claims a separate publication Attempt, writes to an immutable attempt-scoped S3 key, renews from transfer progress, verifies remote size/readback, and commits the authoritative Artifact pointer only while the publication lease is valid. The gRPC result projection resolves that AVAILABLE Artifact into the existing `UploadedTo` bucket/key fields and aggregates metrics across processing/publication Attempts. These changes remain proposed until PR #127 is merged and its PostgreSQL, process-control, and fake-storage tests pass.
 
 ## Required implementation increments
 
