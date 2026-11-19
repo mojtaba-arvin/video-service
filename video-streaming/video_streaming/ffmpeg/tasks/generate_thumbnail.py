@@ -192,6 +192,8 @@ def generate_thumbnail(
             lease_token=lease_token,
             metrics={
                 "input_bytes": input_bytes,
+                # The publisher owns the storage charge for the final object.
+                "output_bytes": 0,
                 "cpu_seconds": usage_metrics.get(
                     "cpu_seconds", child_cpu_seconds_since(cpu_started)
                 ),
