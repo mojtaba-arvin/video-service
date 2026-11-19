@@ -16,7 +16,7 @@ The `cleanup_package_attempt` Celery task delegates eligibility to PostgreSQL:
 - Attempts with a live lease or an incomplete lease tuple are not reclaimable.
 - The default grace period is 24 hours. Configure `WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS` between 3,600 and 2,592,000 seconds.
 
-The task deletes the root manifest first, then the remaining objects listed in the Attempt inventory, and finally the inventory itself. If deletion fails part-way through, the inventory remains so the operation can be retried safely.
+For HLS/DASH packages, the task deletes the root manifest first, then the remaining objects listed in the Attempt inventory, and finally the inventory itself. If deletion fails part-way through, the inventory remains so the operation can be retried safely. For a single-file Attempt, it deletes only the exact immutable object key recorded for that Attempt. In both cases, the cleanup marker is committed only after storage deletion succeeds.
 
 ## Manual invocation
 
@@ -33,6 +33,6 @@ A result with `"deleted": false` means PostgreSQL has not yet approved reclamati
 
 ## Scheduling
 
-The `cleanup_abandoned_packages` task is scheduled hourly through `CELERY_BEAT_SCHEDULE`. The Circus configuration starts a dedicated `celery beat` watcher alongside the worker. The repository records each package Attempt's bucket, logical manifest key, immutable prefix, and inventory key in its durable metrics metadata so the janitor can enumerate candidates without listing shared S3 prefixes.
+The `cleanup_abandoned_packages` task is scheduled hourly through `CELERY_BEAT_SCHEDULE`. The Circus configuration starts a dedicated `celery beat` watcher alongside the worker. The repository records each publication Attempt's bucket, logical key, immutable prefix, and object ownership metadata in its durable metrics metadata. HLS/DASH Attempts use an inventory; single-file Attempts record the exact object key. The janitor enumerates both kinds without listing shared S3 prefixes.
 
 The janitor asks PostgreSQL for old candidate Attempts, then rechecks the database predicate immediately before deletion. The single-attempt `cleanup_package_attempt` task remains available for controlled manual cleanup.
