@@ -119,6 +119,18 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 job_id, self.make_owner_principal(), "video.jobs:read"
             )
 
+    def test_idempotent_replay_of_owned_job_requires_principal(self):
+        principal = self.make_owner_principal()
+        job_id = str(uuid4())
+        key = "idem-owner-anonymous-replay-{}".format(uuid4())
+        self.repository.create_job(
+            job_id, key, "c" * 64, owner_principal=principal
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_job(
+                str(uuid4()), key, "c" * 64
+            )
+
     def test_idempotent_replay_cannot_cross_owner_boundary(self):
         principal = self.make_owner_principal()
         job_id = str(uuid4())
