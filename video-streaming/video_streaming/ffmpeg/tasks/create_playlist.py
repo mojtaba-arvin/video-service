@@ -150,10 +150,6 @@ def create_playlist(
                     and isinstance(local_manifest, str)
                     and os.path.isfile(local_manifest)
                     and isinstance(expected, list)
-                    and all(
-                        os.path.isfile(os.path.join(local_directory, name))
-                        for name in expected
-                    )
                 )
                 if (
                         existing_stage.get("status") == "FINISHED"
