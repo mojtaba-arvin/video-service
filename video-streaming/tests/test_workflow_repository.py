@@ -1608,6 +1608,38 @@ class WorkflowRepositoryTests(unittest.TestCase):
             minimum_age_seconds=86400,
         ))
 
+    def test_recovered_publication_attempt_is_reclaimable_only_after_replacement(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        old_id, _, _, expiry = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="publisher-crashed"
+        )
+        self.repository.recover_expired_attempts(now=expiry)
+        with self.repository._session.begin() as session:
+            old_attempt = session.get(AttemptRecord, old_id)
+            old_attempt.finished_at = utcnow() - timedelta(days=2)
+
+        prefix = "vod/.attempts/{}".format(old_id)
+        self.assertFalse(self.repository.is_attempt_reclaimable(
+            old_id, "vod-output", prefix, minimum_age_seconds=86400
+        ))
+
+        new_id, _, _, _ = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="replacement-publisher",
+            processing_attempt_id=processing_id,
+        )
+        self.assertNotEqual(old_id, new_id)
+        self.assertTrue(self.repository.is_attempt_reclaimable(
+            old_id, "vod-output", prefix, minimum_age_seconds=86400
+        ))
+
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
 
