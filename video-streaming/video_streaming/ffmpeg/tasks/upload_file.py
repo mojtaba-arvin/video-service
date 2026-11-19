@@ -81,11 +81,11 @@ def _publish_leased_file(
         request_id, output_id, publication_id, lease_token=lease_token
     )
     cancelled = False
+    resource_meter = ProcessResourceMeter().start()
     try:
         task.save_output_status(
             task.output_status.UPLOADING, output_id, request_id
         )
-        resource_meter = ProcessResourceMeter().start()
         progress = S3UploadCallback(
             task=task,
             task_id=str(task.request.id),
