@@ -98,6 +98,8 @@ def upload_directory(self,
         execution_ref=str(self.request.id),
         processing_attempt_id=processing_attempt_id,
         pricing=configured_pricing(settings),
+        package_output_key=s3_output_key,
+        package_output_bucket=s3_output_bucket,
     )
     heartbeat = AttemptLeaseHeartbeat(
         repository, request_id, output_id, publication_id, lease_token,
