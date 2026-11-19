@@ -839,8 +839,9 @@ class WorkflowRepository:
         if (
                 isinstance(lease_ttl_seconds, bool)
                 or not isinstance(lease_ttl_seconds, (int, float))
-                or lease_ttl_seconds <= 0):
-            raise ValueError("lease_ttl_seconds must be positive")
+                or not math.isfinite(float(lease_ttl_seconds))
+                or not 1 <= lease_ttl_seconds <= 3600):
+            raise ValueError("lease_ttl_seconds must be between 1 and 3600")
         now = now or utcnow()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
@@ -899,11 +900,21 @@ class WorkflowRepository:
                     OutboxRecord.id == outbox_id
                 ).with_for_update()
             ).scalar_one_or_none()
+            lease_expires_at = (
+                row.lease_expires_at if row is not None else None
+            )
+            if (
+                    lease_expires_at is not None
+                    and (
+                        lease_expires_at.tzinfo is None
+                        or lease_expires_at.utcoffset() is None
+                    )):
+                lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
             if (
                     row is None
                     or row.state != "PROCESSING"
-                    or row.lease_expires_at is None
-                    or row.lease_expires_at <= now
+                    or lease_expires_at is None
+                    or lease_expires_at <= now
                     or not hmac.compare_digest(row.lock_token_hash or "", digest)):
                 return False
             row.state = "PUBLISHED"
@@ -922,8 +933,10 @@ class WorkflowRepository:
         if (
                 isinstance(delay_seconds, bool)
                 or not isinstance(delay_seconds, (int, float))
-                or delay_seconds < 0):
-            raise ValueError("delay_seconds must be non-negative")
+                or not math.isfinite(float(delay_seconds))
+                or delay_seconds < 0
+                or delay_seconds > 86400):
+            raise ValueError("delay_seconds must be between 0 and 86400")
         if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         now = now or utcnow()
@@ -934,17 +947,29 @@ class WorkflowRepository:
                     OutboxRecord.id == outbox_id
                 ).with_for_update()
             ).scalar_one_or_none()
+            lease_expires_at = (
+                row.lease_expires_at if row is not None else None
+            )
+            if (
+                    lease_expires_at is not None
+                    and (
+                        lease_expires_at.tzinfo is None
+                        or lease_expires_at.utcoffset() is None
+                    )):
+                lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
             if (
                     row is None
                     or row.state != "PROCESSING"
-                    or row.lease_expires_at is None
-                    or row.lease_expires_at <= now
+                    or lease_expires_at is None
+                    or lease_expires_at <= now
                     or not hmac.compare_digest(row.lock_token_hash or "", digest)):
                 return False
             row.state = "DEAD" if row.attempts >= max_attempts else "PENDING"
             row.available_at = now + timedelta(seconds=float(delay_seconds))
             row.updated_at = now
-            row.last_error = str(error_code or "dispatch_error")[:128]
+            row.last_error = re.sub(
+                r"[^A-Za-z0-9_.-]", "_", str(error_code or "dispatch_error")
+            )[:128]
             row.locked_by = None
             row.lock_token_hash = None
             row.lease_expires_at = None
