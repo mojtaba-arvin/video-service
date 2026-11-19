@@ -10,8 +10,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey, ForeignKeyConstraint,
-    Index, Integer, Numeric, String, Text, UniqueConstraint, create_engine,
+    JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
+    UniqueConstraint, create_engine,
     select, func,
 )
 from sqlalchemy.exc import IntegrityError
@@ -77,7 +78,6 @@ class JobRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
-
 
 
 class JobSecretRecord(Base):
