@@ -220,6 +220,7 @@ class PackagePublicationTests(unittest.TestCase):
         self.assertFalse(skipped["deleted"])
         self.assertEqual(set(self.storage.objects), before)
 
+        cleanup_event_start = len(self.storage.events)
         removed = cleanup_abandoned_attempt_package(
             self.storage,
             self.bucket,
@@ -229,6 +230,14 @@ class PackagePublicationTests(unittest.TestCase):
         )
         self.assertTrue(removed["deleted"])
         self.assertEqual(removed["objects"], 4)
+        cleanup_deletes = [
+            event[1] for event in self.storage.events[cleanup_event_start:]
+            if event[0] == "delete"
+        ]
+        self.assertEqual(
+            cleanup_deletes[0],
+            "vod/.attempts/pub-orphan/master.m3u8",
+        )
         self.assertFalse(any(
             key.startswith("vod/.attempts/pub-orphan/")
             for key in self.storage.objects
