@@ -164,6 +164,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "WORKFLOW_DATABASE_MAX_OVERFLOW=2",
                 "TASK_RETRY_BACKOFF_MAX=2",
                 "TASK_RETRY_FFMPEG_COMMAND_MAX=0",
+                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
                 "DEFAULT_PLAYLIST_IS_HLS=True",
                 "DEFAULT_SEGMENT_TYPE_IS_FMP4=False",
                 "DONT_REPLACE_OUTPUT=False",
