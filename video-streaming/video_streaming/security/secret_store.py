@@ -122,10 +122,14 @@ class AwsKMSKeyProvider:
         self._kms = kms_client
         self._key_id = _required_text(key_id, "key_id")
 
+    @property
+    def key_id(self):
+        return self._key_id
+
     def generate_data_key(self, encryption_context):
         try:
             response = self._kms.generate_data_key(
-                KeyId=self._key_id,
+                KeyId=key_id or self._key_id,
                 KeySpec="AES_256",
                 EncryptionContext=encryption_context,
             )
@@ -135,7 +139,7 @@ class AwsKMSKeyProvider:
                 "KMS data-key generation failed"
             ) from exc
 
-    def decrypt_data_key(self, wrapped_key, encryption_context):
+    def decrypt_data_key(self, wrapped_key, encryption_context, key_id=None):
         try:
             response = self._kms.decrypt(
                 CiphertextBlob=wrapped_key,
@@ -257,6 +261,7 @@ def resolve_secret(envelope, expected_context, key_provider, now=None):
         data_key = key_provider.decrypt_data_key(
             _b64decode(envelope.wrapped_dek, "wrapped_dek"),
             kms_context,
+            key_id=envelope.kms_key_id,
         )
         if len(data_key) != 32:
             raise SecretDecryptionError("KMS returned an invalid AES-256 data key")
