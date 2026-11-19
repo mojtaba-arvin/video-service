@@ -438,11 +438,10 @@ class WorkflowRepository:
                 raise TypeError("secret_envelopes must contain SecretEnvelope values")
             context = envelope.context
             if (
-                    context.job_id != job_id
-                    or context.tenant_id != owner_principal.tenant_id
+                    context.tenant_id != owner_principal.tenant_id
                     or context.issuer != owner_principal.issuer
                     or context.subject != owner_principal.subject):
-                raise ValueError("secret envelope scope must match the new Job owner")
+                raise ValueError("secret envelope scope must match the Job owner")
             if context.purpose in seen_purposes:
                 raise ValueError("only one initial secret per purpose is allowed")
             seen_purposes.add(context.purpose)
@@ -554,6 +553,10 @@ class WorkflowRepository:
                 # already accepted Job ID above, while new Jobs must match.
                 if plan is not None and plan["job_id"] != job_id:
                     raise ValueError("execution plan job_id must match job_id")
+                if any(
+                        envelope.context.job_id != job_id
+                        for envelope in secret_envelopes):
+                    raise ValueError("secret envelope job_id must match job_id")
 
                 job = JobRecord(
                     id=job_id,
