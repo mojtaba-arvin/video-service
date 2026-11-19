@@ -293,6 +293,18 @@ if not 1 <= WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS <= 86400:
         "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS must be between 1 and 86400"
     )
 
+# Package objects are retained for at least one day before an explicit
+# database-guarded cleanup task may reclaim an abandoned Attempt namespace.
+WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS = env_config.get(
+    "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS",
+    default=86400,
+    cast=int)
+if not 3600 <= WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS <= 2592000:
+    raise ValueError(
+        "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS must be between "
+        "3600 and 2592000"
+    )
+
 # Optional infrastructure price card. Resource measurements are persisted
 # even when no monetary rates are configured.
 WORKFLOW_PRICING_MODEL_ID = env_config.get(
