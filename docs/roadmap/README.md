@@ -7,7 +7,7 @@ go/no-go decisions are maintained in the
 [Product execution plan](../product/EXECUTION_PLAN.md). This roadmap remains
 the issue-level outcome index and current implementation status.
 
-## Strategic-goal alignment (2026-11-18)
+## Strategic-goal alignment (2026-11-19)
 
 The six ratings are engineering estimates on a 0–5 maturity scale based on
 merged code and verified CI evidence. They are not delivery percentages or
@@ -58,7 +58,7 @@ Do not delay an independently useful capability just because another outcome lan
 
 The canonical engineering work queue is tracked in
 [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54). Status
-below reflects evidence on `develop` as of 2026-11-18; open PR work is
+below reflects evidence on `develop` as of 2026-11-19; open PR work is
 identified separately and is not counted as merged.
 
 | Priority | Outcome lane | Verified state | Next acceptance evidence |
@@ -67,7 +67,7 @@ identified separately and is not counted as merged.
 | P0 | Configuration and repository hygiene | **Done** — settings regressions and safe environment template/ignore checks (PR #55/#56) | Confirm historic development broker credentials are no longer accepted by any shared service |
 | P0 | Thumbnail correctness | **Done** — actual FFmpeg render plus FFprobe checks before completion (PR #57/#59) | Add failure/cancellation coverage to the complete workflow |
 | P0 | HLS/DASH correctness and publication | **Done** — package graph validation, expected rendition checks, bounded metadata probing, storage readback and manifest-last publication (PR #62/#64) | Add adversarial tests for cleanup/partial failure as the package contract evolves |
-| P0 | Durable orchestration | **Plan contract and complete pure VOD DAG builder merged (PR #100/#104); atomic plan snapshot implemented in PR #106 (pending CI)** — Job/Workflow/plan/version/fingerprint/Stage projections/event are persisted together; live gRPC/Celery dispatch remains unchanged | Pass PostgreSQL migration/repository/regression/E2E gates; then implement authorized secret-reference storage and durable per-node claims; add broker-backed crash/replay tests before enabling a relay |
+| P0 | Durable orchestration | **Plan contract, complete pure VOD DAG builder, and atomic immutable plan persistence merged (PR #100/#104/#106)** — Job/Workflow/plan/version/fingerprint/Stage projections/event are persisted together; PR #106 passed PostgreSQL repository/migration, Python 3.9/3.12 regression, full VOD integration and aggregate Quality gates; live gRPC/Celery dispatch remains unchanged | Implement tenant/Job-authorized encrypted secret-reference storage and durable per-node claims/leases; add broker-backed crash/replay tests before enabling a relay |
 | P0 | End-to-end VOD reliability | **Partial** — gRPC → Celery → FFmpeg → HLS/thumbnail → S3-compatible test double; final state survives Redis cache clearing (PR #63/#68) | Add broker-backed worker process tests for worker loss, non-zero FFmpeg exit, retry, cancellation and watermark output |
 | P0 | FFmpeg execution isolation | **Partial — PR #87/#92/#95 merged** — Thumbnail and Watermark use bounded deadlines and terminate process groups/descendants on cancellation; streaming Watermark records direct process-group CPU/RSS/duration; real FFmpeg/FFprobe tests run in CI | Extend metering/supervision to every third-party library-launched FFmpeg path; add cgroup/container CPU/memory/PID/disk bounds, admission control and adversarial cleanup tests |
 | P0 | Security boundary | **Partial — PR #85/#97 merged** — sensitive task/request/provider/callback values are redacted; webhook connect/read timeouts are bounded, automatic redirects/retries are disabled, and response/pool cleanup is deterministic | Caller authentication/authorization, tenant boundaries, quotas, DNS/IP-aware SSRF protection, signed/replay-protected webhooks, delivery history and abuse tests |
@@ -102,20 +102,23 @@ the same files or migration/protobuf ownership.
 
 ## First end-to-end target
 
-The next milestone is a **failure-tested, cost-observable VOD vertical**:
+The next milestone is a **failure-tested, cost-observable VOD vertical**. Immutable execution-plan persistence is now merged (PR #106); the next missing safety contracts are secret resolution and durable per-node claims. The live dispatch path is still the legacy gRPC/Celery graph. The target vertical is:
 
 1. A caller submits a typed request with a stable idempotency key.
-2. PostgreSQL persists the Job, Workflow, Stage and an outbox dispatch record
-   in one transaction.
-3. A relay leases and publishes the dispatch at least once; duplicate delivery
-   is safe because state transitions and side effects are idempotent.
-4. A bounded worker owns a supervised FFmpeg process tree and records an
+2. PostgreSQL persists the Job, Workflow, immutable plan/version/fingerprint,
+   Stage projections and creation event in one transaction (merged in PR #106).
+3. A secret reference resolves only inside an authorized delivery adapter;
+   plaintext credentials never enter plan snapshots or broker payloads.
+4. PostgreSQL persists dispatch intent atomically; a lease-based relay
+   publishes at least once only after durable per-node claims and idempotent
+   side-effect contracts exist.
+5. A bounded worker owns a supervised FFmpeg process tree and records an
    Attempt with measurements.
-5. The output is probed, package-validated and read back from object storage
+6. The output is probed, package-validated and read back from object storage
    before the root manifest is published and the Artifact is marked available.
-6. Job status, progress, cancellation and failure reason are queryable from
+7. Job status, progress, cancellation and failure reason are queryable from
    durable state after cache loss and worker restart.
-7. Resource usage, cost-estimate coverage and output quality are available
+8. Resource usage, cost-estimate coverage and output quality are available
    through a stable application contract.
 
 The current in-process E2E test is a strong deterministic regression harness,
