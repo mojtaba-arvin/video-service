@@ -161,9 +161,10 @@ def cleanup_abandoned_attempt_package(
         is_reclaimable):
     """Delete only one terminal, unreferenced package Attempt's objects.
 
-    The caller must provide a database-backed predicate that returns True only
-    after the Attempt is terminal, outside the recovery grace period, and none
-    of its objects are referenced by an AVAILABLE Artifact. The function never
+    The caller must provide a database-backed predicate accepting
+    (attempt_id, bucket, attempt_prefix). It must return True only after the
+    Attempt is terminal, outside the recovery grace period, and no AVAILABLE
+    Artifact references this prefix. The function never
     lists or deletes a shared prefix; it uses the attempt's ownership inventory.
     """
     if not callable(is_reclaimable):
@@ -192,9 +193,6 @@ def cleanup_abandoned_attempt_package(
     if not inventory_key.endswith(".artifacts.json"):
         raise PackagePublicationError("Invalid package inventory key")
 
-    if not is_reclaimable(attempt_id):
-        return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
-
     raw = storage.read_object_bytes(key=inventory_key, bucket_name=bucket)
     if raw is None:
         return {"deleted": True, "attempt_id": attempt_id, "objects": 0}
@@ -220,6 +218,9 @@ def cleanup_abandoned_attempt_package(
         raise PackagePublicationError(
             "Inventory escaped the selected attempt namespace"
         )
+
+    if not is_reclaimable(attempt_id, bucket, prefix):
+        return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
 
     manifest_relative = payload.get("manifest")
     if manifest_relative is not None:
