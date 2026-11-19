@@ -5,7 +5,7 @@ from video_streaming.security import AuthorizationError
 from video_streaming.workflows.service import get_workflow_repository
 
 
-def require_job_access(job_id, required_scope):
+def require_job_access(job_id, required_scope, context):
     """Authorize a durable Job before touching Redis or any side effect."""
     repository = get_workflow_repository(required=True)
     try:
@@ -16,11 +16,11 @@ def require_job_access(job_id, required_scope):
         )
     except AuthorizationError:
         # Same public response for missing, legacy-unowned and foreign Jobs.
-        raise exceptions.JobNotFoundException
+        raise exceptions.JobNotFoundException(context=context)
     return repository
 
 
-def require_playback_session_access(session_id, required_scope):
+def require_playback_session_access(session_id, required_scope, context):
     """Authorize session ownership as well as the session capability token."""
     repository = get_workflow_repository(required=True)
     try:
