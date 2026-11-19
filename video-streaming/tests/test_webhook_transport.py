@@ -105,6 +105,7 @@ class WebhookDestinationTests(unittest.TestCase):
             "https://callback.example.test/hook#fragment",
             "https:///missing-host",
             "https://callback.example.test:99999/hook",
+            "https://callback.example.test:0/hook",
             "https://callback.example.test/hook with spaces",
         )
         for url in invalid_urls:
