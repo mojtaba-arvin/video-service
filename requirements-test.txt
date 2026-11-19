@@ -1,7 +1,0 @@
-# Shared dependencies required by the regression test suite.
-ffmpeg-python==0.2.0
-# Process-tree termination regression tests
-psutil==5.9.8
-
-# Authenticated secret-envelope encryption tests.
-cryptography==50.0.2

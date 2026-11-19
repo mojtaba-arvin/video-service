@@ -5,6 +5,7 @@ must not import protobuf, Celery, storage SDKs, or FFmpeg task signatures.
 """
 
 import math
+import re
 from copy import deepcopy
 
 from video_streaming.workflows.execution_plan import (
@@ -142,15 +143,30 @@ def _normalize_output(output, kind, index):
         })
     else:
         thumbnail_time = output.get("thumbnail_time")
-        if (
-            isinstance(thumbnail_time, bool)
-            or not isinstance(thumbnail_time, (int, float))
-            or not math.isfinite(thumbnail_time)
-            or thumbnail_time < 0
-        ):
+        numeric_time = (
+            not isinstance(thumbnail_time, bool)
+            and isinstance(thumbnail_time, (int, float))
+            and math.isfinite(thumbnail_time)
+            and thumbnail_time >= 0
+        )
+        timestamp_time = (
+            isinstance(thumbnail_time, str)
+            and bool(re.fullmatch(
+                r"(?:[0-9]{1,3}:)?[0-5]?[0-9]:[0-5]?[0-9](?:\\.[0-9]{1,3})?",
+                thumbnail_time.strip(),
+            ))
+        )
+        if not (numeric_time or timestamp_time):
             raise VODPlanBuildError(
-                "{}[{}].thumbnail_time must be non-negative".format(kind, index)
+                "{}[{}].thumbnail_time must be a non-negative number or "
+                "FFmpeg timestamp".format(kind, index)
             )
+        if isinstance(thumbnail_time, str):
+            thumbnail_time = thumbnail_time.strip()
+            if not thumbnail_time:
+                raise VODPlanBuildError(
+                    "{}[{}].thumbnail_time cannot be empty".format(kind, index)
+                )
         for field in ("scale_width", "scale_height"):
             value = output.get(field, 0)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

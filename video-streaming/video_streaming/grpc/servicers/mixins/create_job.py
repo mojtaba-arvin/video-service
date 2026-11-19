@@ -66,6 +66,75 @@ class CreateJobMixin(object):
         audio_codec = format_cls.AudioCodec.__dict__['_enum_type'].values[audio_codec_id].name.lower()
         return video_codec.lower(), audio_codec
 
+    def _build_durable_vod_request(self, request):
+        """Translate the public protobuf request into the transport-neutral VOD shape.
+
+        Keep protobuf and legacy Celery concerns at the gRPC boundary. The
+        resulting mapping is safe to pass to the canonical plan builder; it
+        deliberately excludes the raw webhook URL.
+        """
+        video = {
+            "bucket": request.video.s3_input.bucket,
+            "key": request.video.s3_input.key,
+        }
+        watermark = {}
+        if request.watermark.s3_input.key.strip():
+            watermark.update({
+                "input_bucket": request.watermark.s3_input.bucket,
+                "input_key": request.watermark.s3_input.key,
+            })
+        if request.watermark.upload_to.key.strip():
+            watermark.update({
+                "output_bucket": request.watermark.upload_to.bucket,
+                "output_key": request.watermark.upload_to.key,
+                "create_bucket": request.watermark.upload_to.create_bucket,
+                "dont_replace": request.watermark.upload_to.dont_replace,
+            })
+
+        playlists = []
+        for output in request.playlists:
+            encode_format, video_codec, audio_codec = self._get_format(output)
+            playlists.append({
+                "bucket": output.upload_to.bucket,
+                "key": output.upload_to.key,
+                "protocol": (
+                    "hls" if output.protocol == self.pb2.Protocol.HLS else "dash"
+                ),
+                "quality_names": self._parse_quality_names(
+                    output.options.quality_names
+                ),
+                "encode_format": encode_format,
+                "video_codec": video_codec,
+                "audio_codec": audio_codec,
+                "fragmented": output.options.fmp4,
+                "custom_qualities": self._parse_custom_qualities(
+                    output.options.custom_qualities
+                ),
+                "use_watermark": output.use_watermark,
+                "create_bucket": output.upload_to.create_bucket,
+                "dont_replace": output.upload_to.dont_replace,
+            })
+
+        thumbnails = []
+        for output in request.thumbnails:
+            thumbnails.append({
+                "bucket": output.upload_to.bucket,
+                "key": output.upload_to.key,
+                "thumbnail_time": output.thumbnail_time,
+                "scale_width": output.options.scale_width,
+                "scale_height": output.options.scale_height,
+                "use_watermark": output.use_watermark,
+                "create_bucket": output.upload_to.create_bucket,
+                "dont_replace": output.upload_to.dont_replace,
+            })
+
+        return {
+            "video": video,
+            "watermark": watermark,
+            "playlists": playlists,
+            "thumbnails": thumbnails,
+        }
+
     @staticmethod
     def _has_create_flag(output_bucket, *outputs):
         # check bucket has one create flag
