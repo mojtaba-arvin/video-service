@@ -163,6 +163,8 @@ class AttemptLeaseHeartbeatTests(unittest.TestCase):
         for thread in threads:
             thread.join(timeout=3)
 
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(results), 2)
         self.assertEqual(len(repository.renewals), 1)
         self.assertEqual(sorted(results), [False, True])
 
