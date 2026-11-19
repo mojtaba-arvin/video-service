@@ -253,6 +253,34 @@ class PackagePublicationTests(unittest.TestCase):
                 is_reclaimable=lambda _attempt_id: True,
             )
 
+    def test_lease_loss_during_upload_cleans_only_current_attempt(self):
+        old_key = "vod/.attempts/pub-old/master.m3u8"
+        self.storage.objects[old_key] = b"old-package"
+        calls = []
+
+        def lose_lease(_chunk):
+            calls.append(_chunk)
+            raise RuntimeError("publication lease lost")
+
+        with self.assertRaisesRegex(RuntimeError, "publication lease lost"):
+            publish_package(
+                directory=str(self.root),
+                manifest_path=str(self.master),
+                protocol="hls",
+                expected_renditions=["variant.m3u8"],
+                s3_output_key="vod/.attempts/pub-new/master.m3u8",
+                s3_output_bucket=self.bucket,
+                storage=self.storage,
+                on_progress=lose_lease,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.storage.objects[old_key], b"old-package")
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-new/")
+            for key in self.storage.objects
+        ))
+
     def test_every_dependency_is_uploaded_and_readable_before_master(self):
         result = self.publish()
         self.assertEqual(result["files"], 4)
