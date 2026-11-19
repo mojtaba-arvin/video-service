@@ -33,4 +33,6 @@ A result with `"deleted": false` means PostgreSQL has not yet approved reclamati
 
 ## Scheduling
 
-This repository does not currently deploy a Celery Beat service, so cleanup is an explicit maintenance task rather than an automatic periodic job. Schedule it only after a deployment-owned inventory source can identify candidate Attempts and their original logical manifest keys. The database predicate remains the final deletion guard even when a scheduler is added.
+The `cleanup_abandoned_packages` task is scheduled hourly through `CELERY_BEAT_SCHEDULE`. The Circus configuration starts a dedicated `celery beat` watcher alongside the worker. The repository records each package Attempt's bucket, logical manifest key, immutable prefix, and inventory key in its durable metrics metadata so the janitor can enumerate candidates without listing shared S3 prefixes.
+
+The janitor asks PostgreSQL for old candidate Attempts, then rechecks the database predicate immediately before deletion. The single-attempt `cleanup_package_attempt` task remains available for controlled manual cleanup.
