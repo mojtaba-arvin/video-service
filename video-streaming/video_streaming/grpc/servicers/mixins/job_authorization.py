@@ -16,7 +16,7 @@ def require_job_access(job_id, required_scope, context):
         )
     except AuthorizationError:
         # Same public response for missing, legacy-unowned and foreign Jobs.
-        raise exceptions.JobNotFoundException(context=context)
+        raise exceptions.ResourceNotFoundOrDeniedException(context=context)
     return repository
 
 
@@ -30,5 +30,5 @@ def require_playback_session_access(session_id, required_scope, context):
             required_scope,
         )
     except AuthorizationError:
-        raise exceptions.JobNotFoundException(context=context)
+        raise exceptions.ResourceNotFoundOrDeniedException(context=context)
     return repository
