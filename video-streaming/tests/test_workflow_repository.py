@@ -1475,5 +1475,35 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_processing_completion_is_idempotent_for_existing_validation_artifact(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-idempotent-validation"
+        )
+        report = {"valid": True, "errors": []}
+        self.assertTrue(self.repository.mark_validated(
+            job_id, "p0", attempt_id, report, lease_token=token
+        ))
+
+        self.assertFalse(self.repository.complete_processing_attempt(
+            job_id, "p0", attempt_id, report,
+            lease_token=token,
+            metrics={"cpu_seconds": 0.5},
+        ))
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["status"], "SUCCEEDED")
+        self.assertEqual(len(stage["artifacts"]), 1)
+
+        with self.repository._session() as session:
+            events = session.query(WorkflowEventRecord).filter_by(
+                attempt_id=attempt_id,
+                event_type="STAGE_PROCESSING_ATTEMPT_COMPLETED",
+            ).all()
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0].payload_json["idempotent_validation_replay"])
+
+
+
 if __name__ == "__main__":
     unittest.main()
