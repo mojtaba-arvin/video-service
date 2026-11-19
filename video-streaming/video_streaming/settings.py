@@ -351,3 +351,14 @@ REDIS_URL = env_config.get(
     default="",
     cast=str
 )
+
+
+# Run the guarded package-attempt janitor hourly. The task rechecks each
+# candidate against PostgreSQL immediately before deleting its inventory.
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-abandoned-package-attempts": {
+        "task": "cleanup_abandoned_packages",
+        "schedule": 3600.0,
+        "options": {"expires": 1800},
+    },
+}
