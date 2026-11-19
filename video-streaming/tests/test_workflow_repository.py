@@ -14,7 +14,8 @@ from video_streaming.workflows.domain import (
     StageState,
 )
 from video_streaming.workflows.repository import (
-    WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord, utcnow
+    WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
+    WorkflowEventRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -1128,6 +1129,115 @@ class WorkflowRepositoryTests(unittest.TestCase):
             len(self.repository.get_job_snapshot(durable_job_id)["stages"]),
             1,
         )
+
+
+    def test_lease_ttl_rejects_invalid_values(self):
+        invalid_values = (
+            True, False, 0, -1, 86401,
+            float("nan"), float("inf"), float("-inf"),
+            None, "not-a-number",
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.repository._validated_lease_ttl(value)
+
+    def test_lease_ttl_accepts_documented_boundaries(self):
+        self.assertEqual(self.repository._validated_lease_ttl(0.001), 0.001)
+        self.assertEqual(self.repository._validated_lease_ttl(86400), 86400.0)
+
+    def test_lease_owner_rejects_blank_and_oversized_values_before_claim(self):
+        for owner in ("", "   ", "x" * 256):
+            with self.subTest(owner_length=len(owner)):
+                with self.assertRaises(ValueError):
+                    self.repository.claim_attempt(
+                        "missing-job",
+                        "missing-stage",
+                        lease_owner=owner,
+                    )
+
+    def test_lease_cannot_be_renewed_at_exact_expiry_boundary(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _, token, expires_at = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-boundary", lease_ttl_seconds=30
+        )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=expires_at):
+            with self.assertRaises(AttemptLeaseLost):
+                self.repository.renew_attempt_lease(
+                    job_id, "p0", attempt_id, token
+                )
+
+    def test_expired_lease_recovery_is_bounded_and_resumable(self):
+        job_ids = [self.create_job("p0"), self.create_job("p0")]
+        expiries = []
+        for index, job_id in enumerate(job_ids):
+            _, _, _, expiry = self.repository.claim_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-{}".format(index),
+                lease_ttl_seconds=30,
+            )
+            expiries.append(expiry)
+
+        recovery_time = max(expiries) + timedelta(seconds=1)
+        self.assertEqual(
+            self.repository.recover_expired_attempts(
+                now=recovery_time, limit=1
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.repository.recover_expired_attempts(
+                now=recovery_time, limit=1
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.repository.recover_expired_attempts(
+                now=recovery_time, limit=1
+            ),
+            0,
+        )
+        for job_id in job_ids:
+            stage = self.repository.get_stage_snapshot(job_id, "p0")
+            self.assertEqual(stage["status"], "RETRY_WAIT")
+            self.assertEqual(stage["attempts"][0]["error_code"], "WORKER_LEASE_EXPIRED")
+
+    def test_expired_lease_recovery_rejects_invalid_limits_and_naive_time(self):
+        for limit in (True, False, 0, -1, 1001, 1.0):
+            with self.subTest(limit=limit):
+                with self.assertRaises(ValueError):
+                    self.repository.recover_expired_attempts(limit=limit)
+
+        with self.assertRaises(ValueError):
+            self.repository.recover_expired_attempts(
+                now=utcnow().replace(tzinfo=None)
+            )
+
+    def test_claim_event_never_persists_the_raw_lease_token(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-event-audit"
+        )
+
+        with self.repository._session() as session:
+            event = session.query(WorkflowEventRecord).filter_by(
+                attempt_id=attempt_id,
+                event_type="STAGE_ATTEMPT_CLAIMED",
+            ).one()
+
+        serialized_payload = repr(event.payload_json)
+        self.assertNotIn(token, serialized_payload)
+        self.assertNotIn("lease_token", event.payload_json)
+        self.assertEqual(
+            event.payload_json["lease_owner"], "worker-event-audit"
+        )
+
 
 
 if __name__ == "__main__":
