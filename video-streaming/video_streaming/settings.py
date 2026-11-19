@@ -257,6 +257,16 @@ FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
     default=3600,
     cast=int)
 
+# One supervised FFmpeg invocation packages all HLS/DASH renditions.
+FFMPEG_PLAYLIST_TIMEOUT_SECONDS = env_config.get(
+    "FFMPEG_PLAYLIST_TIMEOUT_SECONDS",
+    default=7200,
+    cast=int)
+if not 1 <= FFMPEG_PLAYLIST_TIMEOUT_SECONDS <= 86400:
+    raise ValueError(
+        "FFMPEG_PLAYLIST_TIMEOUT_SECONDS must be between 1 and 86400"
+    )
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
