@@ -2532,6 +2532,71 @@ class WorkflowRepository:
             return report
 
 
+    def is_attempt_reclaimable(
+            self, attempt_id, bucket, attempt_prefix,
+            minimum_age_seconds=86400, now=None):
+        """Return whether a failed package Attempt is safe for orphan cleanup.
+
+        Only FAILED/CANCELLED attempts older than the grace period qualify.
+        An AVAILABLE Artifact anywhere under the exact bucket/prefix blocks
+        deletion, including an Artifact owned by another Attempt.
+        """
+        if (
+                isinstance(minimum_age_seconds, bool)
+                or not isinstance(minimum_age_seconds, (int, float))
+                or not math.isfinite(float(minimum_age_seconds))
+                or minimum_age_seconds <= 0):
+            raise ValueError("minimum_age_seconds must be finite and positive")
+        if not bucket or not isinstance(bucket, str):
+            raise ValueError("bucket is required")
+        if (
+                not isinstance(attempt_prefix, str)
+                or not attempt_prefix
+                or attempt_prefix.startswith("/")
+                or "\\" in attempt_prefix
+                or any(part in ("", ".", "..")
+                       for part in attempt_prefix.split("/"))):
+            raise ValueError("attempt_prefix must be a safe relative key prefix")
+
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        uri_prefix = "s3://{}/{}/".format(bucket, attempt_prefix.rstrip("/"))
+
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return False
+            if attempt.state not in (
+                    AttemptState.FAILED.value,
+                    AttemptState.CANCELLED.value):
+                return False
+            if any((
+                    attempt.lease_owner,
+                    attempt.lease_token_hash,
+                    attempt.lease_expires_at,
+                    attempt.heartbeat_at)):
+                return False
+            finished_at = attempt.finished_at
+            if finished_at is None:
+                return False
+            if finished_at.tzinfo is None:
+                finished_at = finished_at.replace(tzinfo=timezone.utc)
+            if now - finished_at < timedelta(
+                    seconds=float(minimum_age_seconds)):
+                return False
+
+            referenced = session.execute(
+                select(ArtifactRecord.id).where(
+                    ArtifactRecord.status == "AVAILABLE",
+                    func.substr(
+                        ArtifactRecord.uri, 1, len(uri_prefix)
+                    ) == uri_prefix,
+                ).limit(1)
+            ).scalar_one_or_none()
+            return referenced is None
+
+
     def get_stage_snapshot(self, job_id, stage_key):
         """Return one durable stage, its attempts and artifacts."""
         snapshot = self.get_job_snapshot(job_id)
