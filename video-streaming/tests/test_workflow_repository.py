@@ -1820,6 +1820,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "/missing/package",
         )
 
+        validation_snapshot = self.repository.get_stage_snapshot(
+            job_id, "p0"
+        )["artifacts"][0]["metadata"]
+        self.assertNotIn("local_output_directory", validation_snapshot)
+        self.assertNotIn("manifest_path", validation_snapshot)
+
         self.assertTrue(
             self.repository.requeue_processing_after_local_package_loss(
                 job_id,
