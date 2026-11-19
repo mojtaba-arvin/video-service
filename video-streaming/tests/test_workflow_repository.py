@@ -1719,6 +1719,56 @@ class WorkflowRepositoryTests(unittest.TestCase):
             minimum_age_seconds=86400,
         ))
 
+    def test_package_namespace_survives_failure_and_is_listed_for_janitor(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="package-publisher",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.fail_attempt(
+            job_id, "p0", publication_id,
+            retryable=False,
+            error_code="PACKAGE_UPLOAD_FAILED",
+            error_message="synthetic failure",
+            metrics={"output_bytes": 12},
+            lease_token=publication_token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, publication_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            self.assertEqual(
+                attempt.metrics_json["package_publication"]["prefix"],
+                "vod/.attempts/{}".format(publication_id),
+            )
+            self.assertEqual(attempt.metrics_json["output_bytes"], 12)
+
+        candidates = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400,
+            limit=10,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["attempt_id"], publication_id)
+        self.assertEqual(candidates[0]["bucket"], "vod-output")
+        self.assertEqual(
+            candidates[0]["inventory_key"],
+            "vod/.attempts/{}/.master.m3u8.artifacts.json".format(
+                publication_id
+            ),
+        )
+
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
 
