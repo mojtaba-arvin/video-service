@@ -1769,6 +1769,19 @@ class WorkflowRepositoryTests(unittest.TestCase):
             ),
         )
 
+        self.assertTrue(self.repository.mark_package_attempt_cleaned(
+            publication_id,
+            "vod-output",
+            "vod/.attempts/{}".format(publication_id),
+        ))
+        self.assertEqual(
+            self.repository.list_reclaimable_package_attempts(
+                minimum_age_seconds=86400,
+                limit=10,
+            ),
+            [],
+        )
+
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
 
