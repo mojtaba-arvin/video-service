@@ -17,6 +17,7 @@ from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from uuid import uuid4
+from datetime import datetime, timedelta, timezone
 
 
 _REQUIRED_MODULES = (
@@ -128,6 +129,55 @@ class InMemoryS3:
         self.upload_order.append(key)
         if callback:
             callback(len(value))
+
+
+class E2ETestAuthenticator:
+    """Explicit in-process test identity; never used by application startup."""
+
+    def __init__(self):
+        from video_streaming.security import RequestPrincipal
+
+        self.principal = RequestPrincipal(
+            issuer="https://e2e-issuer.example.test/",
+            subject="e2e-test-subject",
+            tenant_id="e2e-test-tenant",
+            scopes=frozenset([
+                "video.jobs:create",
+                "video.jobs:read",
+                "video.jobs:cancel",
+                "video.jobs:outputs:revoke",
+                "video.playback:write",
+                "video.qoe:read",
+            ]),
+            roles=frozenset(["test"]),
+            authentication_method="test-bearer",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+    def authenticate(self, token):
+        from video_streaming.security.oidc import AuthenticationError
+
+        if token != "e2e-test-token":
+            raise AuthenticationError("Invalid test token")
+        return self.principal
+
+
+class AuthenticatedStub:
+    """Attach the test-only bearer credential to every RPC in this suite."""
+
+    def __init__(self, stub):
+        self._stub = stub
+
+    def __getattr__(self, name):
+        method = getattr(self._stub, name)
+
+        def call(*args, **kwargs):
+            kwargs.setdefault(
+                "metadata", (("authorization", "Bearer e2e-test-token"),)
+            )
+            return method(*args, **kwargs)
+
+        return call
 
 
 @unittest.skipUnless(
@@ -275,8 +325,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.webhook_server.server_port
         )
 
+        from video_streaming.grpc.authentication import OIDCBearerInterceptor
+
         cls.grpc_server = cls.grpc.server(
-            futures.ThreadPoolExecutor(max_workers=4)
+            futures.ThreadPoolExecutor(max_workers=4),
+            interceptors=(OIDCBearerInterceptor(E2ETestAuthenticator()),),
         )
         cls.servicer = Streaming()
         cls.servicer._add_to_server(cls.grpc_server)
@@ -285,7 +338,9 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.channel = cls.grpc.insecure_channel(
             "127.0.0.1:{}".format(cls.grpc_port)
         )
-        cls.stub = cls.pb2_grpc.StreamingStub(cls.channel)
+        cls.stub = AuthenticatedStub(
+            cls.pb2_grpc.StreamingStub(cls.channel)
+        )
 
     @classmethod
     def tearDownClass(cls):
