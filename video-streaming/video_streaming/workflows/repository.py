@@ -344,8 +344,6 @@ class WorkflowRepository:
         plan_fingerprint = None
         if execution_plan is not None:
             plan = validate_execution_plan(execution_plan)
-            if plan["job_id"] != job_id:
-                raise ValueError("execution plan job_id must match job_id")
             if plan["workflow_name"] != workflow_name:
                 raise ValueError("execution plan workflow_name must match workflow_name")
             plan_fingerprint = execution_plan_sha256(plan)
@@ -415,6 +413,13 @@ class WorkflowRepository:
                     # A legacy workflow without a plan remains legacy on replay;
                     # never mutate already-accepted work during a deployment.
                     return existing.id, False
+
+                # Validate the candidate identity only after idempotency
+                # lookup. Replays may carry a newly generated candidate Job ID;
+                # the immutable plan is compared after rebinding it to the
+                # already accepted Job ID above, while new Jobs must match.
+                if plan is not None and plan["job_id"] != job_id:
+                    raise ValueError("execution plan job_id must match job_id")
 
                 job = JobRecord(
                     id=job_id,
