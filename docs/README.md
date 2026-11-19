@@ -6,6 +6,7 @@ This documentation describes both the **verified current implementation** and th
 
 - [Reliability and observability engineering standard](engineering/reliability-observability-standard.md) — mandatory failure, telemetry, SLO, test and operational-readiness requirements.
 - [ADR 0006: Reliability and observability](decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md) — accepted cross-cutting architecture constraints.
+- [ADR 0008: Job-scoped encrypted secret references](decisions/0008-job-scoped-encrypted-secret-references.md) — opaque references, envelope encryption, authorization, rotation, retention and legacy webhook migration.
 - [ADR 0007: Immutable execution-plan persistence](decisions/0007-immutable-execution-plan-persistence.md) — atomic plan snapshots, fingerprint verification and legacy compatibility.
 
 1. [Product vision and architecture principles](architecture/vision.md) — product direction, problems, boundaries and measurable outcomes.
