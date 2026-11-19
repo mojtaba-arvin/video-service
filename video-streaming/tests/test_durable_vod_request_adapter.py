@@ -2,11 +2,23 @@
 
 import unittest
 
-from video_streaming.grpc.protos import streaming_pb2
-from video_streaming.grpc.servicers.mixins.create_job import CreateJobMixin
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
+try:
+    from video_streaming.grpc.protos import streaming_pb2
+    from video_streaming.grpc.servicers.mixins.create_job import CreateJobMixin
+except ImportError:
+    # The general regression lanes intentionally do not install/generate gRPC
+    # modules. The dedicated gRPC integration lane generates them and runs
+    # this test module explicitly.
+    streaming_pb2 = None
+    CreateJobMixin = None
 
+
+@unittest.skipIf(
+    streaming_pb2 is None or CreateJobMixin is None,
+    "gRPC modules are generated in the dedicated integration job",
+)
 class DurableVODRequestAdapterTests(unittest.TestCase):
 
     def setUp(self):
