@@ -59,26 +59,27 @@ def _publish_leased_file(
         "artifact_count": 1,
     }
 
-    try:
-        heartbeat.assert_owned()
-        if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
-                request_id, output_id):
-            repository.cancel_attempt(
-                request_id,
-                output_id,
-                publication_id,
-                reason="CANCELLED_BEFORE_FILE_PUBLICATION",
-                metrics=metrics,
-                pricing=configured_pricing(settings),
-                lease_token=lease_token,
-            )
-            if task.is_forced_to_stop(request_id):
-                raise task.raise_revoke(request_id)
-            raise task.raise_revoke_output(request_id, output_id)
-
-        repository.start_publishing(
-            request_id, output_id, publication_id, lease_token=lease_token
+    heartbeat.assert_owned()
+    if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
+            request_id, output_id):
+        repository.cancel_attempt(
+            request_id,
+            output_id,
+            publication_id,
+            reason="CANCELLED_BEFORE_FILE_PUBLICATION",
+            metrics=metrics,
+            pricing=configured_pricing(settings),
+            lease_token=lease_token,
         )
+        if task.is_forced_to_stop(request_id):
+            raise task.raise_revoke(request_id)
+        raise task.raise_revoke_output(request_id, output_id)
+
+    repository.start_publishing(
+        request_id, output_id, publication_id, lease_token=lease_token
+    )
+    cancelled = False
+    try:
         task.save_output_status(
             task.output_status.UPLOADING, output_id, request_id
         )
@@ -134,35 +135,34 @@ def _publish_leased_file(
                 pricing=configured_pricing(settings),
                 lease_token=lease_token,
             )
-            if task.is_forced_to_stop(request_id):
-                raise task.raise_revoke(request_id)
-            raise task.raise_revoke_output(request_id, output_id)
-
-        artifact_type = kwargs.get("artifact_type") or "media_artifact"
-        media_type = kwargs.get("media_type") or (
-            mimetypes.guess_type(file_path)[0]
-            or "application/octet-stream"
-        )
-        repository.finish_stage(
-            job_id=request_id,
-            stage_key=output_id,
-            attempt_id=publication_id,
-            artifacts=[{
-                "artifact_type": artifact_type,
-                "logical_name": os.path.basename(s3_output_key),
-                "uri": "s3://{}/{}".format(s3_output_bucket, object_key),
-                "media_type": media_type,
-                "size_bytes": file_size,
-                "metadata": {
-                    "readback_verified": True,
-                    "attempt_scoped": True,
-                    "processing_attempt_id": processing_attempt_id,
-                },
-            }],
-            metrics=metrics,
-            pricing=configured_pricing(settings),
-            lease_token=lease_token,
-        )
+            cancelled = True
+        else:
+            artifact_type = kwargs.get("artifact_type") or "media_artifact"
+            media_type = kwargs.get("media_type") or (
+                mimetypes.guess_type(file_path)[0]
+                or "application/octet-stream"
+            )
+            heartbeat.assert_owned()
+            repository.finish_stage(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=publication_id,
+                artifacts=[{
+                    "artifact_type": artifact_type,
+                    "logical_name": os.path.basename(s3_output_key),
+                    "uri": "s3://{}/{}".format(s3_output_bucket, object_key),
+                    "media_type": media_type,
+                    "size_bytes": file_size,
+                    "metadata": {
+                        "readback_verified": True,
+                        "attempt_scoped": True,
+                        "processing_attempt_id": processing_attempt_id,
+                    },
+                }],
+                metrics=metrics,
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
     except AttemptLeaseLost:
         # A stale publisher cannot commit an Artifact pointer. Its object key
         # is unique to this Attempt and is therefore not authoritative.
@@ -179,39 +179,42 @@ def _publish_leased_file(
                 pricing=configured_pricing(settings),
                 lease_token=lease_token,
             )
-            if task.is_forced_to_stop(request_id):
-                raise task.raise_revoke(request_id)
-            raise task.raise_revoke_output(request_id, output_id)
-
-        retryable = (
-            task.request.retries < settings.TASK_RETRY_BACKOFF_MAX
-        )
-        repository.fail_attempt(
-            job_id=request_id,
-            stage_key=output_id,
-            attempt_id=publication_id,
-            retryable=retryable,
-            error_code=(
-                "FILE_PUBLICATION_RETRYABLE"
-                if retryable else "FILE_PUBLICATION_FAILED"
-            ),
-            error_message=str(exc),
-            metrics=metrics,
-            pricing=configured_pricing(settings),
-            lease_token=lease_token,
-        )
-        if retryable:
-            raise task.retry(
-                exc=exc,
-                max_retries=settings.TASK_RETRY_BACKOFF_MAX,
+            cancelled = True
+        else:
+            retryable = (
+                task.request.retries < settings.TASK_RETRY_BACKOFF_MAX
             )
-        task.save_job_stop_reason(
-            task.stop_reason.INTERNAL_ERROR, request_id
-        )
-        raise task.raise_ignore(
-            message=task.error_messages.CAN_NOT_UPLOAD_FILE,
-            request_kwargs=task.request.kwargs,
-        )
+            repository.fail_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=publication_id,
+                retryable=retryable,
+                error_code=(
+                    "FILE_PUBLICATION_RETRYABLE"
+                    if retryable else "FILE_PUBLICATION_FAILED"
+                ),
+                error_message=str(exc),
+                metrics=metrics,
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
+            if retryable:
+                raise task.retry(
+                    exc=exc,
+                    max_retries=settings.TASK_RETRY_BACKOFF_MAX,
+                )
+            task.save_job_stop_reason(
+                task.stop_reason.INTERNAL_ERROR, request_id
+            )
+            raise task.raise_ignore(
+                message=task.error_messages.CAN_NOT_UPLOAD_FILE,
+                request_kwargs=task.request.kwargs,
+            )
+
+    if cancelled:
+        if task.is_forced_to_stop(request_id):
+            raise task.raise_revoke(request_id)
+        raise task.raise_revoke_output(request_id, output_id)
 
     task.cache.set(
         CacheKeysTemplates.OUTPUT_SIZE.format(
