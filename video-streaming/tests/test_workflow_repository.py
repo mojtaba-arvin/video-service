@@ -1516,5 +1516,50 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_expired_publication_claim_recovers_before_publishing_transition(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        first_id, _, first_token, first_expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-crashed-before-start"
+            )
+        )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=first_expiry):
+            second_id, number, second_token, _ = (
+                self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner="publisher-after-expiry"
+                )
+            )
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(number, 3)
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.start_publishing(
+                job_id, "p0", first_id, lease_token=first_token
+            )
+        self.repository.start_publishing(
+            job_id, "p0", second_id, lease_token=second_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(
+            [attempt["status"] for attempt in stage["attempts"]],
+            ["SUCCEEDED", "RETRYABLE", "RUNNING"],
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
