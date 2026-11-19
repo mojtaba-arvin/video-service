@@ -23,6 +23,7 @@ from .execution_plan import (
     validate_execution_plan,
 )
 from .domain import (
+    AttemptLeaseLost,
     AttemptState,
     IdempotencyConflict,
     InvalidStateTransition,
@@ -186,7 +187,15 @@ class AttemptRecord(Base):
     __tablename__ = "workflow_attempts"
     __table_args__ = (
         UniqueConstraint("stage_id", "attempt_number", name="uq_stage_attempt_number"),
+        CheckConstraint(
+            "(lease_owner IS NULL AND lease_token_hash IS NULL AND "
+            "lease_expires_at IS NULL AND heartbeat_at IS NULL) OR "
+            "(lease_owner IS NOT NULL AND lease_token_hash IS NOT NULL AND "
+            "lease_expires_at IS NOT NULL AND heartbeat_at IS NOT NULL)",
+            name="ck_workflow_attempt_lease_complete",
+        ),
         Index("ix_workflow_attempts_state_started", "state", "started_at"),
+        Index("ix_workflow_attempts_lease_expiry", "state", "lease_expires_at"),
     )
 
     id = Column(String(36), primary_key=True)
@@ -198,6 +207,10 @@ class AttemptRecord(Base):
     state = Column(String(24), nullable=False, default=AttemptState.RUNNING.value)
     execution_backend = Column(String(64), nullable=True)
     execution_ref = Column(String(255), nullable=True)
+    lease_owner = Column(String(255), nullable=True)
+    lease_token_hash = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     duration_ms = Column(BigInteger, nullable=True)
@@ -876,6 +889,212 @@ class WorkflowRepository:
                 job_id, stage_key
             ))
         return stage
+
+    @staticmethod
+    def _validated_lease_ttl(lease_ttl_seconds):
+        try:
+            ttl = float(lease_ttl_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("lease_ttl_seconds must be a positive finite number")
+        if not math.isfinite(ttl) or ttl <= 0 or ttl > 86400:
+            raise ValueError("lease_ttl_seconds must be between 0 and 86400")
+        return ttl
+
+    @staticmethod
+    def _assert_attempt_lease(attempt, lease_token, now=None):
+        """Fence worker writes by the current, unexpired attempt capability."""
+        if attempt.lease_token_hash is None:
+            if lease_token is not None:
+                raise AttemptLeaseLost("Attempt does not have a worker lease")
+            return
+        now = now or utcnow()
+        if (
+                not isinstance(lease_token, str)
+                or not hmac.compare_digest(
+                    attempt.lease_token_hash,
+                    hashlib.sha256(lease_token.encode("utf-8")).hexdigest(),
+                )
+                or attempt.state != AttemptState.RUNNING.value
+                or attempt.lease_expires_at is None
+                or attempt.lease_expires_at <= now):
+            raise AttemptLeaseLost("Attempt lease is no longer valid")
+
+    def _recover_expired_attempt_in_session(
+            self, session, stage, attempt, now, pricing=None):
+        if (
+                attempt.state != AttemptState.RUNNING.value
+                or attempt.lease_token_hash is None
+                or attempt.lease_expires_at is None
+                or attempt.lease_expires_at > now
+                or stage.status not in (
+                    StageState.PROCESSING.value,
+                    StageState.VALIDATED.value,
+                    StageState.PUBLISHING.value)):
+            return False
+
+        previous_status = stage.status
+        self._transition(stage, StageState.RETRY_WAIT)
+        attempt.state = AttemptState.RETRYABLE.value
+        attempt.finished_at = now
+        started = attempt.started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        attempt.duration_ms = max(
+            0, int((now - started).total_seconds() * 1000)
+        )
+        metrics = {
+            "duration_ms": attempt.duration_ms,
+            "usage_capture": "incomplete_worker_lost",
+        }
+        self._apply_attempt_accounting(attempt, metrics, pricing)
+        attempt.error_code = "WORKER_LEASE_EXPIRED"
+        attempt.error_message = "Recovered expired worker lease"
+        workflow = session.get(WorkflowRecord, stage.workflow_id)
+        _record_event(
+            session,
+            workflow.job_id,
+            workflow.id,
+            "ATTEMPT_LEASE_EXPIRED",
+            from_state=previous_status,
+            to_state=StageState.RETRY_WAIT.value,
+            stage_id=stage.id,
+            attempt_id=attempt.id,
+            payload={"reason": "WORKER_LEASE_EXPIRED"},
+        )
+        return True
+
+    def claim_attempt(
+            self,
+            job_id,
+            stage_key,
+            lease_owner,
+            lease_ttl_seconds=60,
+            execution_backend="celery",
+            execution_ref=None,
+            pricing=None):
+        """Atomically claim a stage and return a one-time worker lease token.
+
+        The raw token is returned only to the claiming process. Only its SHA-256
+        digest is persisted; it must never be copied into Redis or broker args.
+        """
+        if (
+                not isinstance(lease_owner, str)
+                or not lease_owner.strip()
+                or len(lease_owner) > 255):
+            raise ValueError("lease_owner must contain 1 to 255 characters")
+        ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        now = utcnow()
+        lease_token = secrets.token_urlsafe(32)
+        lease_expires_at = now + timedelta(seconds=ttl)
+        lease_token_hash = hashlib.sha256(
+            lease_token.encode("utf-8")
+        ).hexdigest()
+
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if stage.status in (
+                    StageState.PROCESSING.value,
+                    StageState.VALIDATED.value,
+                    StageState.PUBLISHING.value):
+                running = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.stage_id == stage.id,
+                        AttemptRecord.state == AttemptState.RUNNING.value,
+                    ).order_by(AttemptRecord.attempt_number.desc())
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if running is None:
+                    raise StageAlreadyRunning(
+                        "Stage {} has an active state without a claimable attempt"
+                        .format(stage_key)
+                    )
+                if not self._recover_expired_attempt_in_session(
+                        session, stage, running, now, pricing):
+                    raise StageAlreadyRunning(
+                        "Stage {} already has a live attempt lease".format(stage_key)
+                    )
+
+            current = StageState(stage.status)
+            if StageState.PROCESSING not in ALLOWED_STAGE_TRANSITIONS[current]:
+                raise InvalidStateTransition(
+                    "Cannot claim stage {} from {}".format(
+                        stage_key, current.value
+                    )
+                )
+
+            previous_status = stage.status
+            next_number = session.execute(
+                select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
+                .where(AttemptRecord.stage_id == stage.id)
+            ).scalar_one() + 1
+            attempt_id = new_id()
+            session.add(AttemptRecord(
+                id=attempt_id,
+                stage_id=stage.id,
+                attempt_number=next_number,
+                state=AttemptState.RUNNING.value,
+                execution_backend=execution_backend,
+                execution_ref=execution_ref,
+                lease_owner=lease_owner.strip(),
+                lease_token_hash=lease_token_hash,
+                lease_expires_at=lease_expires_at,
+                heartbeat_at=now,
+                started_at=now,
+            ))
+            stage.status = StageState.PROCESSING.value
+            stage.updated_at = now
+            stage.version += 1
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.RUNNING.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.RUNNING.value
+            job.updated_at = now
+            job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_ATTEMPT_CLAIMED",
+                from_state=previous_status,
+                to_state=StageState.PROCESSING.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "stage_key": stage_key,
+                    "attempt_number": next_number,
+                    "execution_backend": execution_backend,
+                    "execution_ref": execution_ref,
+                    "lease_owner": lease_owner.strip(),
+                    "lease_expires_at": lease_expires_at.isoformat(),
+                },
+            )
+            return attempt_id, next_number, lease_token, lease_expires_at
+
+    def renew_attempt_lease(
+            self,
+            job_id,
+            stage_key,
+            attempt_id,
+            lease_token,
+            lease_ttl_seconds=60):
+        """Extend a live lease; an expired or stale worker cannot resurrect it."""
+        ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        now = utcnow()
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            attempt = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.id == attempt_id,
+                    AttemptRecord.stage_id == stage.id,
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None:
+                raise AttemptLeaseLost("Attempt lease is no longer valid")
+            self._assert_attempt_lease(attempt, lease_token, now=now)
+            attempt.heartbeat_at = now
+            attempt.lease_expires_at = now + timedelta(seconds=ttl)
+            return attempt.lease_expires_at
 
     def start_attempt(
             self,
