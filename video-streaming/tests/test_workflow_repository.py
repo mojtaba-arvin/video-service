@@ -68,7 +68,11 @@ class WorkflowRepositoryTests(unittest.TestCase):
             issuer="https://issuer.example.test/",
             subject=subject,
             tenant_id=tenant,
-            scopes=frozenset(["video.jobs:read", "video.jobs:create"]),
+            scopes=frozenset([
+                "video.jobs:read",
+                "video.jobs:create",
+                "video.playback:write",
+            ]),
             roles=frozenset(),
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
