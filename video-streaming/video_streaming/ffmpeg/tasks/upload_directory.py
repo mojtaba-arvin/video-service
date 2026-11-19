@@ -135,6 +135,7 @@ def upload_directory(self,
         self.output_status.UPLOADING, output_id, request_id
     )
     resource_meter = ProcessResourceMeter().start()
+    cancelled = False
 
     try:
         heartbeat.assert_owned()
@@ -149,24 +150,34 @@ def upload_directory(self,
             on_progress=heartbeat.on_progress,
         )
         heartbeat.assert_owned()
-
-        repository.finish_stage(
-            job_id=request_id,
-            stage_key=output_id,
-            attempt_id=publication_id,
-            artifacts=publication["artifacts"],
-            metrics={
-                **metrics,
-                **resource_meter.stop(),
-                "output_bytes": int(publication["directory_size"]),
-                "artifact_count": int(publication["files"]),
-                "validation_errors": len(
-                    publication["validation_report"].get("errors", [])
-                ),
-            },
-            pricing=configured_pricing(settings),
-            lease_token=lease_token,
-        )
+        metrics.update(resource_meter.stop())
+        metrics.update({
+            "output_bytes": int(publication["directory_size"]),
+            "artifact_count": int(publication["files"]),
+            "validation_errors": len(
+                publication["validation_report"].get("errors", [])
+            ),
+        })
+        if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
+                request_id, output_id):
+            repository.cancel_attempt(
+                request_id, output_id, publication_id,
+                reason="CANCELLED_BEFORE_PACKAGE_ARTIFACT_COMMIT",
+                metrics=metrics,
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
+            cancelled = True
+        else:
+            repository.finish_stage(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=publication_id,
+                artifacts=publication["artifacts"],
+                metrics=metrics,
+                pricing=configured_pricing(settings),
+                lease_token=lease_token,
+            )
     except AttemptLeaseLost:
         # Attempt-scoped package keys isolate stale publishers. Only the
         # current lease holder may publish the Artifact pointer.
@@ -216,6 +227,15 @@ def upload_directory(self,
             message=self.error_messages.CAN_NOT_UPLOAD_FILE,
             request_kwargs=self.request.kwargs,
         )
+
+    if cancelled:
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        if self.is_forced_to_stop(request_id):
+            raise self.raise_revoke(request_id)
+        raise self.raise_revoke_output(request_id, output_id)
 
     # The package's local directory is attempt-scoped. Once the durable
     # Artifact pointer is committed, it is safe to remove this scratch tree.
