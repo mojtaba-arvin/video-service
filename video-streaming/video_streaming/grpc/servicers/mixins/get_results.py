@@ -55,6 +55,37 @@ class GetResultsMixin(object):
             "CANCELLED": "OUTPUT_REVOKED",
         }.get(stage.get("status"))
 
+    @staticmethod
+    def _durable_stage_metrics(stage):
+        """Aggregate active work across processing and publication Attempts."""
+        attempts = (stage or {}).get("attempts", [])
+        durations = [
+            int(item["duration_ms"])
+            for item in attempts
+            if item.get("duration_ms") is not None
+        ]
+        cpu_samples = [
+            float(item["cpu_seconds"])
+            for item in attempts
+            if item.get("cpu_seconds") is not None
+        ]
+        memory_samples = [
+            int(item["peak_memory_bytes"])
+            for item in attempts
+            if item.get("peak_memory_bytes") is not None
+        ]
+        output_sizes = [
+            int(item["output_bytes"])
+            for item in attempts
+            if item.get("output_bytes") is not None
+        ]
+        return {
+            "duration_ms": sum(durations) if durations else None,
+            "cpu_seconds": sum(cpu_samples) if cpu_samples else None,
+            "peak_memory_bytes": max(memory_samples) if memory_samples else None,
+            "output_bytes": output_sizes[-1] if output_sizes else None,
+        }
+
     def _artifact_uploaded_to(self, stage, artifact_types):
         """Resolve the authoritative published S3 Artifact for a result."""
         if stage is None:
@@ -100,14 +131,12 @@ class GetResultsMixin(object):
                     decode=False,
                 )
             if output_status:
-                durable_attempt = (
-                    durable_stage["attempts"][-1]
-                    if durable_stage and durable_stage.get("attempts")
-                    else {}
+                durable_metrics = self._durable_stage_metrics(
+                    durable_stage
                 )
                 directory_size: int = (
-                    durable_attempt.get("output_bytes")
-                    if durable_attempt.get("output_bytes") is not None
+                    durable_metrics.get("output_bytes")
+                    if durable_metrics.get("output_bytes") is not None
                     else self.cache.get(
                         CacheKeysTemplates.OUTPUT_SIZE.format(
                             request_id=request_id,
@@ -134,15 +163,24 @@ class GetResultsMixin(object):
                     output_details['output_progress'] = self.pb2.\
                         Progress(**progress)
 
-                if durable_attempt:
-                    duration_ms = durable_attempt.get("duration_ms")
-                    if duration_ms is not None:
-                        output_details["spent_time"] = duration_ms / 1000.0
-                    if durable_attempt.get("cpu_seconds") is not None:
-                        output_details["cpu_usage"] = durable_attempt["cpu_seconds"]
-                    if durable_attempt.get("peak_memory_bytes") is not None:
-                        output_details["memory_usage"] = durable_attempt["peak_memory_bytes"]
-                else:
+                if durable_metrics.get("duration_ms") is not None:
+                    output_details["spent_time"] = (
+                        durable_metrics["duration_ms"] / 1000.0
+                    )
+                if durable_metrics.get("cpu_seconds") is not None:
+                    output_details["cpu_usage"] = durable_metrics["cpu_seconds"]
+                if durable_metrics.get("peak_memory_bytes") is not None:
+                    output_details["memory_usage"] = (
+                        durable_metrics["peak_memory_bytes"]
+                    )
+
+                has_durable_usage = any(
+                    durable_metrics.get(key) is not None
+                    for key in (
+                        "duration_ms", "cpu_seconds", "peak_memory_bytes"
+                    )
+                )
+                if not has_durable_usage:
                     start_progressing_times: float = self.cache.get(
                         CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
                             request_id=request_id,
@@ -151,7 +189,7 @@ class GetResultsMixin(object):
                         CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
                             request_id=request_id,
                             output_id=output_id))
-                if not durable_attempt and start_progressing_times and end_progressing_times:
+                if not has_durable_usage and start_progressing_times and end_progressing_times:
                     output_details['spent_time'] = end_progressing_times - start_progressing_times
                     start_cpu_times: list = self.cache.get(
                         CacheKeysTemplates.OUTPUT_START_CPU_TIMES.format(
@@ -192,14 +230,12 @@ class GetResultsMixin(object):
                     decode=False,
                 )
             if output_status:
-                durable_attempt = (
-                    durable_stage["attempts"][-1]
-                    if durable_stage and durable_stage.get("attempts")
-                    else {}
+                durable_metrics = self._durable_stage_metrics(
+                    durable_stage
                 )
                 file_size: int = (
-                    durable_attempt.get("output_bytes")
-                    if durable_attempt.get("output_bytes") is not None
+                    durable_metrics.get("output_bytes")
+                    if durable_metrics.get("output_bytes") is not None
                     else self.cache.get(
                         CacheKeysTemplates.OUTPUT_SIZE.format(
                             request_id=request_id,
@@ -238,14 +274,12 @@ class GetResultsMixin(object):
                 decode=False,
             )
         if output_status:
-            durable_attempt = (
-                durable_stage["attempts"][-1]
-                if durable_stage and durable_stage.get("attempts")
-                else {}
+            durable_metrics = self._durable_stage_metrics(
+                durable_stage
             )
             file_size: int = (
-                durable_attempt.get("output_bytes")
-                if durable_attempt.get("output_bytes") is not None
+                durable_metrics.get("output_bytes")
+                if durable_metrics.get("output_bytes") is not None
                 else self.cache.get(
                     CacheKeysTemplates.OUTPUT_SIZE.format(
                         request_id=request_id,
