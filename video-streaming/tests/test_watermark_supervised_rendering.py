@@ -7,6 +7,8 @@ from pathlib import Path
 
 import ffmpeg
 
+from video_streaming.execution.media_probe import probe_media
+
 from video_streaming.execution.process_control import run_streaming_process
 
 
@@ -75,7 +77,11 @@ class SupervisedWatermarkRenderingTests(unittest.TestCase):
                 "FFmpeg progress output was not delivered to the callback",
             )
 
-            probe = ffmpeg.probe(str(output_path), cmd=ffprobe_path)
+            probe = probe_media(
+                str(output_path),
+                ffprobe_bin_path=ffprobe_path,
+                timeout_seconds=10,
+            )
             video = next(
                 item for item in probe.get("streams", [])
                 if item.get("codec_type") == "video"
