@@ -109,7 +109,6 @@ def upload_directory(self,
     attempt_output_key = attempt_scoped_object_key(
         s3_output_key, publication_id
     )
-    resource_meter = ProcessResourceMeter().start()
     metrics = {
         "input_bytes": None,
         "output_bytes": None,
@@ -121,10 +120,7 @@ def upload_directory(self,
         repository.cancel_attempt(
             request_id, output_id, publication_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
-            metrics={
-                **metrics,
-                **resource_meter.stop(),
-            },
+            metrics=metrics,
             pricing=configured_pricing(settings),
             lease_token=lease_token,
         )
@@ -138,6 +134,7 @@ def upload_directory(self,
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
+    resource_meter = ProcessResourceMeter().start()
 
     try:
         heartbeat.assert_owned()
