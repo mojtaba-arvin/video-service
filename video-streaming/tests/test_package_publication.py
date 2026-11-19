@@ -111,6 +111,28 @@ class PackagePublicationTests(unittest.TestCase):
             storage=self.storage,
         )
 
+    def test_progress_callback_runs_for_each_package_upload_chunk(self):
+        chunks = []
+
+        publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-1/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+            on_progress=chunks.append,
+        )
+
+        self.assertEqual(chunks, [
+            len(b"segment-a"),
+            len(b"segment-b"),
+            len(self.variant.read_bytes()),
+            len(self.master.read_bytes()),
+        ])
+        self.assertTrue(all(chunk > 0 for chunk in chunks))
+
     def test_every_dependency_is_uploaded_and_readable_before_master(self):
         result = self.publish()
         self.assertEqual(result["files"], 4)
