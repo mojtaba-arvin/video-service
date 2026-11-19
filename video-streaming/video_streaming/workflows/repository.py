@@ -1098,6 +1098,143 @@ class WorkflowRepository:
             attempt.lease_expires_at = now + timedelta(seconds=ttl)
             return attempt.lease_expires_at
 
+    def claim_publication_attempt(
+            self,
+            job_id,
+            stage_key,
+            lease_owner,
+            lease_ttl_seconds=60,
+            execution_backend="celery",
+            execution_ref=None,
+            pricing=None):
+        """Claim a fresh publication attempt for an already validated artifact.
+
+        Processing and publication are separate attempts. The validation report
+        is the durable hand-off; no processing lease token is reused or sent
+        through Celery.
+        """
+        if (
+                not isinstance(lease_owner, str)
+                or not lease_owner.strip()
+                or len(lease_owner) > 255):
+            raise ValueError("lease_owner must contain 1 to 255 characters")
+        ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        now = utcnow()
+        lease_token = secrets.token_urlsafe(32)
+        lease_expires_at = now + timedelta(seconds=ttl)
+        lease_token_hash = hashlib.sha256(
+            lease_token.encode("utf-8")
+        ).hexdigest()
+
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if stage.status == StageState.PUBLISHING.value:
+                running = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.stage_id == stage.id,
+                        AttemptRecord.state == AttemptState.RUNNING.value,
+                    ).order_by(AttemptRecord.attempt_number.desc())
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if running is None or not self._recover_expired_attempt_in_session(
+                        session, stage, running, now, pricing):
+                    raise StageAlreadyRunning(
+                        "Stage {} already has a live publication attempt".format(
+                            stage_key
+                        )
+                    )
+
+            if stage.status not in (
+                    StageState.VALIDATED.value,
+                    StageState.RETRY_WAIT.value):
+                raise InvalidStateTransition(
+                    "Cannot claim publication for stage {} from {}".format(
+                        stage_key, stage.status
+                    )
+                )
+
+            validation_artifact = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                ).order_by(ArtifactRecord.created_at.desc())
+            ).scalars().first()
+            report = (
+                validation_artifact.metadata_json
+                if validation_artifact is not None else None
+            )
+            if (
+                    not isinstance(report, dict)
+                    or report.get("valid") is not True
+                    or not isinstance(report.get("errors"), list)
+                    or report.get("errors")):
+                raise InvalidStateTransition(
+                    "Publication requires a persisted successful validation report"
+                )
+
+            active = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).with_for_update()
+            ).scalars().first()
+            if active is not None:
+                raise StageAlreadyRunning(
+                    "Stage {} already has an active attempt".format(stage_key)
+                )
+
+            previous_status = stage.status
+            if stage.status == StageState.RETRY_WAIT.value:
+                self._transition(stage, StageState.VALIDATED)
+
+            next_number = session.execute(
+                select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
+                .where(AttemptRecord.stage_id == stage.id)
+            ).scalar_one() + 1
+            attempt_id = new_id()
+            session.add(AttemptRecord(
+                id=attempt_id,
+                stage_id=stage.id,
+                attempt_number=next_number,
+                state=AttemptState.RUNNING.value,
+                execution_backend=execution_backend,
+                execution_ref=execution_ref,
+                lease_owner=lease_owner.strip(),
+                lease_token_hash=lease_token_hash,
+                lease_expires_at=lease_expires_at,
+                heartbeat_at=now,
+                started_at=now,
+            ))
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.RUNNING.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.RUNNING.value
+            job.updated_at = now
+            job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_PUBLICATION_ATTEMPT_CLAIMED",
+                from_state=previous_status,
+                to_state=stage.status,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "stage_key": stage_key,
+                    "attempt_number": next_number,
+                    "execution_backend": execution_backend,
+                    "execution_ref": execution_ref,
+                    "lease_owner": lease_owner.strip(),
+                    "lease_expires_at": lease_expires_at.isoformat(),
+                    "validation_artifact_id": validation_artifact.id,
+                },
+            )
+            return attempt_id, next_number, lease_token, lease_expires_at
+
     def start_attempt(
             self,
             job_id,
@@ -1194,8 +1331,18 @@ class WorkflowRepository:
             stage_key,
             attempt_id,
             validation_report,
-            lease_token=None):
-        """Persist the structured report as a first-class artifact."""
+            lease_token=None,
+            complete_attempt=False,
+            metrics=None,
+            pricing=None):
+        """Persist a validation report; optionally close the processing attempt."""
+        if not isinstance(validation_report, dict):
+            raise ValueError("validation_report must be a dictionary")
+        if validation_report.get("valid") is not True:
+            raise ValueError("Only a valid report can validate a workflow stage")
+        errors = validation_report.get("errors")
+        if not isinstance(errors, list) or errors:
+            raise ValueError("A valid report must contain an empty errors list")
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
@@ -1211,14 +1358,23 @@ class WorkflowRepository:
                     )
                 ).scalar_one_or_none()
                 if existing is not None:
+                    if complete_attempt and attempt.state == AttemptState.RUNNING.value:
+                        self._complete_processing_attempt_in_session(
+                            attempt, metrics, pricing
+                        )
                     return False
+            if attempt.state != AttemptState.RUNNING.value:
+                raise InvalidStateTransition(
+                    "Only a running attempt can validate a workflow stage"
+                )
             previous_status = stage.status
             self._transition(stage, StageState.VALIDATED)
             stage.output_contract_json = {
                 "validation": validation_report,
             }
+            validation_artifact_id = new_id()
             session.add(ArtifactRecord(
-                id=new_id(),
+                id=validation_artifact_id,
                 job_id=job_id,
                 stage_id=stage.id,
                 attempt_id=attempt_id,
@@ -1245,7 +1401,65 @@ class WorkflowRepository:
                     "error_count": len(validation_report.get("errors", [])),
                 },
             )
+            if complete_attempt:
+                self._complete_processing_attempt_in_session(
+                    attempt, metrics, pricing
+                )
+                _record_event(
+                    session,
+                    job_id,
+                    stage.workflow_id,
+                    "STAGE_PROCESSING_ATTEMPT_COMPLETED",
+                    from_state=AttemptState.RUNNING.value,
+                    to_state=AttemptState.SUCCEEDED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    payload={"validation_artifact_id": validation_artifact_id},
+                )
             return True
+
+    @staticmethod
+    def _complete_processing_attempt_in_session(attempt, metrics, pricing):
+        """Close the processing attempt while leaving the Stage VALIDATED."""
+        if attempt.state != AttemptState.RUNNING.value:
+            raise InvalidStateTransition("Processing attempt is not running")
+        now = utcnow()
+        attempt.state = AttemptState.SUCCEEDED.value
+        attempt.finished_at = now
+        started = attempt.started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        attempt.duration_ms = max(
+            0, int((now - started).total_seconds() * 1000)
+        )
+        usage = dict(metrics or {})
+        usage["duration_ms"] = attempt.duration_ms
+        attempt.cpu_seconds = usage.get("cpu_seconds")
+        attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
+        attempt.input_bytes = usage.get("input_bytes")
+        attempt.output_bytes = usage.get("output_bytes")
+        WorkflowRepository._apply_attempt_accounting(attempt, usage, pricing)
+        # The process-local token is no longer useful after the processing
+        # attempt is terminal. Clear the complete lease tuple atomically.
+        attempt.lease_owner = None
+        attempt.lease_token_hash = None
+        attempt.lease_expires_at = None
+        attempt.heartbeat_at = None
+
+    def complete_processing_attempt(
+            self, job_id, stage_key, attempt_id, validation_report,
+            lease_token, metrics=None, pricing=None):
+        """Validate output and close its processing attempt in one transaction."""
+        return self.mark_validated(
+            job_id,
+            stage_key,
+            attempt_id,
+            validation_report,
+            lease_token=lease_token,
+            complete_attempt=True,
+            metrics=metrics,
+            pricing=pricing,
+        )
 
     def start_publishing(
             self, job_id, stage_key, attempt_id, lease_token=None):
