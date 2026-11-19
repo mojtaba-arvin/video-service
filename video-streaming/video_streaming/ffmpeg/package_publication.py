@@ -208,6 +208,20 @@ def cleanup_abandoned_attempt_package(
     if not isinstance(relatives, list):
         raise PackagePublicationError("Invalid package inventory artifacts")
 
+    manifest_relative = payload.get("manifest")
+    if not isinstance(manifest_relative, str) or not manifest_relative:
+        raise PackagePublicationError(
+            "Package inventory must identify its root manifest"
+        )
+    manifest_relative = _safe_inventory_path(manifest_relative)
+    expected_inventory_key = "{}/.{}.artifacts.json".format(
+        prefix, Path(manifest_relative).name
+    )
+    if inventory_key != expected_inventory_key:
+        raise PackagePublicationError(
+            "Inventory key does not match its root manifest"
+        )
+
     safe_relatives = sorted(set(
         _safe_inventory_path(value) for value in relatives
     ))
@@ -222,21 +236,15 @@ def cleanup_abandoned_attempt_package(
     if not is_reclaimable(attempt_id, bucket, prefix):
         return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
 
-    manifest_relative = payload.get("manifest")
-    if manifest_relative is not None:
-        manifest_relative = _safe_inventory_path(manifest_relative)
-        if manifest_relative not in safe_relatives:
-            raise PackagePublicationError(
-                "Root manifest is missing from its ownership inventory"
-            )
-        manifest_key = _object_key(prefix, manifest_relative)
-        # Withdraw the player entry point first; only then remove children.
-        storage.delete_object(key=manifest_key, bucket_name=bucket)
-        for key in object_keys:
-            if key != manifest_key:
-                storage.delete_object(key=key, bucket_name=bucket)
-    else:
-        for key in object_keys:
+    if manifest_relative not in safe_relatives:
+        raise PackagePublicationError(
+            "Root manifest is missing from its ownership inventory"
+        )
+    manifest_key = _object_key(prefix, manifest_relative)
+    # Withdraw the player entry point first; only then remove children.
+    storage.delete_object(key=manifest_key, bucket_name=bucket)
+    for key in object_keys:
+        if key != manifest_key:
             storage.delete_object(key=key, bucket_name=bucket)
 
     storage.delete_object(key=inventory_key, bucket_name=bucket)
