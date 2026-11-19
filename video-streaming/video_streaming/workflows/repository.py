@@ -966,6 +966,8 @@ class WorkflowRepository:
         if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
         digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
         with self._session.begin() as session:
             row = session.execute(
