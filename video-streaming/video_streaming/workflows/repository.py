@@ -2651,9 +2651,6 @@ class WorkflowRepository:
                     ]),
                     AttemptRecord.finished_at <= cutoff,
                     AttemptRecord.metrics_json["package_publication"].is_not(None),
-                    AttemptRecord.metrics_json["package_publication"][
-                        "cleanup_completed_at"
-                    ].is_(None),
                 ).order_by(AttemptRecord.finished_at.asc())
                 .limit(limit)
             ).scalars().all()
@@ -2662,7 +2659,9 @@ class WorkflowRepository:
                 namespace = (
                     (attempt.metrics_json or {}).get("package_publication")
                 )
-                if not isinstance(namespace, dict):
+                if (
+                        not isinstance(namespace, dict)
+                        or namespace.get("cleanup_completed_at")):
                     continue
                 required = ("bucket", "prefix", "inventory_key", "logical_key")
                 if not all(
