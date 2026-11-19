@@ -757,7 +757,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             "thumbnail-0",
             processing_id,
             {
-                "artifact_type": "thumbnail",
+                "artifact_type": "image_thumbnail",
                 "media_type": "image/jpeg",
             },
         )
@@ -781,7 +781,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         published = [
             item for item in stage["artifacts"]
-            if item["type"] == "thumbnail"
+            if item["type"] == "image_thumbnail"
         ]
         self.assertEqual(len(published), 1)
         self.assertEqual(published[0]["uri"], result["uri"])
