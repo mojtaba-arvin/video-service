@@ -64,9 +64,12 @@ class RevokeJobsMixin(object):
         #             async_result.revoke()
 
     def _revoke_jobs(self, request, context):
-        results: list[streaming_pb2.RevokeDetails] = []
+        # Authorize the entire batch before the first cancellation side effect.
         for request_id in request.tracking_ids:
             require_job_access(request_id, "video.jobs:cancel")
+
+        results: list[streaming_pb2.RevokeDetails] = []
+        for request_id in request.tracking_ids:
             result = self._revoke_job(request_id)
             if result:
                 results.append(result)
