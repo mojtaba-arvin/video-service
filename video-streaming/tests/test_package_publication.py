@@ -8,6 +8,7 @@ from pathlib import Path
 from video_streaming.ffmpeg.package_publication import (
     PackagePublicationError,
     cleanup_abandoned_attempt_package,
+    cleanup_abandoned_single_file,
     publish_package,
 )
 
@@ -246,6 +247,50 @@ class PackagePublicationTests(unittest.TestCase):
             key.startswith("vod/.attempts/pub-orphan/")
             for key in self.storage.objects
         ))
+
+    def test_single_file_orphan_cleanup_requires_database_approval(self):
+        attempt_id = "single-file-attempt"
+        prefix = "vod/.attempts/{}".format(attempt_id)
+        object_key = prefix + "/thumbnail.jpg"
+        self.storage.objects[object_key] = b"orphan-thumbnail"
+
+        skipped = cleanup_abandoned_single_file(
+            self.storage,
+            self.bucket,
+            object_key,
+            attempt_id,
+            prefix,
+            is_reclaimable=lambda *_args: False,
+        )
+        self.assertFalse(skipped["deleted"])
+        self.assertIn(object_key, self.storage.objects)
+
+        removed = cleanup_abandoned_single_file(
+            self.storage,
+            self.bucket,
+            object_key,
+            attempt_id,
+            prefix,
+            is_reclaimable=lambda candidate, bucket, candidate_prefix: (
+                candidate == attempt_id
+                and bucket == self.bucket
+                and candidate_prefix == prefix
+            ),
+        )
+        self.assertTrue(removed["deleted"])
+        self.assertEqual(removed["objects"], 1)
+        self.assertNotIn(object_key, self.storage.objects)
+
+    def test_single_file_orphan_cleanup_rejects_cross_attempt_object(self):
+        with self.assertRaises(PackagePublicationError):
+            cleanup_abandoned_single_file(
+                self.storage,
+                self.bucket,
+                "vod/.attempts/another-attempt/thumbnail.jpg",
+                "selected-attempt",
+                "vod/.attempts/selected-attempt",
+                is_reclaimable=lambda *_args: True,
+            )
 
     def test_orphan_cleanup_rejects_inventory_outside_attempt_namespace(self):
         with self.assertRaises(PackagePublicationError):
