@@ -1,5 +1,6 @@
 """Per-task CPU and peak-RSS measurements for non-FFmpeg worker phases."""
 
+import math
 import threading
 import time
 
@@ -13,6 +14,7 @@ class ProcessResourceMeter:
         if (
                 isinstance(sample_interval_seconds, bool)
                 or not isinstance(sample_interval_seconds, (int, float))
+                or not math.isfinite(float(sample_interval_seconds))
                 or sample_interval_seconds <= 0):
             raise ValueError("sample_interval_seconds must be positive")
         self.sample_interval_seconds = float(sample_interval_seconds)
