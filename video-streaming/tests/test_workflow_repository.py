@@ -1795,6 +1795,50 @@ class WorkflowRepositoryTests(unittest.TestCase):
             [],
         )
 
+    def test_missing_local_package_invalidates_validation_and_allows_reprocessing(self):
+        job_id = self.create_job("p0")
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="playlist-worker"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {
+                "valid": True,
+                "errors": [],
+                "local_output_directory": "/missing/package",
+                "local_manifest_path": "/missing/package/master.m3u8",
+            },
+            lease_token=token,
+        )
+
+        self.assertTrue(
+            self.repository.requeue_processing_after_local_package_loss(
+                job_id,
+                "p0",
+                processing_id,
+                reason="VALIDATED_LOCAL_PACKAGE_MISSING_ON_TASK_REPLAY",
+            )
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "RETRY_WAIT")
+        validation = next(
+            item for item in stage["artifacts"]
+            if item["type"] == "validation_report"
+        )
+        self.assertEqual(validation["status"], "UNAVAILABLE")
+        self.assertEqual(
+            validation["metadata"]["invalidated_reason"],
+            "VALIDATED_LOCAL_PACKAGE_MISSING_ON_TASK_REPLAY",
+        )
+
+        replacement_id, _, replacement_token, _ = (
+            self.repository.claim_attempt(
+                job_id, "p0", lease_owner="playlist-reprocessor"
+            )
+        )
+        self.assertNotEqual(processing_id, replacement_id)
+        self.assertTrue(replacement_token)
+
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
 
