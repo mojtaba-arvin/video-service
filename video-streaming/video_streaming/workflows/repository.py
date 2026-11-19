@@ -442,6 +442,8 @@ class WorkflowRepository:
                     or context.issuer != owner_principal.issuer
                     or context.subject != owner_principal.subject):
                 raise ValueError("secret envelope scope must match the Job owner")
+            if context.purpose != "webhook.callback":
+                raise ValueError("unsupported Job secret purpose")
             if context.purpose in seen_purposes:
                 raise ValueError("only one initial secret per purpose is allowed")
             seen_purposes.add(context.purpose)
@@ -537,11 +539,14 @@ class WorkflowRepository:
                                 JobSecretRecord.job_id == existing.id,
                                 JobSecretRecord.purpose == envelope.context.purpose,
                                 JobSecretRecord.status == "ACTIVE",
+                                JobSecretRecord.deleted_at.is_(None),
+                                (JobSecretRecord.expires_at.is_(None)
+                                 | (JobSecretRecord.expires_at > utcnow())),
                             )
                         ).scalar_one_or_none()
                         if existing_secret is None:
                             raise IdempotencyConflict(
-                                "Idempotent replay cannot add a new Job secret"
+                                "Idempotent replay cannot add or replace a Job secret"
                             )
                     # A legacy workflow without a plan remains legacy on replay;
                     # never mutate already-accepted work during a deployment.
@@ -695,10 +700,25 @@ class WorkflowRepository:
                     raise IdempotencyConflict(
                         "Idempotency key resolves to a different execution plan"
                     )
+                for envelope in secret_envelopes:
+                    existing_secret = session.execute(
+                        select(JobSecretRecord).where(
+                            JobSecretRecord.job_id == existing.id,
+                            JobSecretRecord.purpose == envelope.context.purpose,
+                            JobSecretRecord.status == "ACTIVE",
+                            JobSecretRecord.deleted_at.is_(None),
+                            (JobSecretRecord.expires_at.is_(None)
+                             | (JobSecretRecord.expires_at > utcnow())),
+                        )
+                    ).scalar_one_or_none()
+                    if existing_secret is None:
+                        raise IdempotencyConflict(
+                            "Concurrent replay did not persist the expected Job secret"
+                        )
                 return existing.id, False
 
     def get_job_secret_envelope(
-            self, job_id, principal, purpose, required_scope, now=None):
+            self, job_id, principal, purpose, now=None):
         """Return encrypted material only after exact Job-owner authorization.
 
         Plaintext decryption remains the responsibility of the internal
@@ -710,9 +730,11 @@ class WorkflowRepository:
             SecretEnvelope,
         )
 
-        if not isinstance(purpose, str) or not purpose.strip():
-            raise ValueError("purpose must be a non-empty string")
-        self.authorize_job_access(job_id, principal, required_scope)
+        if purpose != "webhook.callback":
+            raise ValueError("unsupported Job secret purpose")
+        self.authorize_job_access(
+            job_id, principal, "video.jobs:callback:resolve"
+        )
         current = now or utcnow()
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
