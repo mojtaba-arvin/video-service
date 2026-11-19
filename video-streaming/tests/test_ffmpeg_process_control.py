@@ -308,7 +308,7 @@ class ProcessTreeTerminationTests(unittest.TestCase):
 
             def lose_lease_after_child_starts(_usage):
                 callback_count[0] += 1
-                if callback_count[0] >= 2:
+                if pid_path.exists():
                     raise RuntimeError("durable lease renewal failed")
 
             with self.assertRaisesRegex(
@@ -320,7 +320,7 @@ class ProcessTreeTerminationTests(unittest.TestCase):
                     on_usage=lose_lease_after_child_starts,
                 )
 
-            self.assertGreaterEqual(callback_count[0], 2)
+            self.assertGreater(callback_count[0], 0)
             self.assertTrue(pid_path.exists(), "child process did not start")
             self.assertFalse(self._is_running(int(pid_path.read_text())))
 
