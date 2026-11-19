@@ -34,3 +34,25 @@ def attempt_scoped_object_key(public_key, attempt_id):
         if prefix else ".attempts/{}".format(attempt_id)
     )
     return "{}/{}".format(attempt_prefix, filename)
+
+
+def attempt_scoped_local_output_path(base_path, attempt_id):
+    """Return a unique local output path for one processing Attempt."""
+    import os
+
+    if not isinstance(base_path, str) or not base_path:
+        raise ValueError("base_path must be a non-empty local path")
+    if not isinstance(attempt_id, str) or not _ATTEMPT_ID.fullmatch(attempt_id):
+        raise ValueError("attempt_id must be a bounded opaque identifier")
+
+    absolute_path = os.path.abspath(base_path)
+    filename = os.path.basename(absolute_path)
+    if filename in ("", ".", "..") or "\\" in filename or "\x00" in filename:
+        raise ValueError("base_path must identify a safe output filename")
+
+    attempt_directory = os.path.join(
+        os.path.dirname(absolute_path),
+        ".attempts",
+        attempt_id,
+    )
+    return os.path.join(attempt_directory, filename), attempt_directory
