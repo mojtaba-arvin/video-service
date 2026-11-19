@@ -133,6 +133,70 @@ class PackagePublicationTests(unittest.TestCase):
         ])
         self.assertTrue(all(chunk > 0 for chunk in chunks))
 
+    def test_attempt_scoped_package_keys_are_immutable_between_publishers(self):
+        first = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-1/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+        first_objects = {
+            key: value for key, value in self.storage.objects.items()
+            if key.startswith("vod/.attempts/pub-1/")
+        }
+
+        second = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-2/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+
+        self.assertTrue(first["manifest_key"].startswith(
+            "vod/.attempts/pub-1/"
+        ))
+        self.assertTrue(second["manifest_key"].startswith(
+            "vod/.attempts/pub-2/"
+        ))
+        self.assertEqual(
+            {key: self.storage.objects[key] for key in first_objects},
+            first_objects,
+        )
+        self.assertNotIn("vod/master.m3u8", self.storage.objects)
+
+    def test_failed_attempt_cleanup_does_not_delete_another_attempt(self):
+        other_attempt_key = "vod/.attempts/pub-old/master.m3u8"
+        self.storage.objects[other_attempt_key] = b"last-known-good"
+        self.storage.fail_upload_key = (
+            "vod/.attempts/pub-new/segment_000.ts"
+        )
+
+        with self.assertRaises(IOError):
+            publish_package(
+                directory=str(self.root),
+                manifest_path=str(self.master),
+                protocol="hls",
+                expected_renditions=["variant.m3u8"],
+                s3_output_key="vod/.attempts/pub-new/master.m3u8",
+                s3_output_bucket=self.bucket,
+                storage=self.storage,
+            )
+
+        self.assertEqual(
+            self.storage.objects[other_attempt_key], b"last-known-good"
+        )
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-new/")
+            for key in self.storage.objects
+            if key != other_attempt_key
+        ))
+
     def test_every_dependency_is_uploaded_and_readable_before_master(self):
         result = self.publish()
         self.assertEqual(result["files"], 4)
