@@ -7,13 +7,14 @@ from datetime import timedelta
 from uuid import uuid4
 
 from video_streaming.workflows.domain import (
+    AttemptLeaseLost,
     IdempotencyConflict,
     InvalidStateTransition,
     StageAlreadyRunning,
     StageState,
 )
 from video_streaming.workflows.repository import (
-    WorkflowRepository, WorkflowRecord, JobRecord, utcnow
+    WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -105,6 +106,150 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.repository.authorize_job_access(
                 job_id, principal, "video.jobs:cancel"
             )
+
+    def test_attempt_lease_is_hashed_exclusive_and_renewable(self):
+        job_id = self.create_job("p0")
+        attempt_id, attempt_number, token, expires_at = (
+            self.repository.claim_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-a",
+                lease_ttl_seconds=30,
+                execution_ref="celery-task-1",
+            )
+        )
+
+        self.assertEqual(attempt_number, 1)
+        self.assertTrue(token)
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            self.assertEqual(attempt.lease_owner, "worker-a")
+            self.assertNotEqual(attempt.lease_token_hash, token)
+            self.assertEqual(attempt.heartbeat_at, attempt.started_at)
+            self.assertGreater(attempt.lease_expires_at, attempt.started_at)
+
+        with self.assertRaises(StageAlreadyRunning):
+            self.repository.claim_attempt(
+                job_id, "p0", lease_owner="worker-b"
+            )
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.renew_attempt_lease(
+                job_id, "p0", attempt_id, "incorrect-token"
+            )
+
+        renewed_expiry = self.repository.renew_attempt_lease(
+            job_id, "p0", attempt_id, token, lease_ttl_seconds=60
+        )
+        self.assertGreater(renewed_expiry, expires_at)
+
+    def test_expired_attempt_lease_is_recovered_and_old_worker_is_fenced(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        old_id, old_number, old_token, expiry = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-old", lease_ttl_seconds=30
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            self.assertEqual(
+                self.repository.recover_expired_attempts(now=recovery_time),
+                1,
+            )
+            new_id, new_number, new_token, _ = self.repository.claim_attempt(
+                job_id, "p0", lease_owner="worker-new", lease_ttl_seconds=60
+            )
+
+        self.assertEqual(old_number, 1)
+        self.assertEqual(new_number, 2)
+        self.assertNotEqual(old_id, new_id)
+        with self.repository._session() as session:
+            old_attempt = session.get(AttemptRecord, old_id)
+            self.assertEqual(old_attempt.state, "RETRYABLE")
+            self.assertEqual(old_attempt.error_code, "WORKER_LEASE_EXPIRED")
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.renew_attempt_lease(
+                job_id, "p0", old_id, old_token
+            )
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id, "p0", old_id, lease_token=old_token
+            )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.mark_validated(
+                job_id, "p0", new_id,
+                {"valid": True, "errors": []},
+            )
+        self.repository.mark_validated(
+            job_id, "p0", new_id,
+            {"valid": True, "errors": []},
+            lease_token=new_token,
+        )
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.start_publishing(job_id, "p0", new_id)
+        self.repository.start_publishing(
+            job_id, "p0", new_id, lease_token=new_token
+        )
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(job_id, "p0", new_id)
+        self.repository.finish_stage(
+            job_id, "p0", new_id, lease_token=new_token
+        )
+
+    def test_age_based_recovery_never_expires_a_live_leased_attempt(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-live", lease_ttl_seconds=600
+        )
+
+        recovered = self.repository.recover_stale_attempts(
+            older_than=utcnow() + timedelta(days=1)
+        )
+        self.assertEqual(recovered, 0)
+        self.assertTrue(self.repository.renew_attempt_lease(
+            job_id, "p0", attempt_id, token
+        ))
+
+    def test_concurrent_attempt_claims_have_one_winner(self):
+        job_id = self.create_job("p0")
+        barrier = threading.Barrier(2)
+        outcomes = []
+        lock = threading.Lock()
+
+        def claim(worker_name):
+            barrier.wait()
+            try:
+                result = self.repository.claim_attempt(
+                    job_id,
+                    "p0",
+                    lease_owner=worker_name,
+                    lease_ttl_seconds=60,
+                    execution_ref="task-{}".format(worker_name),
+                )
+                outcome = ("claimed", result[0])
+            except StageAlreadyRunning:
+                outcome = ("busy", worker_name)
+            with lock:
+                outcomes.append(outcome)
+
+        workers = [
+            threading.Thread(target=claim, args=("worker-a",)),
+            threading.Thread(target=claim, args=("worker-b",)),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(
+            sorted(item[0] for item in outcomes),
+            ["busy", "claimed"],
+        )
 
     def test_legacy_unowned_job_remains_unowned_and_is_not_authorized(self):
         job_id = self.create_job()
