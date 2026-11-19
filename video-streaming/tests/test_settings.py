@@ -184,6 +184,15 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertTrue(settings.DEFAULT_PLAYLIST_IS_HLS)
 
 
+    def test_package_orphan_janitor_is_scheduled_hourly(self):
+        settings = load_settings({})
+
+        schedule = settings.CELERY_BEAT_SCHEDULE[
+            "cleanup-abandoned-package-attempts"
+        ]
+        self.assertEqual(schedule["task"], "cleanup_abandoned_packages")
+        self.assertEqual(schedule["schedule"], 3600.0)
+
     def test_package_orphan_retention_has_a_safe_default(self):
         settings = load_settings({})
 
