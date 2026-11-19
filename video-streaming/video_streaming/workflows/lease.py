@@ -7,6 +7,7 @@ Long-running supervised operations call :meth:`on_usage` or
 before committing their result.
 """
 
+import math
 import time
 
 from .domain import AttemptLeaseLost
@@ -45,7 +46,7 @@ class AttemptLeaseHeartbeat:
             float(renew_interval_seconds)
             if renew_interval_seconds is not None else ttl / 3.0
         )
-        if interval <= 0 or interval >= ttl:
+        if not math.isfinite(interval) or interval <= 0 or interval >= ttl:
             raise ValueError("Heartbeat interval must be positive and shorter than the lease TTL")
 
         self._repository = repository
