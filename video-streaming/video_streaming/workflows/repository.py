@@ -51,6 +51,9 @@ class JobRecord(Base):
     idempotency_key = Column(String(255), nullable=False, unique=True)
     request_hash = Column(String(64), nullable=False)
     reference_id = Column(String(255), nullable=False, default="")
+    owner_tenant_id = Column(String(255), nullable=True)
+    owner_issuer = Column(String(512), nullable=True)
+    owner_subject = Column(String(255), nullable=True)
     state = Column(String(24), nullable=False, default=JobState.QUEUED.value)
     metadata_json = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -338,8 +341,23 @@ class WorkflowRepository:
             workflow_name="video.vod",
             stage_specs=None,
             metadata=None,
-            execution_plan=None):
-        """Atomically create job, workflow, stages and an optional immutable plan."""
+            execution_plan=None,
+            owner_principal=None):
+        """Atomically create job, workflow, stages and optional owner/plan.
+
+        owner_principal must be a trusted RequestPrincipal established by the
+        authentication boundary. Omitting it preserves legacy-unowned
+        compatibility; production RPCs must not rely on that compatibility
+        path once authenticated dispatch is enabled.
+        """
+        if owner_principal is not None:
+            from video_streaming.security import RequestPrincipal, AuthorizationError
+
+            if not isinstance(owner_principal, RequestPrincipal):
+                raise TypeError("owner_principal must be a RequestPrincipal")
+            if owner_principal.is_expired():
+                raise AuthorizationError("Resource not found or access denied")
+
         plan = None
         plan_fingerprint = None
         if execution_plan is not None:
@@ -392,6 +410,14 @@ class WorkflowRepository:
                         raise IdempotencyConflict(
                             "Idempotency key was already used with a different request"
                         )
+                    if owner_principal is not None and (
+                            existing.owner_tenant_id != owner_principal.tenant_id
+                            or existing.owner_issuer != owner_principal.issuer
+                            or existing.owner_subject != owner_principal.subject):
+                        from video_streaming.security import AuthorizationError
+                        raise AuthorizationError(
+                            "Resource not found or access denied"
+                        )
                     existing_workflow = session.execute(
                         select(WorkflowRecord).where(
                             WorkflowRecord.job_id == existing.id
@@ -426,6 +452,15 @@ class WorkflowRepository:
                     idempotency_key=idempotency_key,
                     request_hash=request_hash,
                     reference_id=reference_id or "",
+                    owner_tenant_id=(
+                        owner_principal.tenant_id if owner_principal else None
+                    ),
+                    owner_issuer=(
+                        owner_principal.issuer if owner_principal else None
+                    ),
+                    owner_subject=(
+                        owner_principal.subject if owner_principal else None
+                    ),
                     state=JobState.QUEUED.value,
                     metadata_json=metadata or {},
                 )
@@ -484,6 +519,14 @@ class WorkflowRepository:
                 if existing.request_hash != request_hash:
                     raise IdempotencyConflict(
                         "Idempotency key was already used with a different request"
+                    )
+                if owner_principal is not None and (
+                        existing.owner_tenant_id != owner_principal.tenant_id
+                        or existing.owner_issuer != owner_principal.issuer
+                        or existing.owner_subject != owner_principal.subject):
+                    from video_streaming.security import AuthorizationError
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
                     )
                 existing_workflow = session.execute(
                     select(WorkflowRecord).where(
