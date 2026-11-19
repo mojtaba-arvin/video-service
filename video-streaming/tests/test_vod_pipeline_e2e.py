@@ -137,43 +137,57 @@ class E2ETestAuthenticator:
     def __init__(self):
         from video_streaming.security import RequestPrincipal
 
+        scopes = frozenset([
+            "video.jobs:create",
+            "video.jobs:read",
+            "video.jobs:cancel",
+            "video.jobs:outputs:revoke",
+            "video.playback:write",
+            "video.qoe:read",
+        ])
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         self.principal = RequestPrincipal(
             issuer="https://e2e-issuer.example.test/",
             subject="e2e-test-subject",
             tenant_id="e2e-test-tenant",
-            scopes=frozenset([
-                "video.jobs:create",
-                "video.jobs:read",
-                "video.jobs:cancel",
-                "video.jobs:outputs:revoke",
-                "video.playback:write",
-                "video.qoe:read",
-            ]),
+            scopes=scopes,
             roles=frozenset(["test"]),
             authentication_method="test-bearer",
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            expires_at=expires_at,
+        )
+        self.foreign_principal = RequestPrincipal(
+            issuer="https://e2e-issuer.example.test/",
+            subject="foreign-test-subject",
+            tenant_id="foreign-test-tenant",
+            scopes=scopes,
+            roles=frozenset(["test"]),
+            authentication_method="test-bearer",
+            expires_at=expires_at,
         )
 
     def authenticate(self, token):
         from video_streaming.security.oidc import AuthenticationError
 
-        if token != "e2e-test-token":
-            raise AuthenticationError("Invalid test token")
-        return self.principal
+        if token == "e2e-test-token":
+            return self.principal
+        if token == "foreign-test-token":
+            return self.foreign_principal
+        raise AuthenticationError("Invalid test token")
 
 
 class AuthenticatedStub:
     """Attach the test-only bearer credential to every RPC in this suite."""
 
-    def __init__(self, stub):
+    def __init__(self, stub, token="e2e-test-token"):
         self._stub = stub
+        self._token = token
 
     def __getattr__(self, name):
         method = getattr(self._stub, name)
 
         def call(*args, **kwargs):
             kwargs.setdefault(
-                "metadata", (("authorization", "Bearer e2e-test-token"),)
+                "metadata", (("authorization", "Bearer {}".format(self._token)),)
             )
             return method(*args, **kwargs)
 
@@ -521,6 +535,20 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
 
         accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
+
+        # A valid but different tenant/subject cannot inspect the new Job.
+        foreign_stub = AuthenticatedStub(
+            self.pb2_grpc.StreamingStub(self.channel),
+            token="foreign-test-token",
+        )
+        with self.assertRaises(self.grpc.RpcError) as denied:
+            foreign_stub.get_results(
+                self.pb2.JobsResultsRequest(
+                    tracking_ids=[accepted.tracking_id]
+                ),
+                timeout=30,
+            )
+        self.assertEqual(denied.exception.code(), self.grpc.StatusCode.NOT_FOUND)
 
         replayed = self.stub.create_job(request, timeout=120)
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
