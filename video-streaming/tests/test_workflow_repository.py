@@ -1130,5 +1130,51 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
 
 
+    def test_mark_validated_rejects_invalid_or_incomplete_reports(self):
+        invalid_reports = (
+            {"valid": False, "errors": []},
+            {"valid": True, "errors": [{"code": "MISSING_SEGMENT"}]},
+            {"errors": []},
+            {"valid": True},
+            None,
+        )
+        for report in invalid_reports:
+            with self.subTest(report=report):
+                job_id = self.create_job("p0")
+                attempt_id, _, token, _ = self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="worker-invalid-report"
+                )
+                with self.assertRaises(ValueError):
+                    self.repository.mark_validated(
+                        job_id, "p0", attempt_id, report,
+                        lease_token=token,
+                    )
+                stage = self.repository.get_stage_snapshot(job_id, "p0")
+                self.assertEqual(stage["status"], "PROCESSING")
+                self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+                self.assertEqual(stage["artifacts"], [])
+
+    def test_mark_validated_rejects_terminal_attempts(self):
+        job_id = self.create_job("p0")
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=True,
+            error_code="PROCESSING_FAILED",
+        )
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.mark_validated(
+                job_id, "p0", attempt_id,
+                {"valid": True, "errors": []},
+            )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "RETRY_WAIT")
+        self.assertEqual(stage["attempts"][0]["status"], "RETRYABLE")
+        self.assertEqual(stage["artifacts"], [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
