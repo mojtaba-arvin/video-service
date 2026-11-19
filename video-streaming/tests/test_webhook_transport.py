@@ -52,6 +52,9 @@ class WebhookDestinationTests(unittest.TestCase):
             "::1",
             "fe80::1",
             "fc00::1",
+            "::ffff:7f00:1",
+            "64:ff9b::a00:1",
+            "2002:7f00:1::",
         ):
             with self.subTest(address=unsafe):
                 with self.assertRaises(WebhookDestinationError):
