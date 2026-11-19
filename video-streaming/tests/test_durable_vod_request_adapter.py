@@ -136,6 +136,70 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported VOD playlist protocol"):
             self.adapter._build_durable_vod_request(request)
 
+    def test_full_plan_uses_legacy_output_ids_for_terminal_stage_keys(self):
+        request = self.make_request()
+        request.playlists[0].use_watermark = False
+        request.watermark.upload_to.bucket = "deliverables"
+        request.watermark.upload_to.key = "watermarked/source.mp4"
+        plan = self.adapter._build_durable_vod_plan("job-output-ids", request)
+        output_nodes = [
+            node for node in plan["nodes"]
+            if node["operation"] in (
+                "video.output.upload_directory", "video.output.upload_file"
+            )
+        ]
+        stage_keys = {node["stage_key"] for node in output_nodes}
+        self.assertEqual(stage_keys, {"p0", "wt0", "wv0"})
+        self.assertEqual(len(stage_keys), len(output_nodes))
+        self.assertTrue(all(node["stage_key"] for node in plan["nodes"]))
+
+    def test_full_plan_contains_all_execution_phases_and_disabled_callbacks(self):
+        plan = self.adapter._build_durable_vod_plan(
+            "job-full-dag", self.make_request()
+        )
+        operations = [node["operation"] for node in plan["nodes"]]
+        for operation in (
+            "video.input.check", "video.output.bucket.check",
+            "video.input.download", "video.input.analyze",
+            "video.inputs.funnel", "video.watermark.apply",
+            "video.hls.package", "video.thumbnail.generate",
+            "video.output.upload_directory", "video.output.upload_file",
+        ):
+            self.assertIn(operation, operations)
+        callbacks = [
+            node for node in plan["nodes"]
+            if node["operation"] == "video.webhook.deliver"
+        ]
+        self.assertTrue(callbacks)
+        self.assertTrue(all(
+            node["parameters"]["enabled"] is False for node in callbacks
+        ))
+        self.assertTrue(all(
+            "webhook_secret_ref" not in node["parameters"] for node in callbacks
+        ))
+
+    def test_durable_output_counts_ignore_internal_and_callback_stages(self):
+        from video_streaming.grpc.servicers.mixins.get_results import GetResultsMixin
+
+        stages = [
+            {"key": "input-video-check", "status": "FAILED"},
+            {"key": "playlist-0-package", "status": "FAILED"},
+            {"key": "p0", "status": "FINISHED"},
+            {"key": "p1", "status": "CANCELLED"},
+            {"key": "p2", "status": "FAILED"},
+            {"key": "p0-webhook", "status": "FAILED"},
+        ]
+        counts = GetResultsMixin._durable_output_status_counts(
+            stages,
+            {
+                "no_watermarked_playlists_ids": ["p0", "p1", "p2"],
+                "no_watermarked_thumbnails_ids": [],
+                "watermarked_outputs_ids": [],
+            },
+            plan_backed=True,
+        )
+        self.assertEqual(counts, {"ready": 1, "revoked": 1, "failed": 1})
+
     def test_rejects_invalid_thumbnail_timestamp_during_plan_compilation(self):
         normalized = self.adapter._build_durable_vod_request(self.make_request())
         normalized["thumbnails"][0]["thumbnail_time"] = "not-a-timestamp"

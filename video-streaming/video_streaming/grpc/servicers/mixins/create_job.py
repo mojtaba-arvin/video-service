@@ -87,12 +87,17 @@ class CreateJobMixin(object):
             watermark.update({
                 "output_bucket": request.watermark.upload_to.bucket,
                 "output_key": request.watermark.upload_to.key,
+                "output_id": CacheKeysTemplates.WATERMARKED_VIDEO_OUTPUT_ID.format(
+                    number=0
+                ),
                 "create_bucket": request.watermark.upload_to.create_bucket,
                 "dont_replace": request.watermark.upload_to.dont_replace,
             })
 
         playlists = []
-        for output in request.playlists:
+        for number, output in enumerate(request.playlists):
+            if not output.upload_to.key or output.upload_to.key.isspace():
+                continue
             encode_format, video_codec, audio_codec = self._get_format(output)
             if output.protocol == self.pb2.Protocol.HLS:
                 protocol = "hls"
@@ -104,6 +109,12 @@ class CreateJobMixin(object):
             playlists.append({
                 "bucket": output.upload_to.bucket,
                 "key": output.upload_to.key,
+                "output_id": (
+                    CacheKeysTemplates.WATERMARKED_PLAYLIST_OUTPUT_ID.format(
+                        number=number
+                    ) if output.use_watermark else
+                    CacheKeysTemplates.PLAYLIST_OUTPUT_ID.format(number=number)
+                ),
                 "protocol": protocol,
                 "quality_names": self._parse_quality_names(
                     output.options.quality_names
@@ -121,10 +132,18 @@ class CreateJobMixin(object):
             })
 
         thumbnails = []
-        for output in request.thumbnails:
+        for number, output in enumerate(request.thumbnails):
+            if not output.upload_to.key or output.upload_to.key.isspace():
+                continue
             thumbnails.append({
                 "bucket": output.upload_to.bucket,
                 "key": output.upload_to.key,
+                "output_id": (
+                    CacheKeysTemplates.WATERMARKED_THUMBNAIL_OUTPUT_ID.format(
+                        number=number
+                    ) if output.use_watermark else
+                    CacheKeysTemplates.THUMBNAIL_OUTPUT_ID.format(number=number)
+                ),
                 "thumbnail_time": output.thumbnail_time,
                 "scale_width": output.options.scale_width,
                 "scale_height": output.options.scale_height,
@@ -139,6 +158,19 @@ class CreateJobMixin(object):
             "playlists": playlists,
             "thumbnails": thumbnails,
         }
+
+    def _build_durable_vod_plan(self, job_id, request):
+        """Compile the public request into the complete, transport-neutral VOD DAG.
+
+        Terminal output Stage keys retain legacy IDs (p0/wp0/t0/wt0/wv0) for
+        status and output-revoke compatibility; every internal node is durable.
+        """
+        from video_streaming.workflows.vod_plan import build_vod_execution_plan
+
+        return build_vod_execution_plan(
+            job_id=job_id,
+            request=self._build_durable_vod_request(request),
+        )
 
     @staticmethod
     def _has_create_flag(output_bucket, *outputs):
@@ -573,82 +605,9 @@ class CreateJobMixin(object):
                 )
             )
 
-        # Persist the workflow before dispatch. Client retries with the same
-        # idempotency key return the existing tracking ID without scheduling a
-        # second Celery graph. The payload hash excludes the key itself.
-        stage_specs = []
-        for number, output in enumerate(request.playlists):
-            if not output.upload_to.key or output.upload_to.key.isspace():
-                continue
-            output_id = (
-                CacheKeysTemplates.WATERMARKED_PLAYLIST_OUTPUT_ID.format(
-                    number=number
-                )
-                if output.use_watermark
-                else CacheKeysTemplates.PLAYLIST_OUTPUT_ID.format(
-                    number=number
-                )
-            )
-            stage_specs.append({
-                "stage_key": output_id,
-                "operation": (
-                    OperationKind.HLS_PACKAGE_AND_PUBLISH.value
-                    if output.protocol == self.pb2.Protocol.HLS
-                    else OperationKind.DASH_PACKAGE_AND_PUBLISH.value
-                ),
-                "input": {
-                    "protocol": (
-                        "hls"
-                        if output.protocol == self.pb2.Protocol.HLS
-                        else "dash"
-                    ),
-                    "bucket": output.upload_to.bucket,
-                    "key": output.upload_to.key,
-                    "quality_names": self._parse_quality_names(
-                        output.options.quality_names
-                    ),
-                    "use_watermark": output.use_watermark,
-                },
-                "output": {
-                    "manifest_key": output.upload_to.key,
-                    "expected_renditions": [],
-                },
-            })
-
-        for number, output in enumerate(request.thumbnails):
-            if not output.upload_to.key or output.upload_to.key.isspace():
-                continue
-            output_id = (
-                CacheKeysTemplates.WATERMARKED_THUMBNAIL_OUTPUT_ID.format(
-                    number=number
-                )
-                if output.use_watermark
-                else CacheKeysTemplates.THUMBNAIL_OUTPUT_ID.format(
-                    number=number
-                )
-            )
-            stage_specs.append({
-                "stage_key": output_id,
-                "operation": OperationKind.THUMBNAIL_AND_PUBLISH.value,
-                "input": {
-                    "bucket": output.upload_to.bucket,
-                    "key": output.upload_to.key,
-                    "thumbnail_time": output.thumbnail_time,
-                    "scale_width": output.options.scale_width,
-                    "scale_height": output.options.scale_height,
-                    "use_watermark": output.use_watermark,
-                },
-            })
-
-        if request_has_watermark and upload_watermarked_video:
-            stage_specs.append({
-                "stage_key": watermarked_video_output_id,
-                "operation": OperationKind.WATERMARK_AND_PUBLISH.value,
-                "input": {
-                    "bucket": request.watermark.upload_to.bucket,
-                    "key": request.watermark.upload_to.key,
-                },
-            })
+        # Compile all preflight, input, processing, upload and callback nodes.
+        # The repository derives Stage rows and dependency edges atomically.
+        execution_plan = self._build_durable_vod_plan(request_id, request)
 
         request_for_hash = self.pb2.JobRequest()
         request_for_hash.CopyFrom(request)
@@ -665,10 +624,16 @@ class CreateJobMixin(object):
                 request_hash=request_hash,
                 reference_id=request.reference_id,
                 workflow_name="video.vod",
-                stage_specs=stage_specs,
+                execution_plan=execution_plan,
                 metadata={
                     "reference_id": request.reference_id,
-                    "output_count": len(stage_specs),
+                    "output_count": sum(
+                        node["operation"] in (
+                            "video.output.upload_directory",
+                            "video.output.upload_file",
+                        )
+                        for node in execution_plan["nodes"]
+                    ),
                     # Persist non-secret result metadata so the status API can
                     # reconstruct durable job/output state after Redis expires.
                     "result_details": {

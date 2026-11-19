@@ -76,11 +76,12 @@ def _node(
         dependencies,
         parameters,
         retry_policy,
-        resource_profile):
+        resource_profile,
+        stage_key=None):
     return {
         "node_id": node_id,
         "operation": operation,
-        "stage_key": node_id,
+        "stage_key": stage_key or node_id,
         "depends_on": list(dependencies),
         "parameters": parameters,
         "retry_policy": deepcopy(DEFAULT_RETRY_POLICIES[retry_policy]),
@@ -161,9 +162,19 @@ def _normalize_output(output, kind, index):
         output.get("create_bucket", False),
         "{}[{}].create_bucket".format(kind, index),
     )
+    output_id = output.get("output_id")
+    if output_id is not None:
+        output_id = _required_text(
+            output_id, "{}[{}].output_id".format(kind, index)
+        )
+        if len(output_id) > 128:
+            raise VODPlanBuildError(
+                "{}[{}].output_id exceeds 128 characters".format(kind, index)
+            )
     normalized = {
         "bucket": bucket,
         "key": key,
+        "output_id": output_id,
         "use_watermark": use_watermark,
         "dont_replace": dont_replace,
         "create_bucket": create_bucket,
@@ -311,6 +322,9 @@ def build_vod_execution_plan(
             "create_bucket": _as_bool(
                 watermark.get("create_bucket", False),
                 "watermark.create_bucket",
+            ),
+            "output_id": _optional_text(
+                watermark.get("output_id"), "watermark.output_id"
             ),
         })
     if not outputs:
@@ -484,6 +498,7 @@ def build_vod_execution_plan(
                 "output_id": prefix,
                 "protocol": item["protocol"],
             }, "upload", "upload",
+            stage_key=item.get("output_id") or upload_id,
         ))
         append_callback(prefix, upload_id)
 
@@ -510,6 +525,7 @@ def build_vod_execution_plan(
                 "key": item["key"],
                 "output_id": prefix,
             }, "upload", "upload",
+            stage_key=item.get("output_id") or upload_id,
         ))
         append_callback(prefix, upload_id)
 
@@ -521,6 +537,7 @@ def build_vod_execution_plan(
                 "key": watermark_output_key,
                 "output_id": "watermarked-video",
             }, "upload", "upload",
+            stage_key=watermark.get("output_id") or upload_id,
         ))
         append_callback("watermarked-video", upload_id)
 
