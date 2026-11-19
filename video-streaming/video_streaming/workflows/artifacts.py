@@ -38,10 +38,11 @@ def attempt_scoped_object_key(public_key, attempt_id):
 
 def attempt_scoped_local_output_path(base_path, attempt_id):
     """Return a unique local output path for one processing Attempt."""
-    import os
-
     if not isinstance(base_path, str) or not base_path:
         raise ValueError("base_path must be a non-empty local path")
+    import os
+    if base_path.endswith(os.sep):
+        raise ValueError("base_path must identify a file, not a directory")
     if not isinstance(attempt_id, str) or not _ATTEMPT_ID.fullmatch(attempt_id):
         raise ValueError("attempt_id must be a bounded opaque identifier")
 
