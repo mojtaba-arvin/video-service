@@ -153,6 +153,27 @@ def _artifact_record(bucket, prefix, file_path, relative_path, file_size,
 
 
 
+def cleanup_abandoned_single_file(
+        storage, bucket, object_key, attempt_id, attempt_prefix,
+        is_reclaimable):
+    """Delete one immutable file object after PostgreSQL approves its Attempt."""
+    if not isinstance(attempt_prefix, str) or not attempt_prefix:
+        raise PackagePublicationError("Attempt prefix is required")
+    prefix = attempt_prefix.rstrip("/")
+    expected_prefix = "/.attempts/{}".format(attempt_id)
+    if not prefix.endswith(expected_prefix):
+        raise PackagePublicationError("Attempt prefix does not match its ID")
+    if not isinstance(object_key, str) or not object_key.startswith(prefix + "/"):
+        raise PackagePublicationError("Object key is outside its Attempt prefix")
+    relative = _safe_inventory_path(object_key[len(prefix) + 1:])
+    if "/" in relative:
+        raise PackagePublicationError("Single-file Attempt key must be one path segment")
+    if not is_reclaimable(attempt_id, bucket, prefix):
+        return {"deleted": False, "attempt_id": attempt_id, "objects": 0}
+    storage.delete_object(key=object_key, bucket_name=bucket)
+    return {"deleted": True, "attempt_id": attempt_id, "objects": 1}
+
+
 def cleanup_abandoned_attempt_package(
         storage,
         bucket,
