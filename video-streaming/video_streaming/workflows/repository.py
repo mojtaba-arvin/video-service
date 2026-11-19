@@ -2578,6 +2578,50 @@ class WorkflowRepository:
             return report
 
 
+    def mark_package_attempt_cleaned(
+            self, attempt_id, bucket, attempt_prefix, now=None):
+        """Persist successful cleanup so the janitor does not rescan it."""
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session.begin() as session:
+            attempt = session.get(
+                AttemptRecord, attempt_id, with_for_update=True
+            )
+            if attempt is None:
+                return False
+            namespace = (
+                (attempt.metrics_json or {}).get("package_publication")
+            )
+            if (
+                    not isinstance(namespace, dict)
+                    or namespace.get("bucket") != bucket
+                    or namespace.get("prefix") != attempt_prefix):
+                raise InvalidStateTransition(
+                    "Cleanup namespace does not match the recorded Attempt"
+                )
+            if attempt.state not in (
+                    AttemptState.FAILED.value,
+                    AttemptState.CANCELLED.value,
+                    AttemptState.RETRYABLE.value):
+                raise InvalidStateTransition(
+                    "Only abandoned package Attempts can be marked cleaned"
+                )
+            if any((
+                    attempt.lease_owner,
+                    attempt.lease_token_hash,
+                    attempt.lease_expires_at,
+                    attempt.heartbeat_at)):
+                raise AttemptLeaseLost(
+                    "Cannot mark an Attempt cleaned while it has a lease"
+                )
+            namespace["cleanup_completed_at"] = now.isoformat()
+            metrics = dict(attempt.metrics_json or {})
+            metrics["package_publication"] = namespace
+            attempt.metrics_json = metrics
+            return True
+
+
     def list_reclaimable_package_attempts(
             self, minimum_age_seconds=86400, limit=100, now=None):
         """Return old package Attempts whose exact namespaces pass DB guards."""
@@ -2607,6 +2651,9 @@ class WorkflowRepository:
                     ]),
                     AttemptRecord.finished_at <= cutoff,
                     AttemptRecord.metrics_json["package_publication"].is_not(None),
+                    AttemptRecord.metrics_json["package_publication"][
+                        "cleanup_completed_at"
+                    ].is_(None),
                 ).order_by(AttemptRecord.finished_at.asc())
                 .limit(limit)
             ).scalars().all()
