@@ -112,40 +112,12 @@ def add_watermark(
         )
 
     def process_resource_metrics():
-        cached_peak_memory = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_MEMORY_RSS.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        measured_peak_memory = process_usage.get("peak_memory_bytes")
-        peak_memory_bytes = max(
-            int(value) for value in (
-                cached_peak_memory, measured_peak_memory
-            ) if value
-        ) if cached_peak_memory or measured_peak_memory else None
-        started_at = self.cache.get(
-            CacheKeysTemplates.OUTPUT_START_PROCESSING_TIME.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        ended_at = self.cache.get(
-            CacheKeysTemplates.OUTPUT_END_PROCESSING_TIME.format(
-                request_id=request_id, output_id=output_id
-            )
-        )
-        memory_duration_ms = process_usage.get("memory_duration_ms")
-        if memory_duration_ms is None and started_at is not None and ended_at is not None:
-            try:
-                memory_duration_ms = max(
-                    0, int((float(ended_at) - float(started_at)) * 1000)
-                )
-            except (TypeError, ValueError):
-                memory_duration_ms = None
+        peak_memory_bytes = process_usage.get("peak_memory_bytes")
         return {
             "peak_memory_bytes": (
                 int(peak_memory_bytes) if peak_memory_bytes else None
             ),
-            "memory_duration_ms": memory_duration_ms,
+            "memory_duration_ms": process_usage.get("memory_duration_ms"),
         }
 
     output_path = None
