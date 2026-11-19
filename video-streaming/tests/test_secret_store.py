@@ -9,6 +9,7 @@ from video_streaming.security.secret_store import (
     SecretContextMismatch,
     SecretDecryptionError,
     SecretEnvelope,
+    AwsKMSKeyProvider,
     prepare_secret,
     resolve_secret,
 )
@@ -34,6 +35,21 @@ class FakeKeyProvider:
         return bytearray(value ^ 0xA5 for value in wrapped_key)
 
 
+
+class FakeKMSClient:
+    def __init__(self):
+        self.generate_args = None
+        self.decrypt_args = None
+
+    def generate_data_key(self, **kwargs):
+        self.generate_args = kwargs
+        return {"Plaintext": bytes(range(32)), "CiphertextBlob": b"wrapped-key"}
+
+    def decrypt(self, **kwargs):
+        self.decrypt_args = kwargs
+        return {"Plaintext": bytes(range(32))}
+
+
 class SecretEnvelopeTests(unittest.TestCase):
     def setUp(self):
         self.context = SecretContext(
@@ -44,6 +60,31 @@ class SecretEnvelopeTests(unittest.TestCase):
             purpose="webhook.callback",
         )
         self.provider = FakeKeyProvider()
+
+    def test_aws_kms_adapter_uses_explicit_key_and_encryption_context(self):
+        client = FakeKMSClient()
+        provider = AwsKMSKeyProvider(client, "arn:aws:kms:region:account:key/current")
+        context = {"job_id": "job-123", "purpose": "webhook.callback"}
+
+        plaintext, wrapped = provider.generate_data_key(context)
+        self.assertEqual(len(plaintext), 32)
+        self.assertEqual(wrapped, b"wrapped-key")
+        self.assertEqual(
+            client.generate_args["KeyId"],
+            "arn:aws:kms:region:account:key/current",
+        )
+        self.assertEqual(client.generate_args["KeySpec"], "AES_256")
+        self.assertEqual(client.generate_args["EncryptionContext"], context)
+
+        decrypted = provider.decrypt_data_key(
+            wrapped, context, key_id="arn:aws:kms:region:account:key/previous"
+        )
+        self.assertEqual(bytes(decrypted), bytes(range(32)))
+        self.assertEqual(
+            client.decrypt_args["KeyId"],
+            "arn:aws:kms:region:account:key/previous",
+        )
+        self.assertEqual(client.decrypt_args["EncryptionContext"], context)
 
     def test_round_trip_binds_secret_to_full_context(self):
         envelope = prepare_secret(
