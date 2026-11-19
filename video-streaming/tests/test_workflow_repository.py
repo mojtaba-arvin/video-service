@@ -1454,5 +1454,26 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_publication_claim_rejects_legacy_nonterminal_processing_attempt(self):
+        job_id = self.create_job("p0")
+        processing_id, _ = self.repository.start_attempt(
+            job_id, "p0", execution_ref="legacy-processing-task"
+        )
+        self.repository.mark_validated(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+        )
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-before-terminal"
+            )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+
+
+
 if __name__ == "__main__":
     unittest.main()
