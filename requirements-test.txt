@@ -3,6 +3,9 @@ ffmpeg-python==0.2.0
 # Process-tree termination regression tests
 psutil==5.9.8
 
+# gRPC server import path loads the Redis cache adapter
+redis==5.2.1
+
 # gRPC authentication interceptor tests
 grpcio==1.78.2
 grpcio-health-checking==1.78.2
