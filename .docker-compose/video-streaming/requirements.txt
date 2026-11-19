@@ -29,6 +29,9 @@ python-decouple==3.8
 # clouds 
 boto3==1.17.14
 
+# authenticated secret envelope encryption
+cryptography==50.0.2
+
 # durable workflow state
 SQLAlchemy==2.0.58
 alembic==1.16.5
