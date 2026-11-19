@@ -6,6 +6,10 @@ psutil==5.9.8
 # gRPC server import path loads the Redis cache adapter
 redis==5.2.1
 
+# Importing the shared exception package requires the S3 SDK's botocore module.
+# Keep this aligned with the integration environment's boto3 pin.
+boto3==1.17.14
+
 # gRPC authentication interceptor tests
 grpcio==1.78.2
 grpcio-health-checking==1.78.2
