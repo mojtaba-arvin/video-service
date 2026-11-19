@@ -184,6 +184,31 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertTrue(settings.DEFAULT_PLAYLIST_IS_HLS)
 
 
+    def test_package_orphan_retention_has_a_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(
+            settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS, 86400
+        )
+
+    def test_package_orphan_retention_is_configurable(self):
+        settings = load_settings({
+            "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS": "172800",
+        })
+
+        self.assertEqual(
+            settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS, 172800
+        )
+
+    def test_package_orphan_retention_rejects_unsafe_values(self):
+        for value in ("0", "3599", "2592001"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        ValueError, "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS"):
+                    load_settings({
+                        "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS": value,
+                    })
+
     def test_attempt_lease_ttl_has_a_safe_default(self):
         settings = load_settings({})
 
