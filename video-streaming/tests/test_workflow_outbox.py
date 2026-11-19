@@ -1,6 +1,8 @@
 """Transactional outbox persistence, lease fencing and replay tests."""
 
+import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from uuid import uuid4
 
@@ -137,6 +139,16 @@ class WorkflowOutboxRepositoryTests(unittest.TestCase):
             owner="relay-a", lease_ttl_seconds=10, limit=1, now=now
         )
         self.assertEqual(len(first), 1)
+        with self.repository._session() as session:
+            leased_row = session.get(OutboxRecord, outbox_id)
+            self.assertEqual(len(leased_row.lock_token_hash), 64)
+            self.assertNotEqual(
+                leased_row.lock_token_hash, first[0]["lease_token"]
+            )
+        self.assertIn(
+            "OUTBOX_CLAIMED",
+            [event["type"] for event in self.repository.get_job_snapshot(job_id)["events"]],
+        )
         self.assertEqual(
             self.repository.claim_outbox_batch(
                 owner="relay-b", lease_ttl_seconds=10, limit=1, now=now
@@ -192,6 +204,57 @@ class WorkflowOutboxRepositoryTests(unittest.TestCase):
             ),
             [],
         )
+
+
+@unittest.skipUnless(
+    os.environ.get("WORKFLOW_DATABASE_URL"),
+    "PostgreSQL concurrency test requires WORKFLOW_DATABASE_URL",
+)
+class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
+    """Exercise SKIP LOCKED with two independent PostgreSQL connections."""
+
+    def test_locked_outbox_row_is_skipped_by_a_concurrent_relay(self):
+        database_url = os.environ["WORKFLOW_DATABASE_URL"]
+        repository = WorkflowRepository(database_url)
+        competing_repository = WorkflowRepository(database_url)
+        job_id = str(uuid4())
+        plan = WorkflowOutboxRepositoryTests.plan(job_id)
+        repository.create_job(
+            job_id=job_id,
+            idempotency_key="pg-outbox-" + job_id,
+            request_hash="c" * 64,
+            execution_plan=plan,
+            enqueue_dispatch=True,
+        )
+        with repository._session() as session:
+            outbox_id = session.execute(
+                select(OutboxRecord.id).where(
+                    OutboxRecord.job_id == job_id
+                )
+            ).scalar_one()
+
+        try:
+            with repository._session.begin() as session:
+                session.execute(
+                    select(OutboxRecord).where(
+                        OutboxRecord.id == outbox_id
+                    ).with_for_update()
+                ).scalar_one()
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        competing_repository.claim_outbox_batch,
+                        "relay-concurrent",
+                        30,
+                        1,
+                    )
+                    self.assertEqual(future.result(timeout=10), [])
+        finally:
+            with repository._session.begin() as session:
+                job = session.get(JobRecord, job_id)
+                if job is not None:
+                    session.delete(job)
+            competing_repository.close()
+            repository.close()
 
 
 if __name__ == "__main__":
