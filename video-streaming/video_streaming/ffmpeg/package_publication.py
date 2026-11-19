@@ -224,12 +224,16 @@ def cleanup_abandoned_attempt_package(
     manifest_relative = payload.get("manifest")
     if manifest_relative is not None:
         manifest_relative = _safe_inventory_path(manifest_relative)
+        if manifest_relative not in safe_relatives:
+            raise PackagePublicationError(
+                "Root manifest is missing from its ownership inventory"
+            )
         manifest_key = _object_key(prefix, manifest_relative)
-        object_keys = [key for key in object_keys if key != manifest_key]
-        # Withdraw the root manifest only after its dependencies are removed.
-        for key in object_keys:
-            storage.delete_object(key=key, bucket_name=bucket)
+        # Withdraw the player entry point first; only then remove children.
         storage.delete_object(key=manifest_key, bucket_name=bucket)
+        for key in object_keys:
+            if key != manifest_key:
+                storage.delete_object(key=key, bucket_name=bucket)
     else:
         for key in object_keys:
             storage.delete_object(key=key, bucket_name=bucket)
