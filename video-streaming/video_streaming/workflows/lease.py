@@ -42,6 +42,8 @@ class AttemptLeaseHeartbeat:
         if not lease_token or not isinstance(lease_token, str):
             raise ValueError("A process-local lease token is required")
         ttl = repository._validated_lease_ttl(lease_ttl_seconds)
+        if isinstance(renew_interval_seconds, bool):
+            raise ValueError("Heartbeat interval must be a numeric duration")
         interval = (
             float(renew_interval_seconds)
             if renew_interval_seconds is not None else ttl / 3.0
