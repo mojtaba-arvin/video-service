@@ -120,6 +120,65 @@ def create_playlist(
         raise self.raise_revoke_output(request_id, output_id)
 
     workflow_repository = get_workflow_repository()
+    existing_stage = workflow_repository.get_stage_snapshot(
+        request_id, output_id
+    )
+    if existing_stage and existing_stage.get("status") in (
+            "VALIDATED", "RETRY_WAIT", "FINISHED"):
+        validation_artifact = next((
+            item for item in existing_stage.get("artifacts", [])
+            if item.get("type") == "validation_report"
+            and item.get("status") == "AVAILABLE"
+        ), None)
+        if validation_artifact is not None:
+            metadata = validation_artifact.get("metadata") or {}
+            processing_attempt = next((
+                item for item in existing_stage.get("attempts", [])
+                if item.get("id") == validation_artifact.get("attempt_id")
+                and item.get("status") == "SUCCEEDED"
+            ), None)
+            if processing_attempt is not None:
+                local_directory = metadata.get("local_output_directory")
+                local_manifest = metadata.get("local_manifest_path")
+                expected = metadata.get("expected_renditions") or []
+                local_package_available = (
+                    isinstance(local_directory, str)
+                    and os.path.isdir(local_directory)
+                    and isinstance(local_manifest, str)
+                    and os.path.isfile(local_manifest)
+                    and isinstance(expected, list)
+                    and all(
+                        os.path.isfile(os.path.join(local_directory, name))
+                        for name in expected
+                    )
+                )
+                if (
+                        existing_stage.get("status") == "FINISHED"
+                        or local_package_available):
+                    return dict(
+                        directory=(
+                            local_directory if local_package_available else None
+                        ),
+                        expected_renditions=expected,
+                        attempt_id=processing_attempt["id"],
+                        attempt_number=processing_attempt["attempt_number"],
+                        input_bytes=processing_attempt.get("input_bytes"),
+                        cpu_seconds=processing_attempt.get("cpu_seconds"),
+                        peak_memory_bytes=processing_attempt.get(
+                            "peak_memory_bytes"
+                        ),
+                        memory_duration_ms=processing_attempt.get(
+                            "memory_duration_ms"
+                        ),
+                        validation_report=metadata,
+                    )
+                workflow_repository.requeue_processing_after_local_package_loss(
+                    request_id,
+                    output_id,
+                    processing_attempt["id"],
+                    reason="VALIDATED_LOCAL_PACKAGE_MISSING_ON_TASK_REPLAY",
+                )
+
     attempt_id, attempt_number, lease_token, _ = workflow_repository.claim_attempt(
         job_id=request_id,
         stage_key=output_id,
@@ -143,6 +202,7 @@ def create_playlist(
     cpu_started = capture_child_cpu_seconds()
     expected_renditions = []
     validation_report = None
+    validation_payload = None
 
     def process_resource_metrics():
         peak_memory_bytes = self.cache.get(
@@ -257,12 +317,19 @@ def create_playlist(
             ),
         )
         validation_report.require_valid()
+        validation_payload = validation_report.as_dict()
+        validation_payload.update({
+            "local_output_directory": directory,
+            "local_manifest_path": output_path,
+            "expected_renditions": list(expected_renditions),
+            "package_type": "hls" if is_hls else "dash",
+        })
         lease_heartbeat.assert_owned()
         workflow_repository.complete_processing_attempt(
             job_id=request_id,
             stage_key=output_id,
             attempt_id=attempt_id,
-            validation_report=validation_report.as_dict(),
+            validation_report=validation_payload,
             lease_token=lease_token,
             metrics={
                 "input_bytes": input_bytes,
@@ -365,5 +432,5 @@ def create_playlist(
         input_bytes=input_bytes,
         cpu_seconds=child_cpu_seconds_since(cpu_started),
         **process_resource_metrics(),
-        validation_report=validation_report.as_dict(),
+        validation_report=validation_payload,
     )
