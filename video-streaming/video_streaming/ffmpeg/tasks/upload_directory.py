@@ -112,7 +112,7 @@ def upload_directory(self,
             request_id, output_id, publication_id,
             reason="CANCELLED_BEFORE_PACKAGE_PUBLICATION",
             metrics={
-                "input_bytes": int(kwargs.get("input_bytes") or 0),
+                "input_bytes": None,
                 "cpu_seconds": kwargs.get("cpu_seconds"),
                 "peak_memory_bytes": kwargs.get("peak_memory_bytes"),
                 "memory_duration_ms": kwargs.get("memory_duration_ms"),
@@ -127,9 +127,11 @@ def upload_directory(self,
     repository.start_publishing(
         request_id, output_id, publication_id, lease_token=lease_token
     )
-    cpu_seconds = kwargs.get("cpu_seconds")
-    peak_memory_bytes = kwargs.get("peak_memory_bytes")
-    memory_duration_ms = kwargs.get("memory_duration_ms")
+    # Processing usage belongs to the processing Attempt. Do not copy it into
+    # publication metrics or aggregate the same CPU/memory spend twice.
+    cpu_seconds = None
+    peak_memory_bytes = None
+    memory_duration_ms = None
     self.save_output_status(
         self.output_status.UPLOADING, output_id, request_id
     )
