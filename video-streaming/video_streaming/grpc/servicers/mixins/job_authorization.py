@@ -30,5 +30,5 @@ def require_playback_session_access(session_id, required_scope, context):
             required_scope,
         )
     except AuthorizationError:
-        raise exceptions.JobNotFoundException
+        raise exceptions.JobNotFoundException(context=context)
     return repository
