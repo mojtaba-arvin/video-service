@@ -4,6 +4,10 @@ import grpc
 
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.qoe import playback_qoe_report_payload
+from video_streaming.grpc.servicers.mixins.job_authorization import (
+    require_job_access,
+    require_playback_session_access,
+)
 
 
 class PlaybackQoEMixin:
@@ -18,7 +22,9 @@ class PlaybackQoEMixin:
         return repository
 
     def start_playback_session(self, request, context):
-        repository = self._playback_repository(context)
+        repository = require_job_access(
+            request.tracking_id, "video.playback:write"
+        )
         try:
             result = repository.start_playback_session(
                 job_id=request.tracking_id,
@@ -37,6 +43,9 @@ class PlaybackQoEMixin:
         )
 
     def record_playback_event(self, request, context):
+        require_playback_session_access(
+            request.session_id, "video.playback:write"
+        )
         repository = self._playback_repository(context)
         try:
             event_type = self.pb2.PlaybackEventType.Name(
@@ -85,7 +94,9 @@ class PlaybackQoEMixin:
         )
 
     def get_playback_qoe_report(self, request, context):
-        repository = self._playback_repository(context)
+        repository = require_job_access(
+            request.tracking_id, "video.qoe:read"
+        )
         try:
             report = repository.get_playback_qoe_report(
                 job_id=request.tracking_id,
