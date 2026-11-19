@@ -487,14 +487,18 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             processing_attempt, publication_attempt = durable_stage["attempts"]
             self.assertEqual(processing_attempt["status"], "SUCCEEDED")
             self.assertEqual(publication_attempt["status"], "SUCCEEDED")
+            self.assertGreater(processing_attempt["duration_ms"], 0)
+            self.assertEqual(
+                processing_attempt["input_bytes"],
+                self.input_path.stat().st_size,
+            )
+            self.assertGreater(processing_attempt["artifact_count"], 0)
+            self.assertGreater(processing_attempt["estimated_cost"], 0)
+            self.assertGreater(publication_attempt["duration_ms"], 0)
+            self.assertGreater(publication_attempt["output_bytes"], 0)
+            self.assertGreater(publication_attempt["artifact_count"], 0)
+            self.assertGreater(publication_attempt["estimated_cost"], 0)
             for attempt in (processing_attempt, publication_attempt):
-                self.assertGreater(attempt["duration_ms"], 0)
-                self.assertEqual(
-                    attempt["input_bytes"], self.input_path.stat().st_size
-                )
-                self.assertGreater(attempt["output_bytes"], 0)
-                self.assertGreater(attempt["artifact_count"], 0)
-                self.assertGreater(attempt["estimated_cost"], 0)
                 self.assertEqual(attempt["cost_currency"], "RUNIT")
                 self.assertEqual(
                     attempt["pricing_model_id"],
