@@ -1234,6 +1234,9 @@ class WorkflowRepository:
             previous_status = stage.status
             if stage.status == StageState.RETRY_WAIT.value:
                 self._transition(stage, StageState.VALIDATED)
+            else:
+                stage.updated_at = now
+                stage.version += 1
 
             next_number = session.execute(
                 select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
