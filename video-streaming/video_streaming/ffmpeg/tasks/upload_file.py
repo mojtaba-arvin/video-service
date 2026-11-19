@@ -42,6 +42,9 @@ def _publish_leased_file(
         execution_ref=str(task.request.id),
         processing_attempt_id=processing_attempt_id,
         pricing=configured_pricing(settings),
+        package_output_key=s3_output_key,
+        package_output_bucket=s3_output_bucket,
+        package_output_kind="single_file",
     )
     heartbeat = AttemptLeaseHeartbeat(
         repository,
