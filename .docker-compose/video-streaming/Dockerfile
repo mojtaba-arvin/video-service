@@ -19,7 +19,7 @@ ENV PYTHONUNBUFFERED 1
 ADD requirements.txt /opt/workdir
 RUN pip3 install --no-cache-dir --default-timeout=100 -r /opt/workdir/requirements.txt
 
-ADD circus/circus.ini /etc/circus.ini
+ADD circus/circus.local.ini /etc/circus.ini
 
 
 COPY ["./sh/*.sh", "/docker/bin/"]
