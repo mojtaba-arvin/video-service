@@ -59,7 +59,9 @@ class FfmpegCallback(object):
                 output_id=self.output_id
             )
             if self.task.request.called_directly:
-                percent = round(time_ / duration * 100)
+                percent = (
+                    round(time_ / duration * 100) if duration > 0 else 0
+                )
                 sys.stdout.write(
                     f"\r{self.request_id} | {self.output_id} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
                 )
