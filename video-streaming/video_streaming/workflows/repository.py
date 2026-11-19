@@ -424,6 +424,11 @@ class WorkflowRepository:
                         raise IdempotencyConflict(
                             "Idempotency key was already used with a different request"
                         )
+                    if existing.owner_tenant_id is not None and owner_principal is None:
+                        from video_streaming.security import AuthorizationError
+                        raise AuthorizationError(
+                            "Resource not found or access denied"
+                        )
                     if owner_principal is not None and (
                             existing.owner_tenant_id != owner_principal.tenant_id
                             or existing.owner_issuer != owner_principal.issuer
@@ -533,6 +538,11 @@ class WorkflowRepository:
                 if existing.request_hash != request_hash:
                     raise IdempotencyConflict(
                         "Idempotency key was already used with a different request"
+                    )
+                if existing.owner_tenant_id is not None and owner_principal is None:
+                    from video_streaming.security import AuthorizationError
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
                     )
                 if owner_principal is not None and (
                         existing.owner_tenant_id != owner_principal.tenant_id
