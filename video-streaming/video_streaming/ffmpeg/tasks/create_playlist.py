@@ -1,10 +1,14 @@
 from abc import ABC
 import os
+import re
+import shlex
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
+from ffmpeg_streaming._command_builder import command_builder
+from video_streaming.execution.process_control import run_streaming_process
 from video_streaming.ffmpeg.package_validation import validate_package
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
@@ -202,6 +206,11 @@ def create_playlist(
     expected_renditions = []
     validation_report = None
     validation_payload = None
+    process_usage = {}
+
+    def record_process_usage(metrics):
+        process_usage.update(metrics)
+        lease_heartbeat.on_usage(metrics)
 
     def process_resource_metrics():
         peak_memory_bytes = self.cache.get(
@@ -287,17 +296,61 @@ def create_playlist(
                 str(index) for index, _ in enumerate(representations)
             ]
 
-        playlist.output(
-            output_path,
-            monitor=FfmpegCallback(
-                task=self,
-                task_id=self.request.id.__str__(),
-                output_id=output_id,
-                request_id=request_id,
-                on_progress=lease_heartbeat.on_progress,
-            ).progress,
-            ffmpeg_bin=settings.FFMPEG_BIN_PATH,
-            async_run=async_run,
+        # Let the library prepare HLS/DASH output paths and master
+        # playlists, but do not delegate process ownership to its internal
+        # monitor thread. The shared process supervisor owns timeout,
+        # cancellation, process-tree termination and callback failures.
+        playlist.output(output_path, run_command=False)
+        ffmpeg_callback = FfmpegCallback(
+            task=self,
+            task_id=self.request.id.__str__(),
+            output_id=output_id,
+            request_id=request_id,
+            on_progress=lease_heartbeat.on_progress,
+        )
+        duration_seconds = 0.0
+        current_seconds = 0.0
+
+        def report_progress(line, process):
+            nonlocal duration_seconds, current_seconds
+            duration_match = re.search(
+                r"Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)",
+                line,
+            )
+            current_match = re.search(
+                r"\\btime=(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)",
+                line,
+            )
+            if duration_match:
+                hours, minutes, seconds = duration_match.groups()
+                duration_seconds = (
+                    int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                )
+            if current_match:
+                hours, minutes, seconds = current_match.groups()
+                current_seconds = (
+                    int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                )
+            ffmpeg_callback.progress(
+                line,
+                duration_seconds,
+                current_seconds,
+                max(0.0, duration_seconds - current_seconds),
+                process,
+            )
+
+        command = shlex.split(
+            command_builder(settings.FFMPEG_BIN_PATH, playlist)
+        )
+        run_streaming_process(
+            command,
+            timeout_seconds=settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS,
+            on_line=report_progress,
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
+            on_usage=record_process_usage,
         )
 
         lease_heartbeat.assert_owned()
@@ -328,8 +381,11 @@ def create_playlist(
                 "input_bytes": input_bytes,
                 # Storage is charged to the separate publication Attempt.
                 "output_bytes": 0,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
-                **process_resource_metrics(),
+                "cpu_seconds": process_usage.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": process_usage.get("peak_memory_bytes"),
+                "memory_duration_ms": process_usage.get("memory_duration_ms"),
                 "local_package": {
                     "directory": directory,
                     "manifest_path": output_path,
