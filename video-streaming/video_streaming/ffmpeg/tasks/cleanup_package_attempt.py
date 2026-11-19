@@ -54,3 +54,42 @@ def cleanup_package_attempt(
             )
         ),
     )
+
+
+@celery_app.task(
+    name="cleanup_abandoned_packages",
+    base=BaseStreamingTask,
+    **TASK_DECORATOR_KWARGS
+)
+def cleanup_abandoned_packages(self, limit=100):
+    """Periodically reclaim old package namespaces approved by PostgreSQL."""
+    repository = get_workflow_repository(required=True)
+    candidates = repository.list_reclaimable_package_attempts(
+        minimum_age_seconds=(
+            settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
+        ),
+        limit=limit,
+    )
+    results = []
+    for item in candidates:
+        results.append(cleanup_abandoned_attempt_package(
+            storage=self.s3_service,
+            bucket=item["bucket"],
+            inventory_key=item["inventory_key"],
+            attempt_prefix=item["prefix"],
+            is_reclaimable=lambda candidate_id, bucket, prefix: (
+                repository.is_attempt_reclaimable(
+                    candidate_id,
+                    bucket,
+                    prefix,
+                    minimum_age_seconds=(
+                        settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS
+                    ),
+                )
+            ),
+        ))
+    return {
+        "candidates": len(candidates),
+        "deleted": sum(1 for result in results if result["deleted"]),
+        "skipped": sum(1 for result in results if not result["deleted"]),
+    }
