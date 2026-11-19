@@ -2577,10 +2577,28 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None:
                 return False
+            stage = session.get(StageRecord, attempt.stage_id)
+            if stage is None:
+                return False
             if attempt.state not in (
                     AttemptState.FAILED.value,
-                    AttemptState.CANCELLED.value):
+                    AttemptState.CANCELLED.value,
+                    AttemptState.RETRYABLE.value):
                 return False
+            if attempt.state == AttemptState.RETRYABLE.value:
+                newer_attempt = session.execute(
+                    select(AttemptRecord.id).where(
+                        AttemptRecord.stage_id == attempt.stage_id,
+                        AttemptRecord.attempt_number > attempt.attempt_number,
+                    ).limit(1)
+                ).scalar_one_or_none()
+                if (
+                        newer_attempt is None
+                        and stage.status not in (
+                            StageState.FINISHED.value,
+                            StageState.FAILED.value,
+                            StageState.CANCELLED.value)):
+                    return False
             if any((
                     attempt.lease_owner,
                     attempt.lease_token_hash,
