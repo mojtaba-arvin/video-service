@@ -1054,21 +1054,6 @@ class WorkflowRepository:
                 .where(AttemptRecord.stage_id == stage.id)
             ).scalar_one() + 1
             attempt_id = new_id()
-            attempt_metrics = {}
-            if package_output_key is not None:
-                attempt_manifest_key = attempt_scoped_object_key(
-                    package_output_key, attempt_id
-                )
-                attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
-                attempt_metrics["package_publication"] = {
-                    "bucket": package_output_bucket,
-                    "logical_key": package_output_key,
-                    "prefix": attempt_prefix,
-                    "inventory_key": "{}/.{}.artifacts.json".format(
-                        attempt_prefix,
-                        package_output_key.rsplit("/", 1)[-1],
-                    ),
-                }
             session.add(AttemptRecord(
                 id=attempt_id,
                 stage_id=stage.id,
@@ -1081,7 +1066,6 @@ class WorkflowRepository:
                 lease_expires_at=lease_expires_at,
                 heartbeat_at=now,
                 started_at=now,
-                metrics_json=attempt_metrics,
             ))
             stage.status = StageState.PROCESSING.value
             stage.updated_at = now
@@ -1273,6 +1257,21 @@ class WorkflowRepository:
                 .where(AttemptRecord.stage_id == stage.id)
             ).scalar_one() + 1
             attempt_id = new_id()
+            attempt_metrics = {}
+            if package_output_key is not None:
+                attempt_manifest_key = attempt_scoped_object_key(
+                    package_output_key, attempt_id
+                )
+                attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
+                attempt_metrics["package_publication"] = {
+                    "bucket": package_output_bucket,
+                    "logical_key": package_output_key,
+                    "prefix": attempt_prefix,
+                    "inventory_key": "{}/.{}.artifacts.json".format(
+                        attempt_prefix,
+                        package_output_key.rsplit("/", 1)[-1],
+                    ),
+                }
             session.add(AttemptRecord(
                 id=attempt_id,
                 stage_id=stage.id,
@@ -1285,6 +1284,7 @@ class WorkflowRepository:
                 lease_expires_at=lease_expires_at,
                 heartbeat_at=now,
                 started_at=now,
+                metrics_json=attempt_metrics,
             ))
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
