@@ -27,7 +27,7 @@ class FakeKeyProvider:
         wrapped = bytes(value ^ 0xA5 for value in self.data_key)
         return bytearray(self.data_key), wrapped
 
-    def decrypt_data_key(self, wrapped_key, encryption_context):
+    def decrypt_data_key(self, wrapped_key, encryption_context, key_id=None):
         self.contexts.append(dict(encryption_context))
         return bytearray(value ^ 0xA5 for value in wrapped_key)
 
