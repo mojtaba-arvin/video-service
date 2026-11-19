@@ -135,6 +135,12 @@ jobs:
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env
           git check-ignore --quiet --no-index video-streaming/video_streaming/.env.local
 
+      - name: Prepare safe environment for settings imports
+        run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
+
+      - name: Prepare safe environment for settings imports
+        run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
+
       - name: Run regression suite
         env:
           PYTHONPATH: video-streaming
