@@ -215,7 +215,7 @@ class PackagePublicationTests(unittest.TestCase):
             self.bucket,
             result["inventory_key"],
             "vod/.attempts/pub-orphan",
-            is_reclaimable=lambda _attempt_id: False,
+            is_reclaimable=lambda _attempt_id, _bucket, _prefix: False,
         )
         self.assertFalse(skipped["deleted"])
         self.assertEqual(set(self.storage.objects), before)
@@ -226,7 +226,11 @@ class PackagePublicationTests(unittest.TestCase):
             self.bucket,
             result["inventory_key"],
             "vod/.attempts/pub-orphan",
-            is_reclaimable=lambda attempt_id: attempt_id == "pub-orphan",
+            is_reclaimable=lambda attempt_id, bucket, prefix: (
+                attempt_id == "pub-orphan"
+                and bucket == self.bucket
+                and prefix == "vod/.attempts/pub-orphan"
+            ),
         )
         self.assertTrue(removed["deleted"])
         self.assertEqual(removed["objects"], 4)
@@ -250,7 +254,7 @@ class PackagePublicationTests(unittest.TestCase):
                 self.bucket,
                 "vod/.artifacts.json",
                 "vod/.attempts/pub-1",
-                is_reclaimable=lambda _attempt_id: True,
+                is_reclaimable=lambda _attempt_id, _bucket, _prefix: True,
             )
 
     def test_lease_loss_during_upload_cleans_only_current_attempt(self):
