@@ -40,7 +40,7 @@ class WorkflowOutboxRepositoryTests(unittest.TestCase):
             "job_id": job_id,
             "nodes": [{
                 "node_id": "probe-input",
-                "operation": "video.probe",
+                "operation": "video.input.analyze",
                 "stage_key": "probe-input",
                 "depends_on": [],
                 "parameters": {},
