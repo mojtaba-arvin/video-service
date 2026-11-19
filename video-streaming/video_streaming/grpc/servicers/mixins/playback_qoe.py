@@ -23,7 +23,7 @@ class PlaybackQoEMixin:
 
     def start_playback_session(self, request, context):
         repository = require_job_access(
-            request.tracking_id, "video.playback:write"
+            request.tracking_id, "video.playback:write", context
         )
         try:
             result = repository.start_playback_session(
@@ -44,7 +44,7 @@ class PlaybackQoEMixin:
 
     def record_playback_event(self, request, context):
         require_playback_session_access(
-            request.session_id, "video.playback:write"
+            request.session_id, "video.playback:write", context
         )
         repository = self._playback_repository(context)
         try:
@@ -95,7 +95,7 @@ class PlaybackQoEMixin:
 
     def get_playback_qoe_report(self, request, context):
         repository = require_job_access(
-            request.tracking_id, "video.qoe:read"
+            request.tracking_id, "video.qoe:read", context
         )
         try:
             report = repository.get_playback_qoe_report(
