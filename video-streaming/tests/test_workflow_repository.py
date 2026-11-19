@@ -21,6 +21,7 @@ from video_streaming.workflows.repository import (
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
+from video_streaming.workflows.artifacts import attempt_scoped_object_key
 
 
 @unittest.skipUnless(
@@ -1638,6 +1639,84 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertNotEqual(old_id, new_id)
         self.assertTrue(self.repository.is_attempt_reclaimable(
             old_id, "vod-output", prefix, minimum_age_seconds=86400
+        ))
+
+    def test_crash_after_package_upload_retries_with_a_new_namespace(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        old_id, _, old_token, old_expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-before-db-commit"
+            )
+        )
+        old_key = attempt_scoped_object_key(
+            "vod/master.m3u8", old_id
+        )
+        self.repository.start_publishing(
+            job_id, "p0", old_id, lease_token=old_token
+        )
+
+        # Model a worker crash after remote upload/readback but before the
+        # Artifact-pointer transaction commits.
+        self.repository.recover_expired_attempts(now=old_expiry)
+        with self.repository._session.begin() as session:
+            old_attempt = session.get(AttemptRecord, old_id)
+            old_attempt.finished_at = utcnow() - timedelta(days=2)
+
+        new_id, _, new_token, _ = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="replacement-after-crash",
+            processing_attempt_id=processing_id,
+        )
+        new_key = attempt_scoped_object_key(
+            "vod/master.m3u8", new_id
+        )
+        self.assertNotEqual(old_key, new_key)
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id, "p0", old_id,
+                artifacts=[{
+                    "artifact_type": "streaming_manifest",
+                    "logical_name": "master",
+                    "uri": "s3://vod-output/{}".format(old_key),
+                }],
+                lease_token=old_token,
+            )
+
+        self.repository.start_publishing(
+            job_id, "p0", new_id, lease_token=new_token
+        )
+        self.repository.finish_stage(
+            job_id, "p0", new_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://vod-output/{}".format(new_key),
+            }],
+            lease_token=new_token,
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        available_manifests = [
+            item["uri"] for item in stage["artifacts"]
+            if item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+        ]
+        self.assertEqual(
+            available_manifests, ["s3://vod-output/{}".format(new_key)]
+        )
+        self.assertTrue(self.repository.is_attempt_reclaimable(
+            old_id,
+            "vod-output",
+            "vod/.attempts/{}".format(old_id),
+            minimum_age_seconds=86400,
         ))
 
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
