@@ -212,6 +212,12 @@ def create_playlist(
         process_usage.update(metrics)
         lease_heartbeat.on_usage(metrics)
 
+    def process_resource_metrics():
+        return {
+            "peak_memory_bytes": process_usage.get("peak_memory_bytes"),
+            "memory_duration_ms": process_usage.get("memory_duration_ms"),
+        }
+
 
     try:
         input_bytes = os.path.getsize(video_path)
