@@ -12,7 +12,10 @@ from video_streaming.workflows.domain import (
     StageAlreadyRunning,
     StageState,
 )
-from video_streaming.workflows.repository import WorkflowRepository, WorkflowRecord, utcnow
+from video_streaming.workflows.repository import (
+    WorkflowRepository, WorkflowRecord, JobRecord, utcnow
+)
+from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
@@ -57,6 +60,77 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertTrue(created)
         self.assertEqual(returned_id, job_id)
         return job_id
+
+
+    def make_owner_principal(self, tenant="tenant-a", subject="subject-1"):
+        from datetime import datetime, timezone
+        return RequestPrincipal(
+            issuer="https://issuer.example.test/",
+            subject=subject,
+            tenant_id=tenant,
+            scopes=frozenset(["video.jobs:read", "video.jobs:create"]),
+            roles=frozenset(),
+            authentication_method="bearer",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+
+    def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
+        principal = self.make_owner_principal()
+        job_id = str(uuid4())
+        key = "idem-owned-{}".format(uuid4())
+        created = self.repository.create_job(
+            job_id, key, "a" * 64, owner_principal=principal
+        )
+        self.assertEqual(created, (job_id, True))
+        with self.repository._session() as session:
+            record = session.query(JobRecord).filter_by(id=job_id).one()
+            self.assertEqual(record.owner_tenant_id, "tenant-a")
+            self.assertEqual(record.owner_issuer, principal.issuer)
+            self.assertEqual(record.owner_subject, "subject-1")
+
+        self.assertTrue(self.repository.authorize_job_access(
+            job_id, principal, "video.jobs:read"
+        ))
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_job_access(
+                job_id, self.make_owner_principal(tenant="tenant-b"),
+                "video.jobs:read",
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_job_access(
+                job_id, self.make_owner_principal(subject="different-subject"),
+                "video.jobs:read",
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_job_access(
+                job_id, principal, "video.jobs:cancel"
+            )
+
+    def test_legacy_unowned_job_remains_unowned_and_is_not_authorized(self):
+        job_id = self.create_job()
+        with self.repository._session() as session:
+            record = session.query(JobRecord).filter_by(id=job_id).one()
+            self.assertIsNone(record.owner_tenant_id)
+            self.assertIsNone(record.owner_issuer)
+            self.assertIsNone(record.owner_subject)
+
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_job_access(
+                job_id, self.make_owner_principal(), "video.jobs:read"
+            )
+
+    def test_idempotent_replay_cannot_cross_owner_boundary(self):
+        principal = self.make_owner_principal()
+        job_id = str(uuid4())
+        key = "idem-owner-replay-{}".format(uuid4())
+        self.repository.create_job(
+            job_id, key, "b" * 64, owner_principal=principal
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_job(
+                str(uuid4()), key, "b" * 64,
+                owner_principal=self.make_owner_principal(tenant="tenant-b"),
+            )
 
     def test_idempotent_create_returns_same_durable_job(self):
         job_id = str(uuid4())
