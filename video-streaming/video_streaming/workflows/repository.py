@@ -1151,7 +1151,9 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
-            if stage.status == StageState.PUBLISHING.value:
+            if stage.status in (
+                    StageState.VALIDATED.value,
+                    StageState.PUBLISHING.value):
                 running = session.execute(
                     select(AttemptRecord).where(
                         AttemptRecord.stage_id == stage.id,
@@ -1159,10 +1161,16 @@ class WorkflowRepository:
                     ).order_by(AttemptRecord.attempt_number.desc())
                     .with_for_update()
                 ).scalar_one_or_none()
-                if running is None or not self._recover_expired_attempt_in_session(
-                        session, stage, running, now, pricing):
+                if running is not None:
+                    if not self._recover_expired_attempt_in_session(
+                            session, stage, running, now, pricing):
+                        raise StageAlreadyRunning(
+                            "Stage {} already has a live publication attempt"
+                            .format(stage_key)
+                        )
+                elif stage.status == StageState.PUBLISHING.value:
                     raise StageAlreadyRunning(
-                        "Stage {} already has a live publication attempt".format(
+                        "Stage {} is publishing without an active Attempt".format(
                             stage_key
                         )
                     )
