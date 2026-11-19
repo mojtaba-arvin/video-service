@@ -33,6 +33,7 @@ def _publish_leased_file(
     publication_id, _, lease_token, _ = repository.claim_publication_attempt(
         job_id=request_id,
         stage_key=output_id,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
         lease_owner=("celery:{}".format(
             getattr(task.request, "hostname", None) or "worker"
         ))[:255],
@@ -47,7 +48,7 @@ def _publish_leased_file(
         output_id,
         publication_id,
         lease_token,
-        lease_ttl_seconds=60,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
     object_key = attempt_scoped_object_key(s3_output_key, publication_id)
     metrics = {
