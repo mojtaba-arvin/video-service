@@ -5,14 +5,12 @@ from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
-from video_streaming.ffmpeg.package_validation import (
-    reset_package_directory,
-    validate_package,
-)
+from video_streaming.ffmpeg.package_validation import validate_package
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.lease import AttemptLeaseHeartbeat
+from video_streaming.workflows.artifacts import attempt_scoped_local_output_path
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
@@ -188,20 +186,20 @@ def create_playlist(
             output_id,
             request_id)
 
-        managed_output_directory = output_path is None
-        output_path, directory = self.ensure_set_output_location(
-            request_id,
-            output_id,
-            output_path=output_path,
-            s3_output_key=s3_output_key,
-        )
-
-        if managed_output_directory:
-            directory = reset_package_directory(
-                directory,
+        base_output_path = output_path
+        if base_output_path is None:
+            output_filename = s3_output_key.rpartition("/")[-1]
+            base_output_path = os.path.join(
                 self.get_outputs_root_directory(request_id),
+                str(output_id),
+                output_filename,
             )
+        output_path, directory = attempt_scoped_local_output_path(
+            base_output_path, attempt_id
+        )
+        os.makedirs(directory, exist_ok=True)
 
+        lease_heartbeat.assert_owned()
         playlist = self.initial_protocol(
             video_path,
             output_id,
@@ -215,6 +213,7 @@ def create_playlist(
             quality_names=quality_names,
         )
 
+        lease_heartbeat.assert_owned()
         representations = list(playlist.reps)
         if is_hls:
             manifest_stem = os.path.splitext(
