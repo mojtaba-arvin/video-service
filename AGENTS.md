@@ -36,7 +36,10 @@ Before material architecture or runtime changes, read:
 - `docs/engineering/reliability-observability-standard.md` — mandatory failure, telemetry, SLO, testing and operational readiness standard.
 - `docs/decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md` — accepted architecture decision.
 - `docs/decisions/0005-modular-core-and-replaceable-adapters.md` — module boundaries and provider replacement policy.
-- Relevant skill guides under `.agents/skills/`.
+- For authentication, tenant ownership, callbacks, or secrets, also read:
+  - `docs/decisions/0008-job-scoped-encrypted-secret-references.md` — secret storage and resolution gates.
+  - `docs/decisions/0009-provider-neutral-grpc-identity-and-resource-authorization.md` — identity, ownership, and authorization contract.
+- Relevant skill guides under `.agents/skills/`; security-sensitive changes must use `security-boundary-review`, and Job/Workflow/Stage/Attempt changes must use `durable-workflow-design`.
 
 ## Verification
 
