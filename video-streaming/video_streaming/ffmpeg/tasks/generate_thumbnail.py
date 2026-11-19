@@ -137,6 +137,7 @@ def generate_thumbnail(
             ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
             ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
             timeout_seconds=settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS,
+            probe_timeout_seconds=settings.FFPROBE_VALIDATION_TIMEOUT_SECONDS,
             should_cancel=lambda: (
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
@@ -148,6 +149,11 @@ def generate_thumbnail(
             ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
             expected_width=scale_width if scale_width > 0 else None,
             expected_height=scale_height if scale_height > 0 else None,
+            probe_timeout_seconds=settings.FFPROBE_VALIDATION_TIMEOUT_SECONDS,
+            should_cancel=lambda: (
+                self.is_forced_to_stop(request_id)
+                or self.is_output_forced_to_stop(request_id, output_id)
+            ),
         )
         validation_report = {
             "valid": True,
