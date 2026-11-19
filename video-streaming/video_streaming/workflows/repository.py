@@ -1195,7 +1195,15 @@ class WorkflowRepository:
             attempt_id,
             validation_report,
             lease_token=None):
-        """Persist the structured report as a first-class artifact."""
+        """Persist a successful structured report as a first-class artifact."""
+        if not isinstance(validation_report, dict):
+            raise ValueError("validation_report must be a dictionary")
+        if validation_report.get("valid") is not True:
+            raise ValueError("Only a valid report can validate a workflow stage")
+        errors = validation_report.get("errors")
+        if not isinstance(errors, list) or errors:
+            raise ValueError("A valid report must contain an empty errors list")
+
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
@@ -1212,6 +1220,10 @@ class WorkflowRepository:
                 ).scalar_one_or_none()
                 if existing is not None:
                     return False
+            if attempt.state != AttemptState.RUNNING.value:
+                raise InvalidStateTransition(
+                    "Only a running attempt can validate a workflow stage"
+                )
             previous_status = stage.status
             self._transition(stage, StageState.VALIDATED)
             stage.output_contract_json = {
