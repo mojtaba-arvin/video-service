@@ -44,12 +44,13 @@ def upgrade():
             name="ck_workflow_outbox_schema_version",
         ),
         sa.CheckConstraint(
-            "(locked_by IS NULL AND lock_token_hash IS NULL AND "
-            "lease_expires_at IS NULL) OR "
-            "(locked_by IS NOT NULL AND lock_token_hash IS NOT NULL AND "
-            "lease_expires_at IS NOT NULL)",
+            "(state = 'PROCESSING' AND locked_by IS NOT NULL AND "
+            "lock_token_hash IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(state <> 'PROCESSING' AND locked_by IS NULL AND "
+            "lock_token_hash IS NULL AND lease_expires_at IS NULL)",
             name="ck_workflow_outbox_lease_complete",
         ),
+        sa.CheckConstraint("attempts >= 0", name="ck_workflow_outbox_attempts"),
         sa.ForeignKeyConstraint(
             ["job_id"], ["workflow_jobs.id"],
             name="fk_workflow_outbox_job", ondelete="CASCADE",
