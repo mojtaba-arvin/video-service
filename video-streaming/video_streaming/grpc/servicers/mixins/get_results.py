@@ -1,4 +1,5 @@
 import pprint
+from urllib.parse import urlsplit
 
 from ffmpeg_streaming.ffprobe import Streams
 from video_streaming.cache import RedisCache
@@ -54,6 +55,38 @@ class GetResultsMixin(object):
             "CANCELLED": "OUTPUT_REVOKED",
         }.get(stage.get("status"))
 
+    def _artifact_uploaded_to(self, stage, artifact_types):
+        """Resolve the authoritative published S3 Artifact for a result."""
+        if stage is None:
+            return None
+        for artifact in reversed(stage.get("artifacts", [])):
+            if (
+                    artifact.get("type") not in artifact_types
+                    or artifact.get("status") != "AVAILABLE"):
+                continue
+            uri = artifact.get("uri")
+            if not isinstance(uri, str):
+                continue
+            parsed = urlsplit(uri)
+            if (
+                    parsed.scheme != "s3"
+                    or not parsed.netloc
+                    or not parsed.path
+                    or parsed.query
+                    or parsed.fragment
+                    or parsed.username
+                    or parsed.password):
+                continue
+            key = parsed.path.lstrip("/")
+            if not key or any(
+                    part in ("", ".", "..") for part in key.split("/")):
+                continue
+            return self.pb2.UploadedTo(
+                bucket=parsed.netloc,
+                key=key,
+            )
+        return None
+
     def _playlists(self, request_id, output_ids, outputs, durable_stages=None):
         durable_stages = durable_stages or {}
         for output_id in output_ids:
@@ -88,6 +121,11 @@ class GetResultsMixin(object):
                         output_status),
                     directory_size=directory_size,
                 )
+                uploaded_to = self._artifact_uploaded_to(
+                    durable_stage, {"streaming_manifest"}
+                )
+                if uploaded_to is not None:
+                    output_details["uploaded_to"] = uploaded_to
                 progress: dict = self.cache.get(
                     CacheKeysTemplates.OUTPUT_PROGRESS.format(
                         request_id=request_id,
@@ -175,6 +213,11 @@ class GetResultsMixin(object):
                         output_status),
                     file_size=file_size,
                 )
+                uploaded_to = self._artifact_uploaded_to(
+                    durable_stage, {"thumbnail", "image_thumbnail"}
+                )
+                if uploaded_to is not None:
+                    output_details["uploaded_to"] = uploaded_to
                 outputs.append(self.pb2.ThumbnailDetails(**output_details))
 
     def _watermarked_video(
@@ -216,6 +259,11 @@ class GetResultsMixin(object):
                     output_status),
                 file_size=file_size
             )
+            uploaded_to = self._artifact_uploaded_to(
+                durable_stage, {"video_file"}
+            )
+            if uploaded_to is not None:
+                output_details["uploaded_to"] = uploaded_to
             progress: dict = self.cache.get(
                 CacheKeysTemplates.OUTPUT_PROGRESS.format(
                     request_id=request_id,
