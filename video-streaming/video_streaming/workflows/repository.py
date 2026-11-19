@@ -2792,6 +2792,16 @@ class WorkflowRepository:
             return referenced is None
 
 
+    def get_attempt_local_package(self, attempt_id):
+        """Read internal shared-volume handoff metadata for a processing Attempt."""
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return None
+            package = (attempt.metrics_json or {}).get("local_package")
+            return dict(package) if isinstance(package, dict) else None
+
+
     def requeue_processing_after_local_package_loss(
             self, job_id, stage_key, processing_attempt_id, reason):
         """Invalidate a local-only validation handoff and safely reprocess it."""
