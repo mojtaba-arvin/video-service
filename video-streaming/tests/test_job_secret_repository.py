@@ -121,7 +121,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
             job_id,
             self.principal,
             "webhook.callback",
-            "video.jobs:callback:resolve",
         )
         self.assertEqual(stored.secret_id, envelope.secret_id)
         self.assertEqual(
@@ -158,7 +157,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
                     job_id,
                     other,
                     "webhook.callback",
-                    "video.jobs:callback:resolve",
                 )
 
     def test_idempotent_replay_never_replaces_existing_secret(self):
@@ -221,7 +219,6 @@ class JobSecretRepositoryTests(unittest.TestCase):
                 job_id,
                 self.principal,
                 "webhook.other-purpose",
-                "video.jobs:callback:resolve",
             )
 
         expired_principal = RequestPrincipal(
