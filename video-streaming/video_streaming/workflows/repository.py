@@ -578,8 +578,13 @@ class WorkflowRepository:
         if enqueue_dispatch:
             if not outbox_dedupe_key:
                 outbox_dedupe_key = "workflow.dispatch:{}".format(job_id)
-            if not isinstance(outbox_dedupe_key, str) or not outbox_dedupe_key.strip():
-                raise ValueError("outbox_dedupe_key must be non-empty")
+            if (
+                    not isinstance(outbox_dedupe_key, str)
+                    or not outbox_dedupe_key.strip()
+                    or len(outbox_dedupe_key) > 255):
+                raise ValueError(
+                    "outbox_dedupe_key must contain 1 to 255 characters"
+                )
         try:
             with self._session.begin() as session:
                 existing = session.execute(
@@ -875,6 +880,17 @@ class WorkflowRepository:
                 )
                 row.attempts += 1
                 row.updated_at = now
+                _record_event(
+                    session,
+                    row.job_id,
+                    row.workflow_id,
+                    "OUTBOX_CLAIMED",
+                    payload={
+                        "outbox_id": row.id,
+                        "attempt": row.attempts,
+                        "lease_expires_at": row.lease_expires_at.isoformat(),
+                    },
+                )
                 claimed.append({
                     "id": row.id,
                     "job_id": row.job_id,
@@ -924,6 +940,13 @@ class WorkflowRepository:
             row.lock_token_hash = None
             row.lease_expires_at = None
             row.last_error = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                "OUTBOX_PUBLISHED",
+                payload={"outbox_id": row.id, "attempt": row.attempts},
+            )
             return True
 
     def retry_outbox(
@@ -973,6 +996,22 @@ class WorkflowRepository:
             row.locked_by = None
             row.lock_token_hash = None
             row.lease_expires_at = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                (
+                    "OUTBOX_RETRY_SCHEDULED"
+                    if row.state == "PENDING"
+                    else "OUTBOX_DEAD_LETTERED"
+                ),
+                payload={
+                    "outbox_id": row.id,
+                    "attempt": row.attempts,
+                    "error_code": row.last_error,
+                    "available_at": row.available_at.isoformat(),
+                },
+            )
             return row.state == "PENDING"
 
     def get_outbox_snapshot(self, outbox_id):
@@ -986,6 +1025,7 @@ class WorkflowRepository:
                 "job_id": row.job_id,
                 "workflow_id": row.workflow_id,
                 "event_type": row.event_type,
+                "schema_version": row.schema_version,
                 "plan_version": row.plan_version,
                 "plan_fingerprint": row.plan_fingerprint,
                 "dedupe_key": row.dedupe_key,
