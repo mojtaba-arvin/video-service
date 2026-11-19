@@ -1807,6 +1807,90 @@ class WorkflowRepositoryTests(unittest.TestCase):
             ],
         )
 
+    def test_single_file_publication_namespace_is_registered_for_janitor(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+            metrics={
+                "cpu_seconds": 0.1,
+                "peak_memory_bytes": 1024,
+                "memory_duration_ms": 100,
+                "output_bytes": 0,
+            },
+            pricing={
+                "model_id": "test-model",
+                "model_version": "1",
+                "currency": "RUNIT",
+                "cpu_per_second": 1,
+                "memory_gb_second": 0.25,
+                "storage_gb": 0.01,
+            },
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="file-publisher",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/thumbnail.jpg",
+                package_output_bucket="vod-output",
+                package_output_kind="single_file",
+            )
+        )
+        namespace = self.repository.get_attempt_publication_namespace(
+            publication_id
+        )
+        self.assertEqual(namespace["kind"], "single_file")
+        self.assertEqual(namespace["bucket"], "vod-output")
+        self.assertEqual(
+            namespace["object_key"],
+            "vod/.attempts/{}/thumbnail.jpg".format(publication_id),
+        )
+        self.assertNotIn("inventory_key", namespace)
+
+        self.repository.fail_attempt(
+            job_id, "p0", publication_id,
+            retryable=False,
+            error_code="FILE_PUBLICATION_FAILED",
+            error_message="synthetic failure",
+            metrics={
+                "cpu_seconds": 0.01,
+                "peak_memory_bytes": 1024,
+                "memory_duration_ms": 10,
+                "output_bytes": 0,
+            },
+            pricing={
+                "model_id": "test-model",
+                "model_version": "1",
+                "currency": "RUNIT",
+                "cpu_per_second": 1,
+                "memory_gb_second": 0.25,
+                "storage_gb": 0.01,
+            },
+            lease_token=publication_token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, publication_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+
+        candidates = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400, limit=100
+        )
+        candidate = next(
+            item for item in candidates
+            if item["attempt_id"] == publication_id
+        )
+        self.assertEqual(candidate["kind"], "single_file")
+        self.assertEqual(
+            candidate["object_key"],
+            namespace["object_key"],
+        )
+        self.assertIsNone(candidate["inventory_key"])
+
     def test_missing_local_package_invalidates_validation_and_allows_reprocessing(self):
         job_id = self.create_job("p0")
         processing_id, _, token, _ = self.repository.claim_attempt(
