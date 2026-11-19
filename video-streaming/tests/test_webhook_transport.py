@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from video_streaming.ffmpeg.webhook_transport import (
     WebhookDestinationError,
     WebhookTarget,
+    WebhookTransportError,
     _PinnedHTTPSConnection,
     request_webhook,
     resolve_webhook_target,
@@ -118,7 +119,7 @@ class WebhookDestinationTests(unittest.TestCase):
         def fail_lookup(hostname, port, type):
             raise socket.gaierror("lookup failed")
 
-        with self.assertRaises(WebhookDestinationError):
+        with self.assertRaises(WebhookTransportError):
             resolve_webhook_target(
                 "https://callback.example.test/hook",
                 resolver=fail_lookup,
