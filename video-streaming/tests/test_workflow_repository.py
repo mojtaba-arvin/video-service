@@ -1240,5 +1240,66 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_fail_attempt_requires_the_current_lease_token(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-failure-fence"
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.fail_attempt(
+                job_id, "p0", attempt_id,
+                retryable=True,
+                error_code="TEST_FAILURE",
+            )
+
+        self.assertTrue(self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=True,
+            error_code="TEST_FAILURE",
+            lease_token=token,
+        ))
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "RETRY_WAIT")
+        self.assertEqual(stage["attempts"][0]["status"], "RETRYABLE")
+
+    def test_expired_worker_cannot_fail_attempt_even_with_original_token(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _, token, expires_at = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-expired-failure"
+        )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=expires_at):
+            with self.assertRaises(AttemptLeaseLost):
+                self.repository.fail_attempt(
+                    job_id, "p0", attempt_id,
+                    retryable=False,
+                    error_code="STALE_WORKER",
+                    lease_token=token,
+                )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PROCESSING")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+
+    def test_stage_snapshot_never_exposes_lease_token_or_digest(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-snapshot-boundary"
+        )
+
+        snapshot = self.repository.get_stage_snapshot(job_id, "p0")
+        serialized_snapshot = repr(snapshot)
+        self.assertNotIn(token, serialized_snapshot)
+        self.assertNotIn("lease_token_hash", serialized_snapshot)
+        self.assertNotIn("lease_expires_at", serialized_snapshot)
+        self.assertEqual(snapshot["attempts"][0]["id"], attempt_id)
+
+
+
 if __name__ == "__main__":
     unittest.main()
