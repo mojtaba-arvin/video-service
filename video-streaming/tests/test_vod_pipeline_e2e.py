@@ -483,21 +483,23 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         for durable_stage in snapshot["stages"]:
             self.assertEqual(durable_stage["status"], "FINISHED")
-            self.assertEqual(len(durable_stage["attempts"]), 1)
-            attempt = durable_stage["attempts"][0]
-            self.assertEqual(attempt["status"], "SUCCEEDED")
-            self.assertGreater(attempt["duration_ms"], 0)
-            self.assertEqual(
-                attempt["input_bytes"], self.input_path.stat().st_size
-            )
-            self.assertGreater(attempt["output_bytes"], 0)
-            self.assertGreater(attempt["artifact_count"], 0)
-            self.assertGreater(attempt["estimated_cost"], 0)
-            self.assertEqual(attempt["cost_currency"], "RUNIT")
-            self.assertEqual(
-                attempt["pricing_model_id"],
-                "relative-resource-index-v1",
-            )
+            self.assertEqual(len(durable_stage["attempts"]), 2)
+            processing_attempt, publication_attempt = durable_stage["attempts"]
+            self.assertEqual(processing_attempt["status"], "SUCCEEDED")
+            self.assertEqual(publication_attempt["status"], "SUCCEEDED")
+            for attempt in (processing_attempt, publication_attempt):
+                self.assertGreater(attempt["duration_ms"], 0)
+                self.assertEqual(
+                    attempt["input_bytes"], self.input_path.stat().st_size
+                )
+                self.assertGreater(attempt["output_bytes"], 0)
+                self.assertGreater(attempt["artifact_count"], 0)
+                self.assertGreater(attempt["estimated_cost"], 0)
+                self.assertEqual(attempt["cost_currency"], "RUNIT")
+                self.assertEqual(
+                    attempt["pricing_model_id"],
+                    "relative-resource-index-v1",
+                )
         playlist_stage = next(
             stage for stage in snapshot["stages"] if stage["key"] == "p0"
         )
@@ -539,17 +541,33 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
 
         output_objects = self.storage.buckets["vod-output"]
-        master_key = "vod/e2e/master.m3u8"
-        variant_key = "vod/e2e/master_144p.m3u8"
+        playlist_manifest = next(
+            item for item in playlist_stage["artifacts"]
+            if item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+        )
+        thumbnail_artifact = next(
+            item for item in thumbnail_stage["artifacts"]
+            if item["type"] == "image_thumbnail"
+            and item["status"] == "AVAILABLE"
+        )
+        master_key = playlist_manifest["uri"].split("vod-output/", 1)[1]
+        thumbnail_key = thumbnail_artifact["uri"].split("vod-output/", 1)[1]
+        package_prefix = master_key.rsplit("/", 1)[0]
+        variant_key = package_prefix + "/master_144p.m3u8"
+        inventory_key = package_prefix + "/.master.m3u8.artifacts.json"
+        self.assertTrue("/.attempts/" in master_key)
+        self.assertTrue("/.attempts/" in thumbnail_key)
         self.assertIn(master_key, output_objects)
         self.assertIn(variant_key, output_objects)
-        self.assertIn("vod/e2e/thumbnail.jpg", output_objects)
-        self.assertIn(
-            "vod/e2e/.master.m3u8.artifacts.json", output_objects
-        )
-        self.assertTrue(
-            any(key.endswith(".ts") for key in output_objects)
-        )
+        self.assertIn(thumbnail_key, output_objects)
+        self.assertIn(inventory_key, output_objects)
+        self.assertTrue(any(
+            key.startswith(package_prefix + "/") and key.endswith(".ts")
+            for key in output_objects
+        ))
+        self.assertNotIn("vod/e2e/master.m3u8", output_objects)
+        self.assertNotIn("vod/e2e/thumbnail.jpg", output_objects)
         self.assertGreater(
             self.storage.upload_order.index(master_key),
             self.storage.upload_order.index(variant_key),
