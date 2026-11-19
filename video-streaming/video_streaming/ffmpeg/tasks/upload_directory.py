@@ -1,4 +1,3 @@
-import json
 from abc import ABC
 from video_streaming import settings
 from video_streaming.celery import celery_app
@@ -58,6 +57,34 @@ def upload_directory(self,
     processing_attempt_id = kwargs.get("attempt_id")
     if not processing_attempt_id:
         raise RuntimeError("Package publication requires its processing attempt id")
+
+    stage = repository.get_stage_snapshot(request_id, output_id)
+    if stage is None:
+        raise RuntimeError(
+            "Durable workflow stage is missing for playlist output {}".format(
+                output_id
+            )
+        )
+    if stage["status"] == "FINISHED":
+        attempt = stage["attempts"][-1] if stage.get("attempts") else {}
+        directory_size = int(attempt.get("output_bytes") or 0)
+        self.cache.set(
+            CacheKeysTemplates.OUTPUT_SIZE.format(
+                request_id=request_id, output_id=output_id
+            ),
+            directory_size,
+        )
+        self.save_output_status(
+            self.output_status.PROCESSING_FINISHED, output_id, request_id
+        )
+        self.save_output_status(
+            self.output_status.UPLOADING_FINISHED, output_id, request_id
+        )
+        return {
+            "directory_size": directory_size,
+            "durable_stage_status": "FINISHED",
+            "replayed": True,
+        }
 
     publication_id, _, lease_token, _ = repository.claim_publication_attempt(
         job_id=request_id,
