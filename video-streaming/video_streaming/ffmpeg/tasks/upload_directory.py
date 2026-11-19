@@ -1,4 +1,5 @@
 from abc import ABC
+import shutil
 from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
@@ -232,6 +233,13 @@ def upload_directory(self,
             message=self.error_messages.CAN_NOT_UPLOAD_FILE,
             request_kwargs=self.request.kwargs,
         )
+
+    # The package's local directory is attempt-scoped. Once the durable
+    # Artifact pointer is committed, it is safe to remove this scratch tree.
+    try:
+        shutil.rmtree(directory)
+    except OSError:
+        pass
 
     directory_size = int(publication["directory_size"])
     self.cache.set(
