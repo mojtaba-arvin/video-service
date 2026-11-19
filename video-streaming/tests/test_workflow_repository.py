@@ -3,7 +3,7 @@
 import os
 import threading
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from video_streaming.workflows.domain import (
@@ -1173,16 +1173,24 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 )
 
     def test_expired_lease_recovery_is_bounded_and_resumable(self):
+        from unittest.mock import patch
+
         job_ids = [self.create_job("p0"), self.create_job("p0")]
         expiries = []
-        for index, job_id in enumerate(job_ids):
-            _, _, _, expiry = self.repository.claim_attempt(
-                job_id,
-                "p0",
-                lease_owner="worker-{}".format(index),
-                lease_ttl_seconds=30,
-            )
-            expiries.append(expiry)
+        fixed_now = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        # Put these test leases before any unrelated stale rows that may remain
+        # in the shared PostgreSQL CI database.
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=fixed_now):
+            for index, job_id in enumerate(job_ids):
+                _, _, _, expiry = self.repository.claim_attempt(
+                    job_id,
+                    "p0",
+                    lease_owner="worker-{}".format(index),
+                    lease_ttl_seconds=30,
+                )
+                expiries.append(expiry)
 
         recovery_time = max(expiries) + timedelta(seconds=1)
         self.assertEqual(
