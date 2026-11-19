@@ -892,6 +892,8 @@ class WorkflowRepository:
 
     @staticmethod
     def _validated_lease_ttl(lease_ttl_seconds):
+        if isinstance(lease_ttl_seconds, bool):
+            raise ValueError("lease_ttl_seconds must be a positive finite number")
         try:
             ttl = float(lease_ttl_seconds)
         except (TypeError, ValueError):
@@ -1191,13 +1193,15 @@ class WorkflowRepository:
             job_id,
             stage_key,
             attempt_id,
-            validation_report):
+            validation_report,
+            lease_token=None):
         """Persist the structured report as a first-class artifact."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
             if stage.status == StageState.VALIDATED.value:
                 existing = session.execute(
                     select(ArtifactRecord).where(
@@ -1243,12 +1247,14 @@ class WorkflowRepository:
             )
             return True
 
-    def start_publishing(self, job_id, stage_key, attempt_id):
+    def start_publishing(
+            self, job_id, stage_key, attempt_id, lease_token=None):
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
             if stage.status == StageState.PUBLISHING.value:
                 if attempt.state == AttemptState.RUNNING.value:
                     return False
@@ -1478,7 +1484,8 @@ class WorkflowRepository:
             attempt_id,
             artifacts=None,
             metrics=None,
-            pricing=None):
+            pricing=None,
+            lease_token=None):
         """Complete the durable stage after publication has been verified."""
         artifacts = list(artifacts or [])
         metrics = dict(metrics or {})
@@ -1491,7 +1498,9 @@ class WorkflowRepository:
                 if attempt.state == AttemptState.SUCCEEDED.value and \
                         stage.status == StageState.FINISHED.value:
                     return False
+                self._assert_attempt_lease(attempt, lease_token)
                 raise InvalidStateTransition("Attempt is not running")
+            self._assert_attempt_lease(attempt, lease_token)
             previous_status = stage.status
             self._transition(stage, StageState.FINISHED)
             finished_at = utcnow()
@@ -1580,7 +1589,8 @@ class WorkflowRepository:
             error_code=None,
             error_message=None,
             metrics=None,
-            pricing=None):
+            pricing=None,
+            lease_token=None):
         metrics = dict(metrics or {})
         target = StageState.RETRY_WAIT if retryable else StageState.FAILED
         attempt_state = (
@@ -1591,6 +1601,7 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
             if attempt.state != AttemptState.RUNNING.value:
                 return False
             if stage.status in (
@@ -1712,6 +1723,53 @@ class WorkflowRepository:
         return True
 
 
+    def recover_expired_attempts(self, now=None, pricing=None, limit=100):
+        """Recover only running attempts whose durable worker lease has expired.
+
+        Stage rows are locked before Attempt rows, matching claim/heartbeat and
+        completion lock ordering so concurrent recoverers cannot double-recover.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        recovered = 0
+        with self._session.begin() as session:
+            candidate_ids = session.execute(
+                select(AttemptRecord.id).where(
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                    AttemptRecord.lease_token_hash.is_not(None),
+                    AttemptRecord.lease_expires_at <= now,
+                ).order_by(
+                    AttemptRecord.lease_expires_at,
+                    AttemptRecord.id,
+                ).limit(limit)
+            ).scalars().all()
+
+            for attempt_id in candidate_ids:
+                candidate = session.get(AttemptRecord, attempt_id)
+                if candidate is None:
+                    continue
+                stage = session.execute(
+                    select(StageRecord).where(
+                        StageRecord.id == candidate.stage_id
+                    ).with_for_update()
+                ).scalar_one_or_none()
+                if stage is None:
+                    continue
+                attempt = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.id == attempt_id
+                    ).with_for_update()
+                ).scalar_one_or_none()
+                if attempt is None:
+                    continue
+                if self._recover_expired_attempt_in_session(
+                        session, stage, attempt, now, pricing):
+                    recovered += 1
+        return recovered
+
     def recover_stale_attempts(self, older_than, pricing=None):
         """Move abandoned running attempts to RETRY_WAIT without Redis TTL."""
         recovered = 0
@@ -1721,6 +1779,7 @@ class WorkflowRepository:
                 select(AttemptRecord).where(
                     AttemptRecord.state == AttemptState.RUNNING.value,
                     AttemptRecord.started_at < older_than,
+                    AttemptRecord.lease_token_hash.is_(None),
                 ).with_for_update()
             ).scalars().all()
             for attempt in attempts:
