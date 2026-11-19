@@ -20,11 +20,18 @@ that FFmpeg/S3 side effects are fenced after a worker loses its lease.
 Attempt-scoped deterministic artifacts and side-effect idempotency remain
 required before dispatch replay can be enabled.
 
-PR #123 is open and unmerged. The transactional outbox and relay are not
-implemented. Do not activate broker-backed plan dispatch until authenticated
-CreateJob/secret resolution, complete stage coverage, worker lease/heartbeat
-integration, external side-effect fencing, crash recovery and duplicate
-delivery tests all pass.
+PR #123 is open and unmerged. Its CI run #44469241842 and Dependency Review
+run #44469241786 both passed on head `7356c90086c1b4948a662f2ca7686c4f01419f55`
+(2026-11-19). This verifies the repository-level lease primitives and existing
+regression/E2E suites; it does not verify live worker lease integration.
+
+The required Celery integration sequence, including the separate processing
+and publication lease model, is specified as a proposed design in
+[ADR 0010](0010-celery-attempt-lease-worker-integration.md). The transactional
+outbox and relay are not implemented. Do not activate broker-backed plan
+dispatch until authenticated CreateJob/secret resolution, complete stage
+coverage, worker lease/heartbeat integration, external side-effect fencing,
+crash recovery and duplicate delivery tests all pass.
 
 ## Context
 
