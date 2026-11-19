@@ -57,8 +57,8 @@ def _publish_leased_file(
         "cpu_seconds": None,
         "peak_memory_bytes": None,
         "memory_duration_ms": None,
-        "output_bytes": file_size,
-        "artifact_count": 1,
+        "output_bytes": None,
+        "artifact_count": 0,
     }
 
     heartbeat.assert_owned()
@@ -128,6 +128,8 @@ def _publish_leased_file(
             )
 
         metrics.update(resource_meter.stop())
+        metrics["output_bytes"] = file_size
+        metrics["artifact_count"] = 1
         if task.is_forced_to_stop(request_id) or task.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
