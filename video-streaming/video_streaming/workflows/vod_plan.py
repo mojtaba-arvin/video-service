@@ -213,8 +213,8 @@ def _normalize_output(output, kind, index):
         )
         if not (numeric_time or timestamp_time):
             raise VODPlanBuildError(
-                "{}[{}].thumbnail_time must be a non-negative number or "
-                "FFmpeg timestamp".format(kind, index)
+                "{}[{}].thumbnail_time must be non-negative and either a "
+                "number or an FFmpeg timestamp".format(kind, index)
             )
         if isinstance(thumbnail_time, str):
             thumbnail_time = thumbnail_time.strip()
