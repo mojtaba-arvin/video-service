@@ -10,6 +10,8 @@
 
 A lease token is process-local capability material. It is returned by `claim_attempt()`, held only in the worker that claimed the Attempt, and supplied to repository mutations and heartbeat renewal. It must never be included in Celery signatures/kwargs, task results, Redis projections, logs, traces, or durable event payloads.
 
+The integrated worker paths use the shared `WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS` setting (default 60 seconds, bounded to 1–86400 seconds). The heartbeat renews at one third of the configured TTL unless an explicit shorter interval is supplied.
+
 The current task graph separates media processing from S3 publication. Therefore a single lease must not be passed from a processing task to an upload task. The intended model is two independently claimed Attempts for the same Stage:
 
 1. A processing task claims the Stage, creates and validates an attempt-scoped local artifact, persists the validation report, and atomically closes its Attempt while leaving the Stage in VALIDATED.
