@@ -216,6 +216,12 @@ def _publish_leased_file(
             raise task.raise_revoke(request_id)
         raise task.raise_revoke_output(request_id, output_id)
 
+    try:
+        os.remove(file_path)
+    except OSError:
+        # Publication is already durable; local scratch cleanup is best-effort.
+        pass
+
     task.cache.set(
         CacheKeysTemplates.OUTPUT_SIZE.format(
             request_id=request_id, output_id=output_id
