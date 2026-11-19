@@ -7,24 +7,35 @@
 
 ## Implementation status (2026-11-19)
 
-PR #123 adds the first durable Attempt lease primitives on top of the encrypted
-Job Secret Store work in PRs #119/#121. The implementation adds one-time
-worker lease tokens (persisted only as SHA-256 digests), lease owner/expiry and
-heartbeat timestamps, guarded renewal, expiry recovery and token checks on
-leased-attempt validation/publication/completion/failure writes.
+The canonical implementation stack has progressed beyond the original lease-only
+state:
 
-This is **not yet live worker integration**. Existing Celery task call sites
-still use the legacy `start_attempt()` API; no production task has switched to
-`claim_attempt()` or periodic heartbeat renewal. The lease API is not proof
-that FFmpeg/S3 side effects are fenced after a worker loses its lease.
-Attempt-scoped deterministic artifacts and side-effect idempotency remain
-required before dispatch replay can be enabled.
+- PR #123 adds durable Attempt lease primitives, hashed one-time lease tokens,
+  guarded renewal, expiry recovery and repository mutation fencing.
+- PR #127 integrates processing/publication Attempts, heartbeats, attempt-scoped
+  artifacts, storage readback, and recovery for the VOD playlist/thumbnail/
+  watermark output paths. It does not migrate every preflight, input, fan-in,
+  and notification node into durable Stages.
+- The current outbox foundation branch adds migration 0009 and repository
+  primitives for atomic plan-reference insertion, bounded leased claims,
+  fenced acknowledgement, retry and dead-letter state. The payload is a
+  schema-versioned reference to an immutable plan fingerprint; it is not a
+  Celery Canvas or executable task description.
 
-PR #123 is open and unmerged. The transactional outbox and relay are not
-implemented. Do not activate broker-backed plan dispatch until authenticated
-CreateJob/secret resolution, complete stage coverage, worker lease/heartbeat
-integration, external side-effect fencing, crash recovery and duplicate
-delivery tests all pass.
+The outbox foundation is not yet merged and is deliberately **not activated**:
+the gRPC CreateJob path does not enqueue dispatch intents, no plan-to-Celery
+relay is enabled, and the complete legacy request graph is not yet represented
+by the durable execution-plan contract. The full broker-backed relay, consumer
+deduplication/claims for every node, cancellation suppression, poison-message
+operator replay, and real broker crash/replay tests remain outstanding.
+
+PR #123 and PR #127 are open and unmerged. The temporary validation PR #128 is
+closed without merge. The successful CI run on the PR #127 head validates the
+VOD slice only; it does not validate transactional dispatch or deployment.
+
+**Do not enable outbox dispatch or claim Deployment readiness** until the full
+execution-plan and idempotent-consumer acceptance criteria in this ADR pass.
+See the [outbox foundation runbook](../operations/transactional-outbox-foundation.md).
 
 ## Context
 
