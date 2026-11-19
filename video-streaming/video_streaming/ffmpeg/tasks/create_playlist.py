@@ -138,9 +138,12 @@ def create_playlist(
                 and item.get("status") == "SUCCEEDED"
             ), None)
             if processing_attempt is not None:
-                local_directory = metadata.get("local_output_directory")
-                local_manifest = metadata.get("local_manifest_path")
-                expected = metadata.get("expected_renditions") or []
+                local_package = workflow_repository.get_attempt_local_package(
+                    processing_attempt["id"]
+                ) or {}
+                local_directory = local_package.get("directory")
+                local_manifest = local_package.get("manifest_path")
+                expected = local_package.get("expected_renditions") or []
                 local_package_available = (
                     isinstance(local_directory, str)
                     and os.path.isdir(local_directory)
@@ -318,12 +321,6 @@ def create_playlist(
         )
         validation_report.require_valid()
         validation_payload = validation_report.as_dict()
-        validation_payload.update({
-            "local_output_directory": directory,
-            "local_manifest_path": output_path,
-            "expected_renditions": list(expected_renditions),
-            "package_type": "hls" if is_hls else "dash",
-        })
         lease_heartbeat.assert_owned()
         workflow_repository.complete_processing_attempt(
             job_id=request_id,
@@ -335,6 +332,12 @@ def create_playlist(
                 "input_bytes": input_bytes,
                 "cpu_seconds": child_cpu_seconds_since(cpu_started),
                 **process_resource_metrics(),
+                "local_package": {
+                    "directory": directory,
+                    "manifest_path": output_path,
+                    "expected_renditions": list(expected_renditions),
+                    "package_type": "hls" if is_hls else "dash",
+                },
             },
             pricing=configured_pricing(settings),
         )
