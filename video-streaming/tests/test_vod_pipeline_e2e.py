@@ -792,5 +792,54 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
 
 
 
+    def test_result_details_expose_authoritative_attempt_scoped_s3_location(self):
+        stage = {
+            "artifacts": [
+                {
+                    "type": "image_thumbnail",
+                    "status": "AVAILABLE",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/old/thumb.jpg",
+                },
+                {
+                    "type": "image_thumbnail",
+                    "status": "AVAILABLE",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/current/thumb.jpg",
+                },
+                {
+                    "type": "image_thumbnail",
+                    "status": "PENDING",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/pending/thumb.jpg",
+                },
+            ],
+        }
+
+        uploaded_to = self.servicer._artifact_uploaded_to(
+            stage, {"image_thumbnail"}
+        )
+
+        self.assertEqual(uploaded_to.bucket, "video-output")
+        self.assertEqual(
+            uploaded_to.key,
+            "jobs/job-1/.attempts/current/thumb.jpg",
+        )
+
+    def test_result_details_ignore_non_s3_or_signed_artifact_uris(self):
+        for uri in (
+                "https://cdn.example.test/thumb.jpg",
+                "s3://video-output/thumb.jpg?signature=secret",
+                "s3:///missing-bucket/thumb.jpg",
+                "s3://video-output/../private.jpg"):
+            with self.subTest(uri=uri):
+                self.assertIsNone(self.servicer._artifact_uploaded_to(
+                    {"artifacts": [{
+                        "type": "image_thumbnail",
+                        "status": "AVAILABLE",
+                        "uri": uri,
+                    }]},
+                    {"image_thumbnail"},
+                ))
+
+
+
 if __name__ == "__main__":
     unittest.main()
