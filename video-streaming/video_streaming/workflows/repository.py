@@ -1195,6 +1195,16 @@ class WorkflowRepository:
                 raise InvalidStateTransition(
                     "Publication requires a persisted successful validation report"
                 )
+            processing_attempt = (
+                session.get(AttemptRecord, validation_artifact.attempt_id)
+                if validation_artifact is not None else None
+            )
+            if (
+                    processing_attempt is None
+                    or processing_attempt.state != AttemptState.SUCCEEDED.value):
+                raise InvalidStateTransition(
+                    "Publication requires a terminal successful processing Attempt"
+                )
 
             active = session.execute(
                 select(AttemptRecord).where(
