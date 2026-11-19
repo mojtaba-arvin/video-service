@@ -116,6 +116,7 @@ def generate_thumbnail(
         lease_token,
         lease_ttl_seconds=60,
     )
+    output_path = None
     usage_metrics = {}
 
     def capture_usage(metrics):
@@ -199,6 +200,11 @@ def generate_thumbnail(
             pricing=configured_pricing(settings),
         )
     except Exception as exc:
+        if output_path:
+            try:
+                Path(output_path).unlink()
+            except OSError:
+                pass
         if isinstance(exc, AttemptLeaseLost):
             raise
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
