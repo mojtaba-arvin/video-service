@@ -152,7 +152,7 @@ def _normalize_output(output, kind, index):
         timestamp_time = (
             isinstance(thumbnail_time, str)
             and bool(re.fullmatch(
-                r"(?:[0-9]{1,3}:)?[0-5]?[0-9]:[0-5]?[0-9](?:\\.[0-9]{1,3})?",
+                r"(?:[0-9]{1,3}:)?[0-5]?[0-9]:[0-5]?[0-9](?:\.[0-9]{1,3})?",
                 thumbnail_time.strip(),
             ))
         )
