@@ -170,5 +170,22 @@ class AttemptLeaseHeartbeatTests(unittest.TestCase):
 
 
 
+    def test_database_renewal_error_also_fails_closed(self):
+        repository = FakeRepository(error=RuntimeError("database unavailable"))
+        heartbeat = AttemptLeaseHeartbeat(
+            repository, "job-1", "stage-1", "attempt-1", "secret-token",
+            lease_ttl_seconds=30,
+            monotonic=FakeClock(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            heartbeat.assert_owned()
+        self.assertTrue(heartbeat.lost)
+        with self.assertRaises(AttemptLeaseLost):
+            heartbeat.on_progress()
+        self.assertEqual(len(repository.renewals), 1)
+
+
+
 if __name__ == "__main__":
     unittest.main()
