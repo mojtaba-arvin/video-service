@@ -269,6 +269,15 @@ jobs:
       - name: Prepare safe environment for runtime logging tests
         run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 
+      - name: Run durable VOD request adapter tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_durable_vod_request_adapter.py' \
+            -v
+
       - name: Run sensitive logging regression tests
         env:
           PYTHONPATH: video-streaming
