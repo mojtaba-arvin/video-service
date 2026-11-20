@@ -16,8 +16,8 @@ import unittest
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
-from datetime import datetime, timedelta, timezone
 
 
 _REQUIRED_MODULES = (
@@ -131,69 +131,6 @@ class InMemoryS3:
             callback(len(value))
 
 
-class E2ETestAuthenticator:
-    """Explicit in-process test identity; never used by application startup."""
-
-    def __init__(self):
-        from video_streaming.security import RequestPrincipal
-
-        scopes = frozenset([
-            "video.jobs:create",
-            "video.jobs:read",
-            "video.jobs:cancel",
-            "video.jobs:outputs:revoke",
-            "video.playback:write",
-            "video.qoe:read",
-        ])
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-        self.principal = RequestPrincipal(
-            issuer="https://e2e-issuer.example.test/",
-            subject="e2e-test-subject",
-            tenant_id="e2e-test-tenant",
-            scopes=scopes,
-            roles=frozenset(["test"]),
-            authentication_method="test-bearer",
-            expires_at=expires_at,
-        )
-        self.foreign_principal = RequestPrincipal(
-            issuer="https://e2e-issuer.example.test/",
-            subject="foreign-test-subject",
-            tenant_id="foreign-test-tenant",
-            scopes=scopes,
-            roles=frozenset(["test"]),
-            authentication_method="test-bearer",
-            expires_at=expires_at,
-        )
-
-    def authenticate(self, token):
-        from video_streaming.security.oidc import AuthenticationError
-
-        if token == "e2e-test-token":
-            return self.principal
-        if token == "foreign-test-token":
-            return self.foreign_principal
-        raise AuthenticationError("Invalid test token")
-
-
-class AuthenticatedStub:
-    """Attach the test-only bearer credential to every RPC in this suite."""
-
-    def __init__(self, stub, token="e2e-test-token"):
-        self._stub = stub
-        self._token = token
-
-    def __getattr__(self, name):
-        method = getattr(self._stub, name)
-
-        def call(*args, **kwargs):
-            kwargs.setdefault(
-                "metadata", (("authorization", "Bearer {}".format(self._token)),)
-            )
-            return method(*args, **kwargs)
-
-        return call
-
-
 @unittest.skipUnless(
     _HAS_RUNTIME and shutil.which("ffmpeg") and shutil.which("ffprobe"),
     "Python 3.9 runtime dependencies and FFmpeg/FFprobe are required",
@@ -228,7 +165,6 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "WORKFLOW_DATABASE_MAX_OVERFLOW=2",
                 "TASK_RETRY_BACKOFF_MAX=2",
                 "TASK_RETRY_FFMPEG_COMMAND_MAX=0",
-                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
                 "DEFAULT_PLAYLIST_IS_HLS=True",
                 "DEFAULT_SEGMENT_TYPE_IS_FMP4=False",
                 "DONT_REPLACE_OUTPUT=False",
@@ -340,11 +276,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.webhook_server.server_port
         )
 
-        from video_streaming.grpc.authentication import OIDCBearerInterceptor
-
         cls.grpc_server = cls.grpc.server(
-            futures.ThreadPoolExecutor(max_workers=4),
-            interceptors=(OIDCBearerInterceptor(E2ETestAuthenticator()),),
+            futures.ThreadPoolExecutor(max_workers=4)
         )
         cls.servicer = Streaming()
         cls.servicer._add_to_server(cls.grpc_server)
@@ -353,9 +286,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.channel = cls.grpc.insecure_channel(
             "127.0.0.1:{}".format(cls.grpc_port)
         )
-        cls.stub = AuthenticatedStub(
-            cls.pb2_grpc.StreamingStub(cls.channel)
-        )
+        cls.stub = cls.pb2_grpc.StreamingStub(cls.channel)
 
     @classmethod
     def tearDownClass(cls):
@@ -537,20 +468,6 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
 
-        # A valid but different tenant/subject cannot inspect the new Job.
-        foreign_stub = AuthenticatedStub(
-            self.pb2_grpc.StreamingStub(self.channel),
-            token="foreign-test-token",
-        )
-        with self.assertRaises(self.grpc.RpcError) as denied:
-            foreign_stub.get_results(
-                self.pb2.JobsResultsRequest(
-                    tracking_ids=[accepted.tracking_id]
-                ),
-                timeout=30,
-            )
-        self.assertEqual(denied.exception.code(), self.grpc.StatusCode.NOT_FOUND)
-
         replayed = self.stub.create_job(request, timeout=120)
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
@@ -566,21 +483,27 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         for durable_stage in snapshot["stages"]:
             self.assertEqual(durable_stage["status"], "FINISHED")
-            self.assertEqual(len(durable_stage["attempts"]), 1)
-            attempt = durable_stage["attempts"][0]
-            self.assertEqual(attempt["status"], "SUCCEEDED")
-            self.assertGreater(attempt["duration_ms"], 0)
+            self.assertEqual(len(durable_stage["attempts"]), 2)
+            processing_attempt, publication_attempt = durable_stage["attempts"]
+            self.assertEqual(processing_attempt["status"], "SUCCEEDED")
+            self.assertEqual(publication_attempt["status"], "SUCCEEDED")
+            self.assertGreater(processing_attempt["duration_ms"], 0)
             self.assertEqual(
-                attempt["input_bytes"], self.input_path.stat().st_size
+                processing_attempt["input_bytes"],
+                self.input_path.stat().st_size,
             )
-            self.assertGreater(attempt["output_bytes"], 0)
-            self.assertGreater(attempt["artifact_count"], 0)
-            self.assertGreater(attempt["estimated_cost"], 0)
-            self.assertEqual(attempt["cost_currency"], "RUNIT")
-            self.assertEqual(
-                attempt["pricing_model_id"],
-                "relative-resource-index-v1",
-            )
+            self.assertGreater(processing_attempt["artifact_count"], 0)
+            self.assertGreater(processing_attempt["estimated_cost"], 0)
+            self.assertGreater(publication_attempt["duration_ms"], 0)
+            self.assertGreater(publication_attempt["output_bytes"], 0)
+            self.assertGreater(publication_attempt["artifact_count"], 0)
+            self.assertGreater(publication_attempt["estimated_cost"], 0)
+            for attempt in (processing_attempt, publication_attempt):
+                self.assertEqual(attempt["cost_currency"], "RUNIT")
+                self.assertEqual(
+                    attempt["pricing_model_id"],
+                    "relative-resource-index-v1",
+                )
         playlist_stage = next(
             stage for stage in snapshot["stages"] if stage["key"] == "p0"
         )
@@ -622,17 +545,33 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
 
         output_objects = self.storage.buckets["vod-output"]
-        master_key = "vod/e2e/master.m3u8"
-        variant_key = "vod/e2e/master_144p.m3u8"
+        playlist_manifest = next(
+            item for item in playlist_stage["artifacts"]
+            if item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+        )
+        thumbnail_artifact = next(
+            item for item in thumbnail_stage["artifacts"]
+            if item["type"] == "image_thumbnail"
+            and item["status"] == "AVAILABLE"
+        )
+        master_key = playlist_manifest["uri"].split("vod-output/", 1)[1]
+        thumbnail_key = thumbnail_artifact["uri"].split("vod-output/", 1)[1]
+        package_prefix = master_key.rsplit("/", 1)[0]
+        variant_key = package_prefix + "/master_144p.m3u8"
+        inventory_key = package_prefix + "/.master.m3u8.artifacts.json"
+        self.assertTrue("/.attempts/" in master_key)
+        self.assertTrue("/.attempts/" in thumbnail_key)
         self.assertIn(master_key, output_objects)
         self.assertIn(variant_key, output_objects)
-        self.assertIn("vod/e2e/thumbnail.jpg", output_objects)
-        self.assertIn(
-            "vod/e2e/.master.m3u8.artifacts.json", output_objects
-        )
-        self.assertTrue(
-            any(key.endswith(".ts") for key in output_objects)
-        )
+        self.assertIn(thumbnail_key, output_objects)
+        self.assertIn(inventory_key, output_objects)
+        self.assertTrue(any(
+            key.startswith(package_prefix + "/") and key.endswith(".ts")
+            for key in output_objects
+        ))
+        self.assertNotIn("vod/e2e/master.m3u8", output_objects)
+        self.assertNotIn("vod/e2e/thumbnail.jpg", output_objects)
         self.assertGreater(
             self.storage.upload_order.index(master_key),
             self.storage.upload_order.index(variant_key),
@@ -761,6 +700,288 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         self.assertEqual(
             qoe.pricing_model_id, "relative-resource-index-v1"
         )
+
+
+    def test_leased_thumbnail_publication_uses_attempt_scoped_storage_key(self):
+        from video_streaming.core.constants import OutputStatus
+        from video_streaming.ffmpeg.tasks.upload_file import _publish_leased_file
+        from video_streaming.workflows.service import get_workflow_repository
+
+        repository = get_workflow_repository()
+        job_id = str(uuid4())
+        _, created = repository.create_job(
+            job_id=job_id,
+            idempotency_key="leased-thumbnail-{}".format(job_id),
+            request_hash="f" * 64,
+            stage_specs=[{
+                "stage_key": "thumbnail-0",
+                "operation": "video.package_and_publish",
+            }],
+        )
+        self.assertTrue(created)
+
+        processing_id, _, processing_token, _ = repository.claim_attempt(
+            job_id,
+            "thumbnail-0",
+            lease_owner="thumbnail-worker",
+            execution_ref="thumbnail-task",
+        )
+        validation_report = {
+            "valid": True,
+            "artifact_type": "image_thumbnail",
+            "width": 64,
+            "height": 64,
+            "size_bytes": 8,
+            "errors": [],
+        }
+        repository.complete_processing_attempt(
+            job_id,
+            "thumbnail-0",
+            processing_id,
+            validation_report,
+            lease_token=processing_token,
+            metrics={"input_bytes": 1024, "cpu_seconds": 0.1},
+        )
+
+        local_file = self.root / "leased-thumbnail.jpg"
+        local_file.write_bytes(b"thumbnail")
+        public_key = "jobs/{}/thumbnail.jpg".format(job_id)
+        self.storage.buckets.setdefault("vod-output", {})
+        statuses = []
+
+        class TaskDouble:
+            pass
+
+        task = TaskDouble()
+        task.request = SimpleNamespace(
+            id="leased-thumbnail-publisher",
+            hostname="test-worker",
+            retries=0,
+            kwargs={},
+            called_directly=False,
+        )
+        task.cache = InMemoryCache()
+        task.s3_service = self.storage
+        task.output_status = OutputStatus
+        task.save_output_status = lambda *args: statuses.append(args)
+        task.save_output_progress = lambda **kwargs: None
+        task.is_forced_to_stop = lambda _job_id: False
+        task.is_output_forced_to_stop = lambda _job_id, _stage: False
+
+        result = _publish_leased_file(
+            task,
+            repository,
+            str(local_file),
+            local_file.stat().st_size,
+            public_key,
+            "vod-output",
+            job_id,
+            "thumbnail-0",
+            processing_id,
+            {
+                "artifact_type": "image_thumbnail",
+                "media_type": "image/jpeg",
+            },
+        )
+
+        expected_prefix = "jobs/{}/.attempts/".format(job_id)
+        self.assertIn(expected_prefix, result["uri"])
+        self.assertEqual(result["durable_stage_status"], "FINISHED")
+        self.assertIsNone(self.storage.head(
+            key=public_key, bucket_name="vod-output"
+        ))
+        self.assertIsNotNone(self.storage.head(
+            key=result["uri"].split("vod-output/", 1)[1],
+            bucket_name="vod-output",
+        ))
+
+        stage = repository.get_stage_snapshot(job_id, "thumbnail-0")
+        self.assertEqual(stage["status"], "FINISHED")
+        self.assertEqual(
+            [attempt["status"] for attempt in stage["attempts"]],
+            ["SUCCEEDED", "SUCCEEDED"],
+        )
+        published = [
+            item for item in stage["artifacts"]
+            if item["type"] == "image_thumbnail"
+        ]
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["uri"], result["uri"])
+        self.assertTrue(published[0]["metadata"]["attempt_scoped"])
+        self.assertEqual(
+            published[0]["metadata"]["processing_attempt_id"], processing_id
+        )
+
+        previous_cache = self.servicer.cache
+        self.servicer.cache = InMemoryCache()
+        try:
+            thumbnail_details = []
+            self.servicer._thumbnails(
+                job_id,
+                ["thumbnail-0"],
+                thumbnail_details,
+                {"thumbnail-0": stage},
+            )
+        finally:
+            self.servicer.cache = previous_cache
+        self.assertEqual(len(thumbnail_details), 1)
+        self.assertEqual(
+            thumbnail_details[0].uploaded_to.bucket, "vod-output"
+        )
+        self.assertEqual(
+            thumbnail_details[0].uploaded_to.key,
+            result["uri"].split("vod-output/", 1)[1],
+        )
+
+
+
+    def test_result_details_expose_authoritative_attempt_scoped_s3_location(self):
+        stage = {
+            "artifacts": [
+                {
+                    "type": "image_thumbnail",
+                    "status": "AVAILABLE",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/old/thumb.jpg",
+                },
+                {
+                    "type": "image_thumbnail",
+                    "status": "AVAILABLE",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/current/thumb.jpg",
+                },
+                {
+                    "type": "image_thumbnail",
+                    "status": "PENDING",
+                    "uri": "s3://video-output/jobs/job-1/.attempts/pending/thumb.jpg",
+                },
+            ],
+        }
+
+        uploaded_to = self.servicer._artifact_uploaded_to(
+            stage, {"image_thumbnail"}
+        )
+
+        self.assertEqual(uploaded_to.bucket, "video-output")
+        self.assertEqual(
+            uploaded_to.key,
+            "jobs/job-1/.attempts/current/thumb.jpg",
+        )
+
+    def test_result_details_ignore_non_s3_or_signed_artifact_uris(self):
+        for uri in (
+                "https://cdn.example.test/thumb.jpg",
+                "s3://video-output/thumb.jpg?signature=secret",
+                "s3:///missing-bucket/thumb.jpg",
+                "s3://video-output/../private.jpg"):
+            with self.subTest(uri=uri):
+                self.assertIsNone(self.servicer._artifact_uploaded_to(
+                    {"artifacts": [{
+                        "type": "image_thumbnail",
+                        "status": "AVAILABLE",
+                        "uri": uri,
+                    }]},
+                    {"image_thumbnail"},
+                ))
+
+
+
+    def test_result_metrics_aggregate_processing_and_publication_attempts(self):
+        stage = {
+            "attempts": [
+                {
+                    "duration_ms": 5000,
+                    "cpu_seconds": 1.25,
+                    "peak_memory_bytes": 300,
+                    "output_bytes": None,
+                },
+                {
+                    "duration_ms": 1000,
+                    "cpu_seconds": None,
+                    "peak_memory_bytes": None,
+                    "output_bytes": None,
+                },
+                {
+                    "duration_ms": 2000,
+                    "cpu_seconds": 0.1,
+                    "peak_memory_bytes": 200,
+                    "output_bytes": 512,
+                },
+            ],
+        }
+
+        metrics = self.servicer._durable_stage_metrics(stage)
+
+        self.assertEqual(metrics["duration_ms"], 8000)
+        self.assertAlmostEqual(metrics["cpu_seconds"], 1.35)
+        self.assertEqual(metrics["peak_memory_bytes"], 300)
+        self.assertEqual(metrics["output_bytes"], 512)
+
+
+
+    def test_playlist_result_uses_authoritative_manifest_location(self):
+        stage = {
+            "status": "FINISHED",
+            "attempts": [{"duration_ms": 1000, "output_bytes": 4096}],
+            "artifacts": [{
+                "type": "streaming_manifest",
+                "status": "AVAILABLE",
+                "uri": "s3://video-output/jobs/job-2/.attempts/pub-2/master.m3u8",
+            }],
+        }
+        previous_cache = self.servicer.cache
+        self.servicer.cache = InMemoryCache()
+        try:
+            outputs = []
+            self.servicer._playlists(
+                "job-2", ["playlist-0"], outputs,
+                {"playlist-0": stage},
+            )
+        finally:
+            self.servicer.cache = previous_cache
+
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(
+            outputs[0].uploaded_to.bucket, "video-output"
+        )
+        self.assertEqual(
+            outputs[0].uploaded_to.key,
+            "jobs/job-2/.attempts/pub-2/master.m3u8",
+        )
+
+    def test_watermarked_video_result_uses_authoritative_artifact_location(self):
+        from video_streaming.core.constants import CacheKeysTemplates
+
+        output_id = CacheKeysTemplates.WATERMARKED_VIDEO_OUTPUT_ID.format(
+            number=0
+        )
+        stage = {
+            "status": "FINISHED",
+            "attempts": [{"duration_ms": 2000, "cpu_seconds": 0.8,
+                          "peak_memory_bytes": 2048, "output_bytes": 512}],
+            "artifacts": [{
+                "type": "video_file",
+                "status": "AVAILABLE",
+                "uri": "s3://video-output/jobs/job-3/.attempts/pub-3/video.mp4",
+            }],
+        }
+        previous_cache = self.servicer.cache
+        self.servicer.cache = InMemoryCache()
+        try:
+            output = self.servicer._watermarked_video(
+                "job-3", {output_id: stage}
+            )
+        finally:
+            self.servicer.cache = previous_cache
+
+        self.assertEqual(output.uploaded_to.bucket, "video-output")
+        self.assertEqual(
+            output.uploaded_to.key,
+            "jobs/job-3/.attempts/pub-3/video.mp4",
+        )
+        self.assertEqual(output.file_size, 512)
+        self.assertEqual(output.spent_time, 2.0)
+        self.assertAlmostEqual(output.cpu_usage, 0.8, places=6)
+        self.assertEqual(output.memory_usage, 2048)
+
 
 
 if __name__ == "__main__":

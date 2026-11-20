@@ -57,7 +57,9 @@ ALLOWED_STAGE_TRANSITIONS = {
         StageState.FINISHED, StageState.RETRY_WAIT,
         StageState.FAILED, StageState.CANCELLED,
     },
-    StageState.RETRY_WAIT: {StageState.PROCESSING, StageState.CANCELLED},
+    StageState.RETRY_WAIT: {
+        StageState.PROCESSING, StageState.VALIDATED, StageState.CANCELLED,
+    },
     StageState.FINISHED: set(),
     StageState.FAILED: set(),
     StageState.CANCELLED: set(),

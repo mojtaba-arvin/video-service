@@ -108,6 +108,21 @@ class SettingsEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS, 3600)
 
+    def test_playlist_execution_timeout_is_configurable(self):
+        settings = load_settings({
+            "FFMPEG_PLAYLIST_TIMEOUT_SECONDS": "5400",
+        })
+        self.assertEqual(settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS, 5400)
+
+    def test_playlist_execution_timeout_has_safe_default(self):
+        settings = load_settings({})
+        self.assertEqual(settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS, 7200)
+
+    def test_playlist_execution_timeout_must_be_bounded(self):
+        with self.assertRaisesRegex(
+                ValueError, "FFMPEG_PLAYLIST_TIMEOUT_SECONDS"):
+            load_settings({"FFMPEG_PLAYLIST_TIMEOUT_SECONDS": "0"})
+
     def test_webhook_timeout_defaults_are_bounded(self):
         settings = load_settings({})
 
@@ -182,6 +197,63 @@ class SettingsEnvironmentTests(unittest.TestCase):
         settings = load_settings({})
 
         self.assertTrue(settings.DEFAULT_PLAYLIST_IS_HLS)
+
+
+    def test_package_orphan_janitor_is_scheduled_hourly(self):
+        settings = load_settings({})
+
+        schedule = settings.CELERY_BEAT_SCHEDULE[
+            "cleanup-abandoned-package-attempts"
+        ]
+        self.assertEqual(schedule["task"], "cleanup_abandoned_packages")
+        self.assertEqual(schedule["schedule"], 3600.0)
+
+    def test_package_orphan_retention_has_a_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(
+            settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS, 86400
+        )
+
+    def test_package_orphan_retention_is_configurable(self):
+        settings = load_settings({
+            "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS": "172800",
+        })
+
+        self.assertEqual(
+            settings.WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS, 172800
+        )
+
+    def test_package_orphan_retention_rejects_unsafe_values(self):
+        for value in ("0", "3599", "2592001"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        ValueError, "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS"):
+                    load_settings({
+                        "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS": value,
+                    })
+
+    def test_attempt_lease_ttl_has_a_safe_default(self):
+        settings = load_settings({})
+
+        self.assertEqual(settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS, 60)
+
+    def test_attempt_lease_ttl_is_configurable(self):
+        settings = load_settings({
+            "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS": "120",
+        })
+
+        self.assertEqual(settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS, 120)
+
+    def test_attempt_lease_ttl_rejects_out_of_range_values(self):
+        for value in ("0", "-1", "86401"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        ValueError, "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS"):
+                    load_settings({
+                        "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS": value,
+                    })
+
 
 
 if __name__ == "__main__":
