@@ -16,7 +16,8 @@ from video_streaming.workflows.domain import (
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    ArtifactRecord, WorkflowEventRecord, utcnow
+    ArtifactRecord, WorkflowEventRecord, StageRecord,
+    StageDependencyRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -77,6 +78,121 @@ class WorkflowRepositoryTests(unittest.TestCase):
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
+
+    def test_execution_plan_dependencies_are_normalized_and_same_workflow(self):
+        job_id = str(uuid4())
+        request = {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output", "key": "master.m3u8", "protocol": "hls",
+            }],
+        }
+        plan = build_vod_execution_plan(job_id, request)
+        created = self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-plan-deps-{}".format(uuid4()),
+            request_hash="b" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+        )
+        self.assertEqual(created, (job_id, True))
+
+        with self.repository._session() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            stages = session.query(StageRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+            stage_by_key = {stage.stage_key: stage for stage in stages}
+            edges = session.query(StageDependencyRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+
+        expected = {
+            (node["stage_key"], dependency["stage_key"])
+            for node in plan["nodes"]
+            for dependency_node_id in node["depends_on"]
+            for dependency in plan["nodes"]
+            if dependency["node_id"] == dependency_node_id
+        }
+        actual = {
+            (
+                next(stage.stage_key for stage in stages if stage.id == edge.stage_id),
+                next(
+                    stage.stage_key for stage in stages
+                    if stage.id == edge.depends_on_stage_id
+                ),
+            )
+            for edge in edges
+        }
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(
+            edge.workflow_id == workflow.id for edge in edges
+        ))
+        self.assertEqual(len(stage_by_key), len(plan["nodes"]))
+        self.assertEqual(
+            {(stage.stage_key, stage.operation) for stage in stages},
+            {(node["stage_key"], node["operation"]) for node in plan["nodes"]},
+        )
+
+    def test_legacy_celery_completes_output_stages_without_faking_internal_nodes(self):
+        job_id = str(uuid4())
+        plan = build_vod_execution_plan(job_id, {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output",
+                "key": "master.m3u8",
+                "protocol": "hls",
+                "output_id": "p0",
+            }],
+        })
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="legacy-plan-{}".format(uuid4()),
+            request_hash="c" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            execution_backend="legacy_celery",
+        )
+        output_node = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.output.upload_directory"
+        )
+        output_key = output_node["stage_key"]
+        attempt_id, _ = self.repository.start_attempt(
+            job_id, output_key, execution_backend="celery",
+            execution_ref="legacy-output-task",
+        )
+        self.repository.mark_validated(
+            job_id, output_key, attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, output_key, attempt_id)
+        self.repository.finish_stage(
+            job_id, output_key, attempt_id, artifacts=[], metrics={},
+        )
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "FINISHED")
+        self.assertEqual(snapshot["workflow"]["status"], "FINISHED")
+        self.assertEqual(
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
+            next(stage for stage in snapshot["stages"]
+                 if stage["key"] == output_key)["status"],
+            "FINISHED",
+        )
+        internal = [
+            stage for stage in snapshot["stages"]
+            if stage["key"] != output_key
+        ]
+        self.assertTrue(internal)
+        self.assertTrue(all(
+            stage["status"] == "PENDING" and not stage["attempts"]
+            for stage in internal
+        ))
 
     def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
         principal = self.make_owner_principal()
