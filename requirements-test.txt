@@ -10,6 +10,9 @@ redis==5.2.1
 # Keep this aligned with the integration environment's boto3 pin.
 boto3==1.17.14
 
+# Authenticated secret-envelope encryption tests.
+cryptography==50.0.2
+
 # gRPC runtime and generated-module tests
 grpcio==1.78.2
 grpcio-tools==1.78.2
