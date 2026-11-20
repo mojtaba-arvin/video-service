@@ -264,6 +264,14 @@ FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
     default=3600,
     cast=int)
 
+# Maximum wall time for one playlist encode, including FFmpeg supervision.
+FFMPEG_PLAYLIST_TIMEOUT_SECONDS = env_config.get(
+    "FFMPEG_PLAYLIST_TIMEOUT_SECONDS",
+    default=7200,
+    cast=int)
+if FFMPEG_PLAYLIST_TIMEOUT_SECONDS <= 0:
+    raise ValueError("FFMPEG_PLAYLIST_TIMEOUT_SECONDS must be greater than zero")
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
