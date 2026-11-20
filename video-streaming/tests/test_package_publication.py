@@ -7,6 +7,8 @@ from pathlib import Path
 
 from video_streaming.ffmpeg.package_publication import (
     PackagePublicationError,
+    cleanup_abandoned_attempt_package,
+    cleanup_abandoned_single_file,
     publish_package,
 )
 
@@ -110,6 +112,223 @@ class PackagePublicationTests(unittest.TestCase):
             s3_output_bucket=self.bucket,
             storage=self.storage,
         )
+
+    def test_progress_callback_runs_for_each_package_upload_chunk(self):
+        chunks = []
+
+        publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-1/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+            on_progress=chunks.append,
+        )
+
+        self.assertEqual(chunks, [
+            len(b"segment-a"),
+            len(b"segment-b"),
+            len(self.variant.read_bytes()),
+            len(self.master.read_bytes()),
+        ])
+        self.assertTrue(all(chunk > 0 for chunk in chunks))
+
+    def test_attempt_scoped_package_keys_are_immutable_between_publishers(self):
+        first = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-1/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+        first_objects = {
+            key: value for key, value in self.storage.objects.items()
+            if key.startswith("vod/.attempts/pub-1/")
+        }
+
+        second = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-2/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+
+        self.assertTrue(first["manifest_key"].startswith(
+            "vod/.attempts/pub-1/"
+        ))
+        self.assertTrue(second["manifest_key"].startswith(
+            "vod/.attempts/pub-2/"
+        ))
+        self.assertEqual(
+            {key: self.storage.objects[key] for key in first_objects},
+            first_objects,
+        )
+        self.assertNotIn("vod/master.m3u8", self.storage.objects)
+
+    def test_failed_attempt_cleanup_does_not_delete_another_attempt(self):
+        other_attempt_key = "vod/.attempts/pub-old/master.m3u8"
+        self.storage.objects[other_attempt_key] = b"last-known-good"
+        self.storage.fail_upload_key = (
+            "vod/.attempts/pub-new/segment_000.ts"
+        )
+
+        with self.assertRaises(IOError):
+            publish_package(
+                directory=str(self.root),
+                manifest_path=str(self.master),
+                protocol="hls",
+                expected_renditions=["variant.m3u8"],
+                s3_output_key="vod/.attempts/pub-new/master.m3u8",
+                s3_output_bucket=self.bucket,
+                storage=self.storage,
+            )
+
+        self.assertEqual(
+            self.storage.objects[other_attempt_key], b"last-known-good"
+        )
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-new/")
+            for key in self.storage.objects
+            if key != other_attempt_key
+        ))
+
+    def test_orphan_cleanup_requires_database_reclaimability(self):
+        result = publish_package(
+            directory=str(self.root),
+            manifest_path=str(self.master),
+            protocol="hls",
+            expected_renditions=["variant.m3u8"],
+            s3_output_key="vod/.attempts/pub-orphan/master.m3u8",
+            s3_output_bucket=self.bucket,
+            storage=self.storage,
+        )
+        before = set(self.storage.objects)
+
+        skipped = cleanup_abandoned_attempt_package(
+            self.storage,
+            self.bucket,
+            result["inventory_key"],
+            "vod/.attempts/pub-orphan",
+            is_reclaimable=lambda _attempt_id, _bucket, _prefix: False,
+        )
+        self.assertFalse(skipped["deleted"])
+        self.assertEqual(set(self.storage.objects), before)
+
+        cleanup_event_start = len(self.storage.events)
+        removed = cleanup_abandoned_attempt_package(
+            self.storage,
+            self.bucket,
+            result["inventory_key"],
+            "vod/.attempts/pub-orphan",
+            is_reclaimable=lambda attempt_id, bucket, prefix: (
+                attempt_id == "pub-orphan"
+                and bucket == self.bucket
+                and prefix == "vod/.attempts/pub-orphan"
+            ),
+        )
+        self.assertTrue(removed["deleted"])
+        self.assertEqual(removed["objects"], 4)
+        cleanup_deletes = [
+            event[1] for event in self.storage.events[cleanup_event_start:]
+            if event[0] == "delete"
+        ]
+        self.assertEqual(
+            cleanup_deletes[0],
+            "vod/.attempts/pub-orphan/master.m3u8",
+        )
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-orphan/")
+            for key in self.storage.objects
+        ))
+
+    def test_single_file_orphan_cleanup_requires_database_approval(self):
+        attempt_id = "single-file-attempt"
+        prefix = "vod/.attempts/{}".format(attempt_id)
+        object_key = prefix + "/thumbnail.jpg"
+        self.storage.objects[object_key] = b"orphan-thumbnail"
+
+        skipped = cleanup_abandoned_single_file(
+            self.storage,
+            self.bucket,
+            object_key,
+            attempt_id,
+            prefix,
+            is_reclaimable=lambda *_args: False,
+        )
+        self.assertFalse(skipped["deleted"])
+        self.assertIn(object_key, self.storage.objects)
+
+        removed = cleanup_abandoned_single_file(
+            self.storage,
+            self.bucket,
+            object_key,
+            attempt_id,
+            prefix,
+            is_reclaimable=lambda candidate, bucket, candidate_prefix: (
+                candidate == attempt_id
+                and bucket == self.bucket
+                and candidate_prefix == prefix
+            ),
+        )
+        self.assertTrue(removed["deleted"])
+        self.assertEqual(removed["objects"], 1)
+        self.assertNotIn(object_key, self.storage.objects)
+
+    def test_single_file_orphan_cleanup_rejects_cross_attempt_object(self):
+        with self.assertRaises(PackagePublicationError):
+            cleanup_abandoned_single_file(
+                self.storage,
+                self.bucket,
+                "vod/.attempts/another-attempt/thumbnail.jpg",
+                "selected-attempt",
+                "vod/.attempts/selected-attempt",
+                is_reclaimable=lambda *_args: True,
+            )
+
+    def test_orphan_cleanup_rejects_inventory_outside_attempt_namespace(self):
+        with self.assertRaises(PackagePublicationError):
+            cleanup_abandoned_attempt_package(
+                self.storage,
+                self.bucket,
+                "vod/.artifacts.json",
+                "vod/.attempts/pub-1",
+                is_reclaimable=lambda _attempt_id, _bucket, _prefix: True,
+            )
+
+    def test_lease_loss_during_upload_cleans_only_current_attempt(self):
+        old_key = "vod/.attempts/pub-old/master.m3u8"
+        self.storage.objects[old_key] = b"old-package"
+        calls = []
+
+        def lose_lease(_chunk):
+            calls.append(_chunk)
+            raise RuntimeError("publication lease lost")
+
+        with self.assertRaisesRegex(RuntimeError, "publication lease lost"):
+            publish_package(
+                directory=str(self.root),
+                manifest_path=str(self.master),
+                protocol="hls",
+                expected_renditions=["variant.m3u8"],
+                s3_output_key="vod/.attempts/pub-new/master.m3u8",
+                s3_output_bucket=self.bucket,
+                storage=self.storage,
+                on_progress=lose_lease,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.storage.objects[old_key], b"old-package")
+        self.assertFalse(any(
+            key.startswith("vod/.attempts/pub-new/")
+            for key in self.storage.objects
+        ))
 
     def test_every_dependency_is_uploaded_and_readable_before_master(self):
         result = self.publish()

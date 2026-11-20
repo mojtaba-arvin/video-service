@@ -18,7 +18,8 @@ class FfmpegCallback(object):
             task: Task = None,
             task_id: str = None,
             output_id: str = None,
-            request_id: str = None
+            request_id: str = None,
+            on_progress=None
             ):
         self.task = task
         # to prevent TypeError, needs sure the task id is not None
@@ -28,10 +29,19 @@ class FfmpegCallback(object):
         self.output_id = output_id
         self.request_id = request_id
         self.start_memory_rss = None
+        self.on_progress = on_progress
 
     def progress(self, ffmpeg_line, duration, time_, time_left, process):
         try:
             self._check_to_kill(process)
+            if self.on_progress is not None:
+                try:
+                    self.on_progress()
+                except Exception:
+                    # A lost durable lease must stop FFmpeg immediately; the
+                    # callback exception alone is not a process-tree fence.
+                    terminate_process_tree(process)
+                    raise
             psutil_process = psutil.Process(process.pid)
             if self.first_chunk:
                 # save output status using output_id and request_id
@@ -49,7 +59,9 @@ class FfmpegCallback(object):
                 output_id=self.output_id
             )
             if self.task.request.called_directly:
-                percent = round(time_ / duration * 100)
+                percent = (
+                    round(time_ / duration * 100) if duration > 0 else 0
+                )
                 sys.stdout.write(
                     f"\r{self.request_id} | {self.output_id} Processing...({percent}%) {time_} [{'#' * percent}{'-' * (100 - percent)}]"
                 )

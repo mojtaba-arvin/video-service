@@ -284,5 +284,47 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             return False
 
 
+    def test_usage_callback_failure_terminates_managed_process_tree(self):
+        import tempfile
+        from pathlib import Path
+
+        from video_streaming.execution.process_control import (
+            run_cancellable_process,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "lease-lost-child.pid"
+            child_code = (
+                "import os, time; "
+                "open({!r}, 'w').write(str(os.getpid())); "
+                "time.sleep(60)"
+            ).format(str(pid_path))
+            parent_code = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', {!r}]); "
+                "time.sleep(60)"
+            ).format(child_code)
+            callback_count = [0]
+
+            def lose_lease_after_child_starts(_usage):
+                callback_count[0] += 1
+                if pid_path.exists():
+                    raise RuntimeError("durable lease renewal failed")
+
+            with self.assertRaisesRegex(
+                    RuntimeError, "durable lease renewal failed"):
+                run_cancellable_process(
+                    [sys.executable, "-c", parent_code],
+                    timeout_seconds=5,
+                    poll_interval=0.05,
+                    on_usage=lose_lease_after_child_starts,
+                )
+
+            self.assertGreater(callback_count[0], 0)
+            self.assertTrue(pid_path.exists(), "child process did not start")
+            self.assertFalse(self._is_running(int(pid_path.read_text())))
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ from .execution_plan import (
     execution_plan_sha256,
     validate_execution_plan,
 )
+from .artifacts import attempt_scoped_object_key
 from .domain import (
     AttemptLeaseLost,
     AttemptState,
@@ -834,44 +835,6 @@ class WorkflowRepository:
                 raise AuthorizationError("Resource not found or access denied")
         return True
 
-    def authorize_playback_session_access(
-            self, session_id, principal, required_scope):
-        """Authorize the Job owning a playback session before accepting events."""
-        from video_streaming.security import (
-            AuthorizationError,
-            authorize_tenant_resource,
-        )
-
-        if principal is None:
-            raise AuthorizationError("Resource not found or access denied")
-        with self._session() as session:
-            playback = session.execute(
-                select(PlaybackSessionRecord).where(
-                    PlaybackSessionRecord.id == session_id
-                )
-            ).scalar_one_or_none()
-            if playback is None:
-                raise AuthorizationError("Resource not found or access denied")
-            job = session.execute(
-                select(JobRecord).where(
-                    JobRecord.id == playback.job_id
-                )
-            ).scalar_one_or_none()
-            if job is None:
-                raise AuthorizationError("Resource not found or access denied")
-            authorize_tenant_resource(
-                principal,
-                job.owner_tenant_id,
-                required_scope,
-            )
-            if (
-                    job.owner_issuer != principal.issuer
-                    or job.owner_subject != principal.subject):
-                raise AuthorizationError(
-                    "Resource not found or access denied"
-                )
-        return True
-
     @staticmethod
     def _verify_execution_plan_snapshot(workflow, job_id):
         """Verify plan bytes and their denormalized version/identity columns."""
@@ -987,6 +950,7 @@ class WorkflowRepository:
             "usage_capture": "incomplete_worker_lost",
         }
         self._apply_attempt_accounting(attempt, metrics, pricing)
+        self._clear_attempt_lease(attempt)
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
         workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -1052,6 +1016,28 @@ class WorkflowRepository:
                         session, stage, running, now, pricing):
                     raise StageAlreadyRunning(
                         "Stage {} already has a live attempt lease".format(stage_key)
+                    )
+
+            if stage.status == StageState.RETRY_WAIT.value:
+                validated_artifact = session.execute(
+                    select(ArtifactRecord).where(
+                        ArtifactRecord.stage_id == stage.id,
+                        ArtifactRecord.artifact_type == "validation_report",
+                        ArtifactRecord.logical_name == "validation-report",
+                        ArtifactRecord.status == "AVAILABLE",
+                    ).order_by(ArtifactRecord.created_at.desc())
+                ).scalars().first()
+                validated_report = (
+                    validated_artifact.metadata_json
+                    if validated_artifact is not None else None
+                )
+                if (
+                        isinstance(validated_report, dict)
+                        and validated_report.get("valid") is True
+                        and validated_report.get("errors") == []):
+                    raise InvalidStateTransition(
+                        "A validated output must be retried through "
+                        "claim_publication_attempt"
                     )
 
             current = StageState(stage.status)
@@ -1135,6 +1121,208 @@ class WorkflowRepository:
             attempt.heartbeat_at = now
             attempt.lease_expires_at = now + timedelta(seconds=ttl)
             return attempt.lease_expires_at
+
+    def claim_publication_attempt(
+            self,
+            job_id,
+            stage_key,
+            lease_owner,
+            lease_ttl_seconds=60,
+            execution_backend="celery",
+            execution_ref=None,
+            processing_attempt_id=None,
+            pricing=None,
+            package_output_key=None,
+            package_output_bucket=None,
+            package_output_kind="package"):
+        """Claim a fresh publication attempt for an already validated artifact.
+
+        Processing and publication are separate attempts. The validation report
+        is the durable hand-off; no processing lease token is reused or sent
+        through Celery.
+        """
+        if (
+                not isinstance(lease_owner, str)
+                or not lease_owner.strip()
+                or len(lease_owner) > 255):
+            raise ValueError("lease_owner must contain 1 to 255 characters")
+        if (package_output_key is None) != (package_output_bucket is None):
+            raise ValueError(
+                "package_output_key and package_output_bucket must be supplied together"
+            )
+        if package_output_key is not None:
+            if not isinstance(package_output_bucket, str) or not package_output_bucket:
+                raise ValueError("package_output_bucket is required")
+            if package_output_kind not in ("package", "single_file"):
+                raise ValueError("unsupported package_output_kind")
+            # Validate the logical key before creating a durable Attempt.
+            attempt_scoped_object_key(package_output_key, "validation-id")
+
+        ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        now = utcnow()
+        lease_token = secrets.token_urlsafe(32)
+        lease_expires_at = now + timedelta(seconds=ttl)
+        lease_token_hash = hashlib.sha256(
+            lease_token.encode("utf-8")
+        ).hexdigest()
+
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if stage.status in (
+                    StageState.VALIDATED.value,
+                    StageState.PUBLISHING.value):
+                running = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.stage_id == stage.id,
+                        AttemptRecord.state == AttemptState.RUNNING.value,
+                    ).order_by(AttemptRecord.attempt_number.desc())
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if running is not None:
+                    if not self._recover_expired_attempt_in_session(
+                            session, stage, running, now, pricing):
+                        raise StageAlreadyRunning(
+                            "Stage {} already has a live publication attempt"
+                            .format(stage_key)
+                        )
+                elif stage.status == StageState.PUBLISHING.value:
+                    raise StageAlreadyRunning(
+                        "Stage {} is publishing without an active Attempt".format(
+                            stage_key
+                        )
+                    )
+
+            if stage.status not in (
+                    StageState.VALIDATED.value,
+                    StageState.RETRY_WAIT.value):
+                raise InvalidStateTransition(
+                    "Cannot claim publication for stage {} from {}".format(
+                        stage_key, stage.status
+                    )
+                )
+
+            validation_artifact = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                ).order_by(ArtifactRecord.created_at.desc())
+            ).scalars().first()
+            report = (
+                validation_artifact.metadata_json
+                if validation_artifact is not None else None
+            )
+            if (
+                    not isinstance(report, dict)
+                    or report.get("valid") is not True
+                    or not isinstance(report.get("errors"), list)
+                    or report.get("errors")):
+                raise InvalidStateTransition(
+                    "Publication requires a persisted successful validation report"
+                )
+            processing_attempt = (
+                session.get(AttemptRecord, validation_artifact.attempt_id)
+                if validation_artifact is not None else None
+            )
+            if (
+                    processing_attempt is None
+                    or processing_attempt.state != AttemptState.SUCCEEDED.value
+                    or (
+                        processing_attempt_id is not None
+                        and validation_artifact.attempt_id != processing_attempt_id
+                    )):
+                raise InvalidStateTransition(
+                    "Publication requires the requested terminal successful "
+                    "processing Attempt"
+                )
+
+            active = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).with_for_update()
+            ).scalars().first()
+            if active is not None:
+                raise StageAlreadyRunning(
+                    "Stage {} already has an active attempt".format(stage_key)
+                )
+
+            previous_status = stage.status
+            if stage.status == StageState.RETRY_WAIT.value:
+                self._transition(stage, StageState.VALIDATED)
+            else:
+                stage.updated_at = now
+                stage.version += 1
+
+            next_number = session.execute(
+                select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
+                .where(AttemptRecord.stage_id == stage.id)
+            ).scalar_one() + 1
+            attempt_id = new_id()
+            attempt_metrics = {}
+            if package_output_key is not None:
+                attempt_manifest_key = attempt_scoped_object_key(
+                    package_output_key, attempt_id
+                )
+                attempt_prefix = attempt_manifest_key.rsplit("/", 1)[0]
+                namespace = {
+                    "kind": package_output_kind,
+                    "bucket": package_output_bucket,
+                    "logical_key": package_output_key,
+                    "prefix": attempt_prefix,
+                }
+                if package_output_kind == "package":
+                    namespace["inventory_key"] = (
+                        "{}/.{}.artifacts.json".format(
+                            attempt_prefix,
+                            package_output_key.rsplit("/", 1)[-1],
+                        )
+                    )
+                else:
+                    namespace["object_key"] = attempt_manifest_key
+                attempt_metrics["package_publication"] = namespace
+            session.add(AttemptRecord(
+                id=attempt_id,
+                stage_id=stage.id,
+                attempt_number=next_number,
+                state=AttemptState.RUNNING.value,
+                execution_backend=execution_backend,
+                execution_ref=execution_ref,
+                lease_owner=lease_owner.strip(),
+                lease_token_hash=lease_token_hash,
+                lease_expires_at=lease_expires_at,
+                heartbeat_at=now,
+                started_at=now,
+                metrics_json=attempt_metrics,
+            ))
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.RUNNING.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.RUNNING.value
+            job.updated_at = now
+            job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "STAGE_PUBLICATION_ATTEMPT_CLAIMED",
+                from_state=previous_status,
+                to_state=stage.status,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={
+                    "stage_key": stage_key,
+                    "attempt_number": next_number,
+                    "execution_backend": execution_backend,
+                    "execution_ref": execution_ref,
+                    "lease_owner": lease_owner.strip(),
+                    "lease_expires_at": lease_expires_at.isoformat(),
+                    "validation_artifact_id": validation_artifact.id,
+                },
+            )
+            return attempt_id, next_number, lease_token, lease_expires_at
 
     def start_attempt(
             self,
@@ -1232,8 +1420,18 @@ class WorkflowRepository:
             stage_key,
             attempt_id,
             validation_report,
-            lease_token=None):
-        """Persist the structured report as a first-class artifact."""
+            lease_token=None,
+            complete_attempt=False,
+            metrics=None,
+            pricing=None):
+        """Persist a validation report; optionally close the processing attempt."""
+        if not isinstance(validation_report, dict):
+            raise ValueError("validation_report must be a dictionary")
+        if validation_report.get("valid") is not True:
+            raise ValueError("Only a valid report can validate a workflow stage")
+        errors = validation_report.get("errors")
+        if not isinstance(errors, list) or errors:
+            raise ValueError("A valid report must contain an empty errors list")
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
@@ -1249,14 +1447,37 @@ class WorkflowRepository:
                     )
                 ).scalar_one_or_none()
                 if existing is not None:
+                    if complete_attempt and attempt.state == AttemptState.RUNNING.value:
+                        self._complete_processing_attempt_in_session(
+                            attempt, metrics, pricing
+                        )
+                        _record_event(
+                            session,
+                            job_id,
+                            stage.workflow_id,
+                            "STAGE_PROCESSING_ATTEMPT_COMPLETED",
+                            from_state=AttemptState.RUNNING.value,
+                            to_state=AttemptState.SUCCEEDED.value,
+                            stage_id=stage.id,
+                            attempt_id=attempt_id,
+                            payload={
+                                "validation_artifact_id": existing.id,
+                                "idempotent_validation_replay": True,
+                            },
+                        )
                     return False
+            if attempt.state != AttemptState.RUNNING.value:
+                raise InvalidStateTransition(
+                    "Only a running attempt can validate a workflow stage"
+                )
             previous_status = stage.status
             self._transition(stage, StageState.VALIDATED)
             stage.output_contract_json = {
                 "validation": validation_report,
             }
+            validation_artifact_id = new_id()
             session.add(ArtifactRecord(
-                id=new_id(),
+                id=validation_artifact_id,
                 job_id=job_id,
                 stage_id=stage.id,
                 attempt_id=attempt_id,
@@ -1283,7 +1504,72 @@ class WorkflowRepository:
                     "error_count": len(validation_report.get("errors", [])),
                 },
             )
+            if complete_attempt:
+                self._complete_processing_attempt_in_session(
+                    attempt, metrics, pricing
+                )
+                _record_event(
+                    session,
+                    job_id,
+                    stage.workflow_id,
+                    "STAGE_PROCESSING_ATTEMPT_COMPLETED",
+                    from_state=AttemptState.RUNNING.value,
+                    to_state=AttemptState.SUCCEEDED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    payload={"validation_artifact_id": validation_artifact_id},
+                )
             return True
+
+    @staticmethod
+    def _complete_processing_attempt_in_session(attempt, metrics, pricing):
+        """Close the processing attempt while leaving the Stage VALIDATED."""
+        if attempt.state != AttemptState.RUNNING.value:
+            raise InvalidStateTransition("Processing attempt is not running")
+        now = utcnow()
+        attempt.state = AttemptState.SUCCEEDED.value
+        attempt.finished_at = now
+        started = attempt.started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        attempt.duration_ms = max(
+            0, int((now - started).total_seconds() * 1000)
+        )
+        usage = dict(metrics or {})
+        usage["duration_ms"] = attempt.duration_ms
+        attempt.cpu_seconds = usage.get("cpu_seconds")
+        attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
+        attempt.input_bytes = usage.get("input_bytes")
+        attempt.output_bytes = usage.get("output_bytes")
+        # The validation report is the processing Attempt's durable artifact.
+        # Publication artifacts are counted later on the separate Attempt.
+        attempt.artifact_count = max(1, int(attempt.artifact_count or 0))
+        WorkflowRepository._apply_attempt_accounting(attempt, usage, pricing)
+        # The process-local token is no longer useful after the processing
+        # attempt is terminal. Clear the complete lease tuple atomically.
+        WorkflowRepository._clear_attempt_lease(attempt)
+
+    @staticmethod
+    def _clear_attempt_lease(attempt):
+        attempt.lease_owner = None
+        attempt.lease_token_hash = None
+        attempt.lease_expires_at = None
+        attempt.heartbeat_at = None
+
+    def complete_processing_attempt(
+            self, job_id, stage_key, attempt_id, validation_report,
+            lease_token, metrics=None, pricing=None):
+        """Validate output and close its processing attempt in one transaction."""
+        return self.mark_validated(
+            job_id,
+            stage_key,
+            attempt_id,
+            validation_report,
+            lease_token=lease_token,
+            complete_attempt=True,
+            metrics=metrics,
+            pricing=pricing,
+        )
 
     def start_publishing(
             self, job_id, stage_key, attempt_id, lease_token=None):
@@ -1498,7 +1784,11 @@ class WorkflowRepository:
     @staticmethod
     def _apply_attempt_accounting(attempt, metrics, pricing):
         """Persist usage, a frozen price-card snapshot and explicit coverage."""
-        metrics = dict(metrics or {})
+        # Preserve non-sensitive lifecycle metadata (for example the package
+        # inventory namespace) while replacing the measured usage projection.
+        merged_metrics = dict(attempt.metrics_json or {})
+        merged_metrics.update(dict(metrics or {}))
+        metrics = merged_metrics
         accounting = WorkflowRepository._build_cost_accounting(
             metrics, pricing
         )
@@ -1556,6 +1846,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             prior_artifact_count = session.execute(
                 select(func.count()).select_from(ArtifactRecord).where(
                     ArtifactRecord.stage_id == stage.id,
@@ -1663,6 +1954,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             attempt.error_code = error_code
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -1704,13 +1996,15 @@ class WorkflowRepository:
             attempt_id,
             reason="CANCELLED",
             metrics=None,
-            pricing=None):
+            pricing=None,
+            lease_token=None):
         """Persist cancellation of a running attempt and its workflow stage."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
             if attempt.state != AttemptState.RUNNING.value:
                 return False
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
@@ -1738,6 +2032,7 @@ class WorkflowRepository:
             attempt.input_bytes = metrics.get("input_bytes")
             attempt.output_bytes = metrics.get("output_bytes")
             self._apply_attempt_accounting(attempt, metrics, pricing)
+            self._clear_attempt_lease(attempt)
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason
             workflow = session.get(WorkflowRecord, stage.workflow_id)
@@ -2291,6 +2586,342 @@ class WorkflowRepository:
                 ],
             }
             return report
+
+
+    def mark_package_attempt_cleaned(
+            self, attempt_id, bucket, attempt_prefix, now=None):
+        """Persist successful cleanup so the janitor does not rescan it."""
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session.begin() as session:
+            attempt = session.get(
+                AttemptRecord, attempt_id, with_for_update=True
+            )
+            if attempt is None:
+                return False
+            stored_metrics = dict(attempt.metrics_json or {})
+            namespace = dict(
+                stored_metrics.get("package_publication") or {}
+            )
+            if (
+                    not namespace
+                    or namespace.get("bucket") != bucket
+                    or namespace.get("prefix") != attempt_prefix):
+                raise InvalidStateTransition(
+                    "Cleanup namespace does not match the recorded Attempt"
+                )
+            if attempt.state not in (
+                    AttemptState.FAILED.value,
+                    AttemptState.CANCELLED.value,
+                    AttemptState.RETRYABLE.value):
+                raise InvalidStateTransition(
+                    "Only abandoned package Attempts can be marked cleaned"
+                )
+            if any((
+                    attempt.lease_owner,
+                    attempt.lease_token_hash,
+                    attempt.lease_expires_at,
+                    attempt.heartbeat_at)):
+                raise AttemptLeaseLost(
+                    "Cannot mark an Attempt cleaned while it has a lease"
+                )
+            namespace["cleanup_completed_at"] = now.isoformat()
+            stored_metrics["package_publication"] = namespace
+            attempt.metrics_json = stored_metrics
+            return True
+
+
+    def list_reclaimable_package_attempts(
+            self, minimum_age_seconds=86400, limit=100, now=None):
+        """Return old package Attempts whose exact namespaces pass DB guards."""
+        if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 1000):
+            raise ValueError("limit must be between 1 and 1000")
+        if (
+                isinstance(minimum_age_seconds, bool)
+                or not isinstance(minimum_age_seconds, (int, float))
+                or not math.isfinite(float(minimum_age_seconds))
+                or minimum_age_seconds <= 0):
+            raise ValueError("minimum_age_seconds must be finite and positive")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        cutoff = now - timedelta(seconds=float(minimum_age_seconds))
+
+        with self._session() as session:
+            candidates = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.state.in_([
+                        AttemptState.FAILED.value,
+                        AttemptState.CANCELLED.value,
+                        AttemptState.RETRYABLE.value,
+                    ]),
+                    AttemptRecord.finished_at <= cutoff,
+                    AttemptRecord.metrics_json["package_publication"].is_not(None),
+                ).order_by(AttemptRecord.finished_at.asc())
+                .limit(limit)
+            ).scalars().all()
+            metadata = []
+            for attempt in candidates:
+                namespace = (
+                    (attempt.metrics_json or {}).get("package_publication")
+                )
+                if (
+                        not isinstance(namespace, dict)
+                        or namespace.get("cleanup_completed_at")):
+                    continue
+                required = ("bucket", "prefix", "logical_key", "kind")
+                if not all(
+                        isinstance(namespace.get(key), str)
+                        and namespace.get(key)
+                        for key in required):
+                    continue
+                if namespace["kind"] == "package":
+                    if not namespace.get("inventory_key"):
+                        continue
+                elif namespace["kind"] == "single_file":
+                    if not namespace.get("object_key"):
+                        continue
+                else:
+                    continue
+                metadata.append({
+                    "attempt_id": attempt.id,
+                    "bucket": namespace["bucket"],
+                    "prefix": namespace["prefix"],
+                    "kind": namespace["kind"],
+                    "inventory_key": namespace.get("inventory_key"),
+                    "object_key": namespace.get("object_key"),
+                    "logical_key": namespace["logical_key"],
+                })
+
+        reclaimable = []
+        for item in metadata:
+            if self.is_attempt_reclaimable(
+                    item["attempt_id"],
+                    item["bucket"],
+                    item["prefix"],
+                    minimum_age_seconds=minimum_age_seconds,
+                    now=now):
+                reclaimable.append(item)
+                if len(reclaimable) >= limit:
+                    break
+        return reclaimable
+
+
+    def is_attempt_reclaimable(
+            self, attempt_id, bucket, attempt_prefix,
+            minimum_age_seconds=86400, now=None):
+        """Return whether a failed package Attempt is safe for orphan cleanup.
+
+        FAILED/CANCELLED attempts and superseded RETRYABLE attempts qualify
+        only after the grace period. The exact bucket/prefix must match the
+        namespace recorded on the Attempt, and any AVAILABLE Artifact under
+        that prefix blocks deletion.
+        """
+        if (
+                isinstance(minimum_age_seconds, bool)
+                or not isinstance(minimum_age_seconds, (int, float))
+                or not math.isfinite(float(minimum_age_seconds))
+                or minimum_age_seconds <= 0):
+            raise ValueError("minimum_age_seconds must be finite and positive")
+        if not bucket or not isinstance(bucket, str):
+            raise ValueError("bucket is required")
+        if (
+                not isinstance(attempt_prefix, str)
+                or not attempt_prefix
+                or attempt_prefix.startswith("/")
+                or "\\" in attempt_prefix
+                or any(part in ("", ".", "..")
+                       for part in attempt_prefix.split("/"))):
+            raise ValueError("attempt_prefix must be a safe relative key prefix")
+
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        prefix_parts = attempt_prefix.split("/")
+        if (
+                len(prefix_parts) < 2
+                or prefix_parts[-2] != ".attempts"
+                or prefix_parts[-1] != attempt_id):
+            raise ValueError(
+                "attempt_prefix must end with .attempts/<attempt_id>"
+            )
+        uri_prefix = "s3://{}/{}/".format(bucket, attempt_prefix.rstrip("/"))
+
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return False
+            stage = session.get(StageRecord, attempt.stage_id)
+            if stage is None:
+                return False
+            namespace = (
+                (attempt.metrics_json or {}).get("package_publication")
+            )
+            if (
+                    not isinstance(namespace, dict)
+                    or namespace.get("bucket") != bucket
+                    or namespace.get("prefix") != attempt_prefix):
+                return False
+            if attempt.state not in (
+                    AttemptState.FAILED.value,
+                    AttemptState.CANCELLED.value,
+                    AttemptState.RETRYABLE.value):
+                return False
+            if attempt.state == AttemptState.RETRYABLE.value:
+                newer_attempt = session.execute(
+                    select(AttemptRecord.id).where(
+                        AttemptRecord.stage_id == attempt.stage_id,
+                        AttemptRecord.attempt_number > attempt.attempt_number,
+                    ).limit(1)
+                ).scalar_one_or_none()
+                if (
+                        newer_attempt is None
+                        and stage.status not in (
+                            StageState.FINISHED.value,
+                            StageState.FAILED.value,
+                            StageState.CANCELLED.value)):
+                    return False
+            if any((
+                    attempt.lease_owner,
+                    attempt.lease_token_hash,
+                    attempt.lease_expires_at,
+                    attempt.heartbeat_at)):
+                return False
+            finished_at = attempt.finished_at
+            if finished_at is None:
+                return False
+            if finished_at.tzinfo is None:
+                finished_at = finished_at.replace(tzinfo=timezone.utc)
+            if now - finished_at < timedelta(
+                    seconds=float(minimum_age_seconds)):
+                return False
+
+            referenced = session.execute(
+                select(ArtifactRecord.id).where(
+                    ArtifactRecord.status == "AVAILABLE",
+                    func.substr(
+                        ArtifactRecord.uri, 1, len(uri_prefix)
+                    ) == uri_prefix,
+                ).limit(1)
+            ).scalar_one_or_none()
+            return referenced is None
+
+
+    def get_attempt_publication_namespace(self, attempt_id):
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return None
+            namespace = (attempt.metrics_json or {}).get("package_publication")
+            return dict(namespace) if isinstance(namespace, dict) else None
+
+
+    def get_attempt_local_package(self, attempt_id):
+        """Read internal shared-volume handoff metadata for a processing Attempt."""
+        with self._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None:
+                return None
+            package = (attempt.metrics_json or {}).get("local_package")
+            return dict(package) if isinstance(package, dict) else None
+
+
+    def requeue_processing_after_local_package_loss(
+            self, job_id, stage_key, processing_attempt_id, reason):
+        """Invalidate a local-only validation handoff and safely reprocess it."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason is required")
+        now = utcnow()
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if stage.status not in (
+                    StageState.VALIDATED.value,
+                    StageState.RETRY_WAIT.value):
+                raise InvalidStateTransition(
+                    "Local package loss can only requeue a validated stage"
+                )
+            processing_attempt = session.get(
+                AttemptRecord, processing_attempt_id, with_for_update=True
+            )
+            if (
+                    processing_attempt is None
+                    or processing_attempt.stage_id != stage.id
+                    or processing_attempt.state != AttemptState.SUCCEEDED.value):
+                raise InvalidStateTransition(
+                    "Requeue requires the successful processing Attempt"
+                )
+            active = session.execute(
+                select(AttemptRecord.id).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if active is not None:
+                raise StageAlreadyRunning(
+                    "Cannot requeue while another Attempt is active"
+                )
+
+            previous_status = stage.status
+            validation_artifact = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.attempt_id == processing_attempt_id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                ).with_for_update()
+            ).scalars().first()
+            if validation_artifact is None:
+                raise InvalidStateTransition(
+                    "The successful processing Attempt has no available "
+                    "validation proof to invalidate"
+                )
+            other_available = session.execute(
+                select(ArtifactRecord.id).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.status == "AVAILABLE",
+                    ArtifactRecord.id != validation_artifact.id,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if other_available is not None:
+                raise InvalidStateTransition(
+                    "Cannot reprocess after another Artifact was published"
+                )
+
+            metadata = dict(validation_artifact.metadata_json or {})
+            metadata["invalidated_reason"] = reason.strip()[:500]
+            metadata["invalidated_at"] = now.isoformat()
+            validation_artifact.metadata_json = metadata
+            validation_artifact.status = "UNAVAILABLE"
+            if stage.status != StageState.RETRY_WAIT.value:
+                self._transition(stage, StageState.RETRY_WAIT)
+            else:
+                stage.version += 1
+                stage.updated_at = now
+
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            workflow.state = WorkflowState.RUNNING.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.RUNNING.value
+            job.updated_at = now
+            job.version += 1
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "PROCESSING_REQUEUED_AFTER_LOCAL_PACKAGE_LOSS",
+                from_state=previous_status,
+                to_state=StageState.RETRY_WAIT.value,
+                stage_id=stage.id,
+                attempt_id=processing_attempt_id,
+                payload={"reason": reason.strip()[:500]},
+            )
+            return True
 
 
     def get_stage_snapshot(self, job_id, stage_key):
