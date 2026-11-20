@@ -68,7 +68,11 @@ class WorkflowRepositoryTests(unittest.TestCase):
             issuer="https://issuer.example.test/",
             subject=subject,
             tenant_id=tenant,
-            scopes=frozenset(["video.jobs:read", "video.jobs:create"]),
+            scopes=frozenset([
+                "video.jobs:read",
+                "video.jobs:create",
+                "video.playback:write",
+            ]),
             roles=frozenset(),
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -462,6 +466,51 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(
             event_types.count("STAGE_ATTEMPT_STARTED"), 3
         )
+
+    def test_playback_session_authorization_uses_durable_job_owner(self):
+        principal = self.make_owner_principal()
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-owned-playback-{}".format(uuid4()),
+            "d" * 64,
+            stage_specs=[{
+                "stage_key": "p0",
+                "operation": "video.hls.package_and_publish",
+            }],
+            owner_principal=principal,
+        )
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        self.repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://video/master.m3u8",
+                "size_bytes": 12,
+            }],
+        )
+        playback = self.repository.start_playback_session(job_id, "p0")
+        self.assertTrue(self.repository.authorize_playback_session_access(
+            playback["session_id"], principal, "video.playback:write"
+        ))
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                playback["session_id"],
+                self.make_owner_principal(tenant="tenant-b"),
+                "video.playback:write",
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                playback["session_id"],
+                self.make_owner_principal(subject="different-subject"),
+                "video.playback:write",
+            )
 
     def test_playback_qoe_events_are_idempotent_and_correlate_with_stage_cost(self):
         job_id = self.create_job("p0")

@@ -328,3 +328,38 @@ REDIS_URL = env_config.get(
     default="",
     cast=str
 )
+
+
+##################################################
+#    gRPC authentication                         #
+##################################################
+
+GRPC_AUTH_MODE = env_config.get(
+    "GRPC_AUTH_MODE", default="oidc", cast=str
+).strip().lower()
+OIDC_ISSUER = env_config.get("OIDC_ISSUER", default="", cast=str)
+OIDC_AUDIENCE = env_config.get("OIDC_AUDIENCE", default="", cast=str)
+OIDC_JWKS_URI = env_config.get("OIDC_JWKS_URI", default="", cast=str)
+OIDC_ALLOWED_ALGORITHMS = tuple(
+    item.strip() for item in env_config.get(
+        "OIDC_ALLOWED_ALGORITHMS", default="RS256", cast=str
+    ).split(",") if item.strip()
+)
+OIDC_TENANT_CLAIM = env_config.get(
+    "OIDC_TENANT_CLAIM", default="tenant_id", cast=str
+)
+OIDC_SUBJECT_CLAIM = env_config.get(
+    "OIDC_SUBJECT_CLAIM", default="sub", cast=str
+)
+OIDC_SCOPES_CLAIM = env_config.get(
+    "OIDC_SCOPES_CLAIM", default="scope", cast=str
+)
+OIDC_ROLES_CLAIM = env_config.get(
+    "OIDC_ROLES_CLAIM", default="roles", cast=str
+)
+OIDC_JWKS_TIMEOUT_SECONDS = env_config.get(
+    "OIDC_JWKS_TIMEOUT_SECONDS", default=5, cast=int
+)
+OIDC_CLOCK_LEEWAY_SECONDS = env_config.get(
+    "OIDC_CLOCK_LEEWAY_SECONDS", default=0, cast=int
+)

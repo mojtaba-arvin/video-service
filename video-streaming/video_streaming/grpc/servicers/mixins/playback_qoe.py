@@ -2,23 +2,19 @@
 
 import grpc
 
-from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.qoe import playback_qoe_report_payload
+from video_streaming.grpc.servicers.mixins.job_authorization import (
+    require_job_access,
+    require_playback_session_access,
+)
 
 
 class PlaybackQoEMixin:
 
-    def _playback_repository(self, context):
-        repository = get_workflow_repository(required=False)
-        if repository is None:
-            context.abort(
-                grpc.StatusCode.UNAVAILABLE,
-                "Durable playback telemetry storage is not configured",
-            )
-        return repository
-
     def start_playback_session(self, request, context):
-        repository = self._playback_repository(context)
+        repository = require_job_access(
+            request.tracking_id, "video.playback:write", context
+        )
         try:
             result = repository.start_playback_session(
                 job_id=request.tracking_id,
@@ -37,7 +33,9 @@ class PlaybackQoEMixin:
         )
 
     def record_playback_event(self, request, context):
-        repository = self._playback_repository(context)
+        repository = require_playback_session_access(
+            request.session_id, "video.playback:write", context
+        )
         try:
             event_type = self.pb2.PlaybackEventType.Name(
                 request.event_type
@@ -85,7 +83,9 @@ class PlaybackQoEMixin:
         )
 
     def get_playback_qoe_report(self, request, context):
-        repository = self._playback_repository(context)
+        repository = require_job_access(
+            request.tracking_id, "video.qoe:read", context
+        )
         try:
             report = repository.get_playback_qoe_report(
                 job_id=request.tracking_id,

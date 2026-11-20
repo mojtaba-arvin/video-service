@@ -4,6 +4,7 @@ from video_streaming.celery import celery_app
 from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.grpc.protos import streaming_pb2
+from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
 
 
 class RevokeJobsMixin(object):
@@ -63,6 +64,10 @@ class RevokeJobsMixin(object):
         #             async_result.revoke()
 
     def _revoke_jobs(self, request, context):
+        # Authorize the entire batch before the first cancellation side effect.
+        for request_id in request.tracking_ids:
+            require_job_access(request_id, "video.jobs:cancel", context)
+
         results: list[streaming_pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
             result = self._revoke_job(request_id)

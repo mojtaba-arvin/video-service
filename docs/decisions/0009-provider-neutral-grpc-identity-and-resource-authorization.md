@@ -66,6 +66,33 @@ A caller-supplied tenant_id, owner_id, reference_id, tracking ID or custom metad
 
 No production rollout is complete merely because the interceptor exists. Deployment configuration, issuer/audience mapping, key rotation/cache behavior, migration, observability and operational rollback must be verified.
 
+## Implementation status (2026-11-19)
+
+PR #117 implements a first gRPC vertical for this decision, but it is not
+merged and does not complete production rollout:
+
+- Configured OIDC/JWKS bearer verification with explicit issuer, audience,
+  JWKS URI, asymmetric algorithm allow-list, required subject/tenant claims,
+  and fail-closed verification.
+- Request-scoped principal propagation and authentication of every non-health
+  RPC; the gRPC listener requires TLS and complete OIDC trust configuration.
+- Durable Job owner tenant, issuer and creator subject are persisted during
+  Job creation. Job reads, cancellation, output revocation, playback-session
+  creation/events and QoE reads enforce the relevant scope and owner boundary.
+- Batch reads/cancellations are authorized in full before reads or side effects.
+
+Remaining gates: PR #117 must pass all required CI and Dependency Review checks;
+the deployed issuer, audience, claim mapping, JWKS/key-rotation behavior and TLS
+certificates must be verified operationally; shared application-service
+authorization for future non-gRPC adapters is not yet established; and legacy
+unowned Jobs remain inaccessible pending an explicit migration/admin policy.
+ADR 0008 secret resolution remains disabled until its own encryption, scoped
+authorization and legacy webhook migration gates pass. Webhook SSRF hardening
+and the plaintext Redis callback migration remain separate open risks.
+
+Do not interpret this partial implementation as proof of production readiness
+or as completion of Issue #73.
+
 ## Required verification
 
 - Missing, malformed, expired, not-yet-valid, wrong-issuer and wrong-audience tokens are rejected.

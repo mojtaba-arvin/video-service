@@ -44,9 +44,11 @@ class GrpcServerBaseCommand(BaseCommand):
             help='Server certificate key.'
         )
 
-    def create_server(self):
-        server = grpc.server(futures.ThreadPoolExecutor(
-            max_workers=self._MAX_WORKERS))
+    def create_server(self, interceptors=None):
+        server = grpc.server(
+            futures.ThreadPoolExecutor(max_workers=self._MAX_WORKERS),
+            interceptors=tuple(interceptors or ()),
+        )
         return server
 
     def config_ssl(self, args, server):
@@ -67,7 +69,9 @@ class GrpcServerBaseCommand(BaseCommand):
             )
             server.add_secure_port(self._TARGET_SERVER_ADDRESS + str(args.port), credentials)
         else:
-            server.add_insecure_port(self._TARGET_SERVER_ADDRESS + str(args.port))
+            raise RuntimeError(
+                "TLS server certificate and key are required; refusing insecure gRPC"
+            )
 
         return server
 

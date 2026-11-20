@@ -1,5 +1,7 @@
 # gRPC
 
+PyJWT[crypto]==2.15.1
+
 grpcio==1.78.2
 grpcio-tools==1.78.2
 grpcio-health-checking==1.78.2

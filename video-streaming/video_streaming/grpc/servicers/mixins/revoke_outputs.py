@@ -4,6 +4,7 @@ from video_streaming.grpc import exceptions
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus, OutputStatus
 from video_streaming.grpc.protos import streaming_pb2
+from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
 
 
 class RevokeOutputsMixin(object):
@@ -100,6 +101,7 @@ class RevokeOutputsMixin(object):
     def _revoke_job_outputs(self, request, context):
 
         request_id: str = request.tracking_id
+        require_job_access(request_id, "video.jobs:outputs:revoke", context)
         primary_status: str = self.cache.get(
             CacheKeysTemplates.PRIMARY_STATUS.format(
                 request_id=request_id), decode=False)

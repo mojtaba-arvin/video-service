@@ -19,6 +19,8 @@ from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.operations import OperationKind
+from video_streaming.grpc.authentication import get_request_principal
+from video_streaming.security import require_scope
 
 
 class CreateJobMixin(object):
@@ -316,6 +318,8 @@ class CreateJobMixin(object):
         return any(output.upload_to.key and not output.upload_to.key.isspace() for output in outputs)
 
     def _create_job(self, request, context):
+        principal = get_request_principal()
+        require_scope(principal, "video.jobs:create")
         request_id: str = str(uuid.uuid4())
         logger.info(
             "Accepted video job",
@@ -595,6 +599,7 @@ class CreateJobMixin(object):
                 reference_id=request.reference_id,
                 workflow_name="video.vod",
                 stage_specs=stage_specs,
+                owner_principal=principal,
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": len(stage_specs),
