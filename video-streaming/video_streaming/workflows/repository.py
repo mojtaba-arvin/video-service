@@ -1117,6 +1117,105 @@ class WorkflowRepository:
             )
             return row.state == "PENDING"
 
+    def list_outbox(self, state="DEAD", limit=100):
+        """List bounded non-secret relay records for operator inspection."""
+        if state not in ("PENDING", "PROCESSING", "PUBLISHED", "DEAD"):
+            raise ValueError("unsupported outbox state")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._session() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.state == state
+                ).order_by(
+                    OutboxRecord.updated_at,
+                    OutboxRecord.created_at,
+                    OutboxRecord.id,
+                ).limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "state": row.state,
+                "attempts": row.attempts,
+                "available_at": row.available_at.isoformat(),
+                "last_error": row.last_error,
+            } for row in rows]
+
+    def get_outbox_metrics(self, now=None):
+        """Return bounded-cardinality relay health counters and pending age."""
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session() as session:
+            grouped = session.execute(
+                select(OutboxRecord.state, func.count(OutboxRecord.id))
+                .group_by(OutboxRecord.state)
+            ).all()
+            counts = {state: int(count) for state, count in grouped}
+            oldest = session.execute(
+                select(func.min(OutboxRecord.created_at)).where(
+                    OutboxRecord.state == "PENDING"
+                )
+            ).scalar_one_or_none()
+            if oldest is not None and (
+                    oldest.tzinfo is None or oldest.utcoffset() is None):
+                oldest = oldest.replace(tzinfo=timezone.utc)
+            return {
+                "pending": counts.get("PENDING", 0),
+                "processing": counts.get("PROCESSING", 0),
+                "published": counts.get("PUBLISHED", 0),
+                "dead": counts.get("DEAD", 0),
+                "oldest_pending_age_seconds": (
+                    max(0, int((now - oldest).total_seconds()))
+                    if oldest is not None else None
+                ),
+            }
+
+    def replay_dead_outbox(self, outbox_id, operator_id, reason, now=None):
+        """Audited manual replay of one dead row; authorization is caller-owned.
+
+        This low-level method must only be exposed through an authenticated,
+        permission-checked operator action. The operator identity and reason
+        are persisted as a durable event.
+        """
+        if not isinstance(operator_id, str) or not operator_id.strip() or len(operator_id) > 255:
+            raise ValueError("operator_id must contain 1 to 255 characters")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1024:
+            raise ValueError("reason must contain 1 to 1024 characters")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if row is None or row.state != "DEAD":
+                return False
+            row.state = "PENDING"
+            row.attempts = 0
+            row.available_at = now
+            row.updated_at = now
+            row.last_error = None
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                "OUTBOX_MANUAL_REPLAY_REQUESTED",
+                payload={
+                    "outbox_id": row.id,
+                    "operator_id": operator_id.strip(),
+                    "reason": reason.strip(),
+                },
+            )
+            return True
+
     def get_outbox_snapshot(self, outbox_id):
         """Return non-secret operational metadata for one outbox delivery."""
         with self._session() as session:
@@ -1311,6 +1410,11 @@ class WorkflowRepository:
                 raise AttemptLeaseLost("Attempt does not have a worker lease")
             return
         now = now or utcnow()
+        lease_expires_at = attempt.lease_expires_at
+        if lease_expires_at is not None and (
+                lease_expires_at.tzinfo is None
+                or lease_expires_at.utcoffset() is None):
+            lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
         if (
                 not isinstance(lease_token, str)
                 or not hmac.compare_digest(
@@ -1318,17 +1422,22 @@ class WorkflowRepository:
                     hashlib.sha256(lease_token.encode("utf-8")).hexdigest(),
                 )
                 or attempt.state != AttemptState.RUNNING.value
-                or attempt.lease_expires_at is None
-                or attempt.lease_expires_at <= now):
+                or lease_expires_at is None
+                or lease_expires_at <= now):
             raise AttemptLeaseLost("Attempt lease is no longer valid")
 
     def _recover_expired_attempt_in_session(
             self, session, stage, attempt, now, pricing=None):
+        lease_expires_at = attempt.lease_expires_at
+        if lease_expires_at is not None and (
+                lease_expires_at.tzinfo is None
+                or lease_expires_at.utcoffset() is None):
+            lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
         if (
                 attempt.state != AttemptState.RUNNING.value
                 or attempt.lease_token_hash is None
-                or attempt.lease_expires_at is None
-                or attempt.lease_expires_at > now
+                or lease_expires_at is None
+                or lease_expires_at > now
                 or stage.status not in (
                     StageState.PROCESSING.value,
                     StageState.VALIDATED.value,
@@ -1375,7 +1484,8 @@ class WorkflowRepository:
             lease_ttl_seconds=60,
             execution_backend="celery",
             execution_ref=None,
-            pricing=None):
+            pricing=None,
+            require_dependencies=False):
         """Atomically claim a stage and return a one-time worker lease token.
 
         The raw token is returned only to the claiming process. Only its SHA-256
@@ -1396,6 +1506,30 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            if require_dependencies:
+                job = session.get(JobRecord, job_id)
+                if job is None or job.state == JobState.CANCELLED.value:
+                    raise InvalidStateTransition(
+                        "A cancelled or missing Job cannot claim a workflow node"
+                    )
+                dependency_rows = session.execute(
+                    select(StageRecord)
+                    .join(
+                        StageDependencyRecord,
+                        StageDependencyRecord.depends_on_stage_id == StageRecord.id,
+                    )
+                    .where(
+                        StageDependencyRecord.stage_id == stage.id,
+                        StageDependencyRecord.workflow_id == stage.workflow_id,
+                    )
+                    .with_for_update()
+                ).scalars().all()
+                if any(
+                        dependency.status != StageState.FINISHED.value
+                        for dependency in dependency_rows):
+                    raise InvalidStateTransition(
+                        "Workflow node dependencies are not all finished"
+                    )
             if stage.status in (
                     StageState.PROCESSING.value,
                     StageState.VALIDATED.value,
@@ -1496,6 +1630,108 @@ class WorkflowRepository:
                 },
             )
             return attempt_id, next_number, lease_token, lease_expires_at
+
+    def claim_node_attempt(
+            self, job_id, stage_key, lease_owner, lease_ttl_seconds=60,
+            execution_ref=None):
+        """Claim a DAG node only after every durable dependency is FINISHED."""
+        return self.claim_attempt(
+            job_id,
+            stage_key,
+            lease_owner=lease_owner,
+            lease_ttl_seconds=lease_ttl_seconds,
+            execution_backend="workflow_node",
+            execution_ref=execution_ref,
+            require_dependencies=True,
+        )
+
+    def complete_node_attempt(
+            self, job_id, stage_key, attempt_id, validation_report,
+            lease_token, metrics=None, pricing=None):
+        """Finish an internal DAG node under its current fenced lease."""
+        if not isinstance(validation_report, dict):
+            raise ValueError("validation_report must be a dictionary")
+        if (
+                validation_report.get("valid") is not True
+                or not isinstance(validation_report.get("errors"), list)
+                or validation_report.get("errors")):
+            raise ValueError("A workflow node requires a successful validation report")
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None or attempt.stage_id != stage.id:
+                raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
+            if stage.status != StageState.PROCESSING.value:
+                raise InvalidStateTransition(
+                    "Only a processing workflow node can be completed"
+                )
+            if attempt.state != AttemptState.RUNNING.value:
+                raise InvalidStateTransition("Workflow node Attempt is not running")
+            now = utcnow()
+            previous_status = stage.status
+            self._complete_processing_attempt_in_session(
+                attempt, metrics or {}, pricing
+            )
+            stage.status = StageState.FINISHED.value
+            stage.updated_at = now
+            stage.version += 1
+            # Persist only bounded, non-sensitive validation metadata. Handler
+            # payloads and arbitrary output values remain outside the control DB.
+            artifact_id = new_id()
+            safe_report = {
+                "valid": True,
+                "errors": [],
+                "operation": stage.operation,
+            }
+            session.add(ArtifactRecord(
+                id=artifact_id,
+                job_id=job_id,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                artifact_type="node_result",
+                logical_name="node-result",
+                uri="workflow://jobs/{}/stages/{}/attempts/{}/result".format(
+                    job_id, stage_key, attempt_id
+                ),
+                media_type="application/json",
+                status="AVAILABLE",
+                metadata_json=safe_report,
+            ))
+            _record_event(
+                session,
+                job_id,
+                stage.workflow_id,
+                "WORKFLOW_NODE_COMPLETED",
+                from_state=previous_status,
+                to_state=StageState.FINISHED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={"operation": stage.operation, "artifact_id": artifact_id},
+            )
+            unfinished = session.execute(
+                select(func.count(StageRecord.id)).where(
+                    StageRecord.workflow_id == stage.workflow_id,
+                    StageRecord.status != StageState.FINISHED.value,
+                )
+            ).scalar_one()
+            if unfinished == 0:
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                job = session.get(JobRecord, job_id)
+                workflow.state = WorkflowState.FINISHED.value
+                workflow.updated_at = now
+                job.state = JobState.FINISHED.value
+                job.updated_at = now
+                job.version += 1
+                _record_event(
+                    session,
+                    job_id,
+                    workflow.id,
+                    "JOB_FINISHED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FINISHED.value,
+                )
+            return True
 
     def renew_attempt_lease(
             self,
