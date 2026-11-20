@@ -1,10 +1,14 @@
 import json
-import urllib3
 from celery import Task
 from video_streaming import settings
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import BaseTask
 from video_streaming.ffmpeg.tasks.base import BaseStreamingTask
+from video_streaming.ffmpeg.webhook_transport import (
+    WebhookDestinationError,
+    WebhookTransportError,
+    request_webhook,
+)
 
 
 class CallWebhookMixin(object):
@@ -30,33 +34,26 @@ class CallWebhookMixin(object):
         if job_details is None:
             return None
 
-        http_method = 'POST'
-        headers = {'Content-Type': 'application/json'}
         encoded_body = json.dumps({
             "request_id": request_id,
             "reference_id": job_details["reference_id"]
         })
-        http_pool = urllib3.PoolManager()
         try:
-            http_response = http_pool.request(
-                http_method,
+            http_response = request_webhook(
                 webhook_url,
-                headers=headers,
                 body=encoded_body,
-                timeout=urllib3.Timeout(
-                    connect=settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS,
-                    read=settings.WEBHOOK_READ_TIMEOUT_SECONDS,
-                ),
-                # A redirect can turn a public callback into an internal request.
-                # Reject it at the transport layer; do not follow it first.
-                redirect=False,
-                retries=False,
-                # The response body is not part of the callback contract.
-                preload_content=False,
+                connect_timeout=settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=settings.WEBHOOK_READ_TIMEOUT_SECONDS,
+                allow_loopback=settings.WEBHOOK_ALLOW_LOOPBACK_CALLBACKS,
             )
-        except Exception as e:
-            http_pool.clear()
-            raise self.retry(exc=e)
+        except WebhookDestinationError:
+            # Never include the supplied URL in task state or exception text.
+            raise self.raise_ignore(
+                message=self.error_messages.WEBHOOK_URL_NOT_ALLOWED,
+                request_kwargs=self.request.kwargs,
+            )
+        except WebhookTransportError as exc:
+            raise self.retry(exc=exc)
 
         try:
             # Webhook URLs can contain bearer material or signed query values.
@@ -72,7 +69,6 @@ class CallWebhookMixin(object):
             return self.check_http_status(http_response, request_id)
         finally:
             http_response.close()
-            http_pool.clear()
 
     def check_http_status(
             self,

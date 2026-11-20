@@ -64,12 +64,13 @@ class SensitiveLoggingTests(unittest.TestCase):
     def test_webhook_query_credentials_are_not_logged(self):
         secret = "callback-token-secret"
         url = "https://callback.invalid/hook?token={}".format(secret)
-        pool = Mock()
-        pool.request.return_value.status = 204
+        response = Mock()
+        response.status = 204
+        response.reason = "No Content"
 
         with patch(
-                "video_streaming.ffmpeg.tasks.mixins.call_webhook.urllib3.PoolManager",
-                return_value=pool):
+                "video_streaming.ffmpeg.tasks.mixins.call_webhook.request_webhook",
+                return_value=response) as transport:
             with self.assertLogs("tests.webhook_logging", level="INFO") as captured:
                 result = _WebhookTask().call_webhook("job-123", webhook_url=url)
 
@@ -80,17 +81,18 @@ class SensitiveLoggingTests(unittest.TestCase):
         self.assertEqual(captured.records[0].request_id, "job-123")
         self.assertNotIn(secret, rendered)
         self.assertNotIn(url, rendered)
+        self.assertEqual(transport.call_args.args[0], url)
+        response.close.assert_called_once_with()
 
     def test_webhook_transport_is_bounded_and_does_not_follow_redirects(self):
         url = "https://callback.invalid/hook"
-        pool = Mock()
         response = Mock()
         response.status = 302
-        pool.request.return_value = response
+        response.reason = "Found"
 
         with patch(
-                "video_streaming.ffmpeg.tasks.mixins.call_webhook.urllib3.PoolManager",
-                return_value=pool):
+                "video_streaming.ffmpeg.tasks.mixins.call_webhook.request_webhook",
+                return_value=response) as transport:
             with patch(
                     "video_streaming.ffmpeg.tasks.mixins.call_webhook."
                     "settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS",
@@ -109,14 +111,11 @@ class SensitiveLoggingTests(unittest.TestCase):
                                 "job-456", webhook_url=url
                             )
 
-        kwargs = pool.request.call_args.kwargs
-        self.assertFalse(kwargs["redirect"])
-        self.assertFalse(kwargs["retries"])
-        self.assertFalse(kwargs["preload_content"])
-        self.assertEqual(kwargs["timeout"]._connect, 2.0)
-        self.assertEqual(kwargs["timeout"]._read, 4.0)
+        kwargs = transport.call_args.kwargs
+        self.assertEqual(kwargs["connect_timeout"], 2.0)
+        self.assertEqual(kwargs["read_timeout"], 4.0)
+        self.assertEqual(kwargs["allow_loopback"], False)
         response.close.assert_called_once_with()
-        pool.clear.assert_called_once_with()
 
     def test_s3_exception_log_omits_provider_exception_message(self):
         secret = "provider-secret-value"
