@@ -1,4 +1,4 @@
-"""Tests for bounded FFprobe metadata inspection."""
+"""Tests for bounded and structurally validated FFprobe metadata."""
 
 import subprocess
 import tempfile
@@ -54,6 +54,36 @@ class MediaProbeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe_media("output.mp4", "ffprobe", timeout_seconds=0)
             runner.assert_not_called()
+
+    @patch("video_streaming.execution.media_probe.run_cancellable_process")
+    def test_rejects_invalid_json(self, runner):
+        runner.return_value = (b"not-json", b"")
+        with self.assertRaisesRegex(ValueError, "invalid JSON"):
+            probe_media("output.mp4", "ffprobe", timeout_seconds=2)
+
+    @patch("video_streaming.execution.media_probe.run_cancellable_process")
+    def test_rejects_non_object_json_root(self, runner):
+        runner.return_value = (b'["not", "an", "object"]', b"")
+        with self.assertRaisesRegex(ValueError, "root must be"):
+            probe_media("output.mp4", "ffprobe", timeout_seconds=2)
+
+    @patch("video_streaming.execution.media_probe.run_cancellable_process")
+    def test_rejects_missing_stream_collection(self, runner):
+        runner.return_value = (b'{"format": {}}', b"")
+        with self.assertRaisesRegex(ValueError, "streams array"):
+            probe_media("output.mp4", "ffprobe", timeout_seconds=2)
+
+    @patch("video_streaming.execution.media_probe.run_cancellable_process")
+    def test_rejects_non_object_stream_entries(self, runner):
+        runner.return_value = (b'{"streams": [null]}', b"")
+        with self.assertRaisesRegex(ValueError, "streams must contain"):
+            probe_media("output.mp4", "ffprobe", timeout_seconds=2)
+
+    @patch("video_streaming.execution.media_probe.run_cancellable_process")
+    def test_rejects_non_object_format_metadata(self, runner):
+        runner.return_value = (b'{"streams": [], "format": []}', b"")
+        with self.assertRaisesRegex(ValueError, "format metadata"):
+            probe_media("output.mp4", "ffprobe", timeout_seconds=2)
 
     @patch("video_streaming.ffmpeg.thumbnail.probe_media")
     def test_thumbnail_validation_uses_supervised_probe(self, probe):
