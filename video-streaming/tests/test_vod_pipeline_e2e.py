@@ -183,6 +183,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "FFPROBE_BIN_PATH={}".format(shutil.which("ffprobe")),
                 "FFMPEG_BIN_PATH={}".format(shutil.which("ffmpeg")),
                 "REDIS_TIMEOUT_SECOND=3600",
+                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
                 "REDIS_URL=redis://127.0.0.1:6379/0",
             ]) + "\n",
             encoding="utf-8",
