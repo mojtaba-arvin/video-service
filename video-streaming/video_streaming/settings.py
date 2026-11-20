@@ -56,6 +56,13 @@ WEBHOOK_READ_TIMEOUT_SECONDS = env_config.get(
     default=10.0,
     cast=float)
 
+# Only test/development harnesses may send callbacks to loopback. Private,
+# link-local and metadata destinations remain blocked in every mode.
+WEBHOOK_ALLOW_LOOPBACK_CALLBACKS = env_config.get(
+    "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS",
+    default=False,
+    cast=bool)
+
 if WEBHOOK_CONNECT_TIMEOUT_SECONDS <= 0:
     raise ValueError("WEBHOOK_CONNECT_TIMEOUT_SECONDS must be greater than zero")
 if WEBHOOK_READ_TIMEOUT_SECONDS <= 0:
@@ -257,16 +264,6 @@ FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
     default=3600,
     cast=int)
 
-# One supervised FFmpeg invocation packages all HLS/DASH renditions.
-FFMPEG_PLAYLIST_TIMEOUT_SECONDS = env_config.get(
-    "FFMPEG_PLAYLIST_TIMEOUT_SECONDS",
-    default=7200,
-    cast=int)
-if not 1 <= FFMPEG_PLAYLIST_TIMEOUT_SECONDS <= 86400:
-    raise ValueError(
-        "FFMPEG_PLAYLIST_TIMEOUT_SECONDS must be between 1 and 86400"
-    )
-
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
@@ -363,8 +360,41 @@ REDIS_URL = env_config.get(
 )
 
 
-# Run the guarded package-attempt janitor hourly. The task rechecks each
-# candidate against PostgreSQL immediately before deleting its inventory.
+##################################################
+#    gRPC authentication                         #
+##################################################
+
+GRPC_AUTH_MODE = env_config.get(
+    "GRPC_AUTH_MODE", default="oidc", cast=str
+).strip().lower()
+OIDC_ISSUER = env_config.get("OIDC_ISSUER", default="", cast=str)
+OIDC_AUDIENCE = env_config.get("OIDC_AUDIENCE", default="", cast=str)
+OIDC_JWKS_URI = env_config.get("OIDC_JWKS_URI", default="", cast=str)
+OIDC_ALLOWED_ALGORITHMS = tuple(
+    item.strip() for item in env_config.get(
+        "OIDC_ALLOWED_ALGORITHMS", default="RS256", cast=str
+    ).split(",") if item.strip()
+)
+OIDC_TENANT_CLAIM = env_config.get(
+    "OIDC_TENANT_CLAIM", default="tenant_id", cast=str
+)
+OIDC_SUBJECT_CLAIM = env_config.get(
+    "OIDC_SUBJECT_CLAIM", default="sub", cast=str
+)
+OIDC_SCOPES_CLAIM = env_config.get(
+    "OIDC_SCOPES_CLAIM", default="scope", cast=str
+)
+OIDC_ROLES_CLAIM = env_config.get(
+    "OIDC_ROLES_CLAIM", default="roles", cast=str
+)
+OIDC_JWKS_TIMEOUT_SECONDS = env_config.get(
+    "OIDC_JWKS_TIMEOUT_SECONDS", default=5, cast=int
+)
+OIDC_CLOCK_LEEWAY_SECONDS = env_config.get(
+    "OIDC_CLOCK_LEEWAY_SECONDS", default=0, cast=int
+)
+
+
 CELERY_BEAT_SCHEDULE = {
     "cleanup-abandoned-package-attempts": {
         "task": "cleanup_abandoned_packages",
