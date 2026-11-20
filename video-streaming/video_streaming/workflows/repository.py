@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
-    Index, Integer, Numeric, String, Text, UniqueConstraint, create_engine,
+    ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
+    UniqueConstraint, create_engine,
     select, func,
 )
 from sqlalchemy.exc import IntegrityError
@@ -54,6 +55,10 @@ class JobRecord(Base):
             "owner_subject IS NOT NULL)",
             name="ck_workflow_job_owner_identity_complete",
         ),
+        UniqueConstraint(
+            "id", "owner_tenant_id", "owner_issuer", "owner_subject",
+            name="uq_workflow_jobs_secret_owner",
+        ),
         Index(
             "ix_workflow_jobs_owner_tenant_created",
             "owner_tenant_id",
@@ -73,6 +78,55 @@ class JobRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+
+
+class JobSecretRecord(Base):
+    """Encrypted callback material bound to the exact durable Job owner."""
+
+    __tablename__ = "workflow_job_secrets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["job_id", "tenant_id", "issuer", "subject"],
+            [
+                "workflow_jobs.id",
+                "workflow_jobs.owner_tenant_id",
+                "workflow_jobs.owner_issuer",
+                "workflow_jobs.owner_subject",
+            ],
+            ondelete="CASCADE",
+            name="fk_workflow_job_secrets_owner",
+        ),
+        UniqueConstraint(
+            "job_id", "purpose", "version",
+            name="uq_workflow_job_secret_purpose_version",
+        ),
+        CheckConstraint("version >= 1", name="ck_workflow_job_secret_version"),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'REVOKED', 'DELETED')",
+            name="ck_workflow_job_secret_status",
+        ),
+        Index(
+            "ix_workflow_job_secrets_scope",
+            "job_id", "tenant_id", "purpose", "status",
+        ),
+    )
+
+    secret_id = Column(String(64), primary_key=True)
+    job_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    issuer = Column(String(512), nullable=False)
+    subject = Column(String(255), nullable=False)
+    purpose = Column(String(128), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    algorithm = Column(String(32), nullable=False)
+    nonce = Column(String(64), nullable=False)
+    ciphertext = Column(Text, nullable=False)
+    wrapped_dek = Column(Text, nullable=False)
+    kms_key_id = Column(String(512), nullable=False)
+    status = Column(String(16), nullable=False, default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class WorkflowRecord(Base):
@@ -356,13 +410,14 @@ class WorkflowRepository:
             stage_specs=None,
             metadata=None,
             execution_plan=None,
-            owner_principal=None):
+            owner_principal=None,
+            secret_envelopes=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
-        authentication boundary. Omitting it preserves legacy-unowned
-        compatibility; production RPCs must not rely on that compatibility
-        path once authenticated dispatch is enabled.
+        authentication boundary. Secret envelopes require that owner and are
+        inserted in this same transaction as the Job, workflow and stages.
+        Omitting owner_principal preserves legacy-unowned compatibility.
         """
         if owner_principal is not None:
             from video_streaming.security import RequestPrincipal, AuthorizationError
@@ -371,6 +426,37 @@ class WorkflowRepository:
                 raise TypeError("owner_principal must be a RequestPrincipal")
             if owner_principal.is_expired():
                 raise AuthorizationError("Resource not found or access denied")
+
+        from video_streaming.security.secret_store import SecretEnvelope
+
+        secret_envelopes = list(secret_envelopes or [])
+        if secret_envelopes and owner_principal is None:
+            raise ValueError("secret envelopes require an authenticated Job owner")
+        seen_purposes = set()
+        seen_secret_ids = set()
+        for envelope in secret_envelopes:
+            if not isinstance(envelope, SecretEnvelope):
+                raise TypeError("secret_envelopes must contain SecretEnvelope values")
+            context = envelope.context
+            if (
+                    context.tenant_id != owner_principal.tenant_id
+                    or context.issuer != owner_principal.issuer
+                    or context.subject != owner_principal.subject):
+                raise ValueError("secret envelope scope must match the Job owner")
+            if context.purpose != "webhook.callback":
+                raise ValueError("unsupported Job secret purpose")
+            if context.purpose in seen_purposes:
+                raise ValueError("only one initial secret per purpose is allowed")
+            if envelope.secret_id in seen_secret_ids:
+                raise ValueError("secret_id values must be unique within a Job")
+            seen_secret_ids.add(envelope.secret_id)
+            if envelope.expires_at is not None:
+                expiry = datetime.fromisoformat(envelope.expires_at)
+                if expiry.tzinfo is None or expiry.utcoffset() is None:
+                    raise ValueError("secret expiry must be timezone-aware")
+                if expiry <= utcnow():
+                    raise ValueError("expired secret envelopes cannot be persisted")
+            seen_purposes.add(context.purpose)
 
         plan = None
         plan_fingerprint = None
@@ -455,6 +541,23 @@ class WorkflowRepository:
                         raise IdempotencyConflict(
                             "Idempotency key resolves to a different execution plan"
                         )
+                    # A replay must not rotate or replace accepted secrets.
+                    # It may only refer back to an already-persisted purpose.
+                    for envelope in secret_envelopes:
+                        existing_secret = session.execute(
+                            select(JobSecretRecord).where(
+                                JobSecretRecord.job_id == existing.id,
+                                JobSecretRecord.purpose == envelope.context.purpose,
+                                JobSecretRecord.status == "ACTIVE",
+                                JobSecretRecord.deleted_at.is_(None),
+                                (JobSecretRecord.expires_at.is_(None)
+                                 | (JobSecretRecord.expires_at > utcnow())),
+                            )
+                        ).scalar_one_or_none()
+                        if existing_secret is None:
+                            raise IdempotencyConflict(
+                                "Idempotent replay cannot add or replace a Job secret"
+                            )
                     # A legacy workflow without a plan remains legacy on replay;
                     # never mutate already-accepted work during a deployment.
                     return existing.id, False
@@ -465,6 +568,10 @@ class WorkflowRepository:
                 # already accepted Job ID above, while new Jobs must match.
                 if plan is not None and plan["job_id"] != job_id:
                     raise ValueError("execution plan job_id must match job_id")
+                if any(
+                        envelope.context.job_id != job_id
+                        for envelope in secret_envelopes):
+                    raise ValueError("secret envelope job_id must match job_id")
 
                 job = JobRecord(
                     id=job_id,
@@ -523,6 +630,41 @@ class WorkflowRepository:
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
                     ))
+                for envelope in secret_envelopes:
+                    context = envelope.context
+                    session.add(JobSecretRecord(
+                        secret_id=envelope.secret_id,
+                        job_id=context.job_id,
+                        tenant_id=context.tenant_id,
+                        issuer=context.issuer,
+                        subject=context.subject,
+                        purpose=context.purpose,
+                        version=1,
+                        algorithm=envelope.algorithm,
+                        nonce=envelope.nonce,
+                        ciphertext=envelope.ciphertext,
+                        wrapped_dek=envelope.wrapped_dek,
+                        kms_key_id=envelope.kms_key_id,
+                        status="ACTIVE",
+                        created_at=datetime.fromisoformat(envelope.created_at),
+                        expires_at=(
+                            datetime.fromisoformat(envelope.expires_at)
+                            if envelope.expires_at else None
+                        ),
+                    ))
+                    _record_event(
+                        session,
+                        job_id,
+                        workflow_id,
+                        "JOB_SECRET_CREATED",
+                        payload={
+                            "secret_id": envelope.secret_id,
+                            "purpose": context.purpose,
+                            "version": 1,
+                            "algorithm": envelope.algorithm,
+                            "kms_key_id": envelope.kms_key_id,
+                        },
+                    )
             return job_id, True
         except IntegrityError:
             # Concurrent duplicate submission: resolve through the unique
@@ -568,7 +710,89 @@ class WorkflowRepository:
                     raise IdempotencyConflict(
                         "Idempotency key resolves to a different execution plan"
                     )
+                for envelope in secret_envelopes:
+                    existing_secret = session.execute(
+                        select(JobSecretRecord).where(
+                            JobSecretRecord.job_id == existing.id,
+                            JobSecretRecord.purpose == envelope.context.purpose,
+                            JobSecretRecord.status == "ACTIVE",
+                            JobSecretRecord.deleted_at.is_(None),
+                            (JobSecretRecord.expires_at.is_(None)
+                             | (JobSecretRecord.expires_at > utcnow())),
+                        )
+                    ).scalar_one_or_none()
+                    if existing_secret is None:
+                        raise IdempotencyConflict(
+                            "Concurrent replay did not persist the expected Job secret"
+                        )
                 return existing.id, False
+
+    def get_job_secret_envelope(
+            self, job_id, principal, purpose, now=None):
+        """Return encrypted material only after exact Job-owner authorization.
+
+        Plaintext decryption remains the responsibility of the internal
+        delivery adapter. This method never returns or logs secret contents.
+        """
+        from video_streaming.security import AuthorizationError
+        from video_streaming.security.secret_store import (
+            SecretContext,
+            SecretEnvelope,
+        )
+
+        if purpose != "webhook.callback":
+            raise ValueError("unsupported Job secret purpose")
+        self.authorize_job_access(
+            job_id, principal, "video.jobs:callback:resolve"
+        )
+        current = now or utcnow()
+        if current.tzinfo is None or current.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+
+        with self._session() as session:
+            record = session.execute(
+                select(JobSecretRecord).where(
+                    JobSecretRecord.job_id == job_id,
+                    JobSecretRecord.tenant_id == principal.tenant_id,
+                    JobSecretRecord.issuer == principal.issuer,
+                    JobSecretRecord.subject == principal.subject,
+                    JobSecretRecord.purpose == purpose,
+                    JobSecretRecord.status == "ACTIVE",
+                    JobSecretRecord.deleted_at.is_(None),
+                )
+            ).scalar_one_or_none()
+            if record is None:
+                raise AuthorizationError("Resource not found or access denied")
+            expires_at = record.expires_at
+            # SQLite drops timezone metadata for DateTime(timezone=True);
+            # PostgreSQL preserves it. Stored values are normalized to UTC.
+            if expires_at is not None and (
+                    expires_at.tzinfo is None or expires_at.utcoffset() is None):
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at is not None and current >= expires_at:
+                raise AuthorizationError("Resource not found or access denied")
+
+            context = SecretContext(
+                job_id=record.job_id,
+                tenant_id=record.tenant_id,
+                issuer=record.issuer,
+                subject=record.subject,
+                purpose=record.purpose,
+            )
+            return SecretEnvelope(
+                secret_id=record.secret_id,
+                context=context,
+                nonce=record.nonce,
+                ciphertext=record.ciphertext,
+                wrapped_dek=record.wrapped_dek,
+                kms_key_id=record.kms_key_id,
+                created_at=record.created_at.isoformat(),
+                expires_at=(
+                    expires_at.isoformat()
+                    if expires_at is not None else None
+                ),
+                algorithm=record.algorithm,
+            )
 
     def authorize_job_access(self, job_id, principal, required_scope):
         """Authorize one durable Job without exposing cross-tenant existence."""
