@@ -74,3 +74,7 @@ class IdempotencyConflict(RuntimeError):
 
 class StageAlreadyRunning(RuntimeError):
     """Raised when another execution attempt currently owns a workflow stage."""
+
+
+class AttemptLeaseLost(RuntimeError):
+    """Raised when a worker no longer owns a live durable attempt lease."""
