@@ -165,6 +165,7 @@ class StageRecord(Base):
     __tablename__ = "workflow_stages"
     __table_args__ = (
         UniqueConstraint("workflow_id", "stage_key", name="uq_workflow_stage_key"),
+        UniqueConstraint("id", "workflow_id", name="uq_workflow_stage_id_workflow"),
         Index("ix_workflow_stages_status_updated", "status", "updated_at"),
     )
 
@@ -182,6 +183,38 @@ class StageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+
+
+class StageDependencyRecord(Base):
+    """Normalized, same-workflow dependency edge between durable stages."""
+
+    __tablename__ = "workflow_stage_dependencies"
+    __table_args__ = (
+        CheckConstraint(
+            "stage_id <> depends_on_stage_id",
+            name="ck_workflow_stage_dependency_not_self",
+        ),
+        ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_stage",
+        ),
+        ForeignKeyConstraint(
+            ["depends_on_stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_parent",
+        ),
+        Index(
+            "ix_workflow_stage_dependencies_workflow",
+            "workflow_id", "stage_id",
+        ),
+    )
+
+    stage_id = Column(String(36), primary_key=True)
+    depends_on_stage_id = Column(String(36), primary_key=True)
+    workflow_id = Column(String(36), nullable=False)
 
 
 class AttemptRecord(Base):
@@ -483,7 +516,8 @@ class WorkflowRepository:
             owner_principal=None,
             secret_envelopes=None,
             enqueue_dispatch=False,
-            outbox_dedupe_key=None):
+            outbox_dedupe_key=None,
+            execution_backend=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -570,6 +604,11 @@ class WorkflowRepository:
                 # the validated plan-derived stage identity and operation.
                 stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
+        if execution_backend is not None and (
+                not isinstance(execution_backend, str)
+                or not execution_backend.strip()
+                or len(execution_backend) > 64):
+            raise ValueError("execution_backend must contain 1 to 64 characters")
         if not isinstance(enqueue_dispatch, bool):
             raise TypeError("enqueue_dispatch must be a boolean")
         if enqueue_dispatch and plan is None:
@@ -684,6 +723,7 @@ class WorkflowRepository:
                     job_id=job_id,
                     name=workflow_name,
                     state=WorkflowState.QUEUED.value,
+                    execution_backend=execution_backend,
                     workflow_version=(plan["workflow_version"] if plan else None),
                     execution_plan_schema_version=(plan["schema_version"] if plan else None),
                     execution_plan_fingerprint=plan_fingerprint,
@@ -708,8 +748,9 @@ class WorkflowRepository:
                         "execution_plan_fingerprint": plan_fingerprint,
                     },
                 )
+                stage_records = {}
                 for index, spec in enumerate(stage_specs):
-                    session.add(StageRecord(
+                    stage_record = StageRecord(
                         id=new_id(),
                         workflow_id=workflow_id,
                         stage_key=spec["stage_key"],
@@ -717,7 +758,28 @@ class WorkflowRepository:
                         ordinal=spec.get("ordinal", index),
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
-                    ))
+                    )
+                    stage_records[stage_record.stage_key] = stage_record
+                    session.add(stage_record)
+                session.flush()
+
+                if plan is not None:
+                    plan_nodes = {
+                        node["node_id"]: node for node in plan["nodes"]
+                    }
+                    for node in plan["nodes"]:
+                        stage_record = stage_records[node["stage_key"]]
+                        for dependency_node_id in node["depends_on"]:
+                            dependency_node = plan_nodes[dependency_node_id]
+                            dependency_stage = stage_records[
+                                dependency_node["stage_key"]
+                            ]
+                            session.add(StageDependencyRecord(
+                                workflow_id=workflow_id,
+                                stage_id=stage_record.id,
+                                depends_on_stage_id=dependency_stage.id,
+                            ))
+
                 for envelope in secret_envelopes:
                     context = envelope.context
                     session.add(JobSecretRecord(
@@ -2228,9 +2290,21 @@ class WorkflowRepository:
                     "output_bytes": metrics.get("output_bytes"),
                 },
             )
-            if stages and all(
+            completion_stages = stages
+            if workflow.execution_backend == "legacy_celery":
+                # The legacy Celery graph still executes output pipelines as
+                # indivisible chains. Its full plan is durably recorded, but
+                # internal plan nodes are not individually claimed yet.
+                completion_stages = [
+                    item for item in stages
+                    if item.operation in (
+                        "video.output.upload_directory",
+                        "video.output.upload_file",
+                    )
+                ]
+            if completion_stages and all(
                     item.status == StageState.FINISHED.value
-                    for item in stages):
+                    for item in completion_stages):
                 workflow.state = WorkflowState.FINISHED.value
                 workflow.updated_at = finished_at
                 job = session.get(JobRecord, job_id)
@@ -3305,6 +3379,7 @@ class WorkflowRepository:
                     "id": workflow.id,
                     "name": workflow.name,
                     "status": workflow.state,
+                    "execution_backend": workflow.execution_backend,
                     "version": workflow.workflow_version,
                     "execution_plan_schema_version": workflow.execution_plan_schema_version,
                     "execution_plan_fingerprint": workflow.execution_plan_fingerprint,

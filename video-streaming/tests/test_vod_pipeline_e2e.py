@@ -472,16 +472,34 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
         from video_streaming.workflows.service import get_workflow_repository
-        snapshot = get_workflow_repository().get_job_snapshot(
-            accepted.tracking_id
-        )
+        repository = get_workflow_repository()
+        snapshot = repository.get_job_snapshot(accepted.tracking_id)
+        persisted_plan = repository.get_execution_plan(accepted.tracking_id)
         self.assertIsNotNone(snapshot)
-        self.assertEqual(len(snapshot["stages"]), 2)
+        self.assertIsNotNone(persisted_plan)
+        plan_nodes = persisted_plan["plan"]["nodes"]
+        self.assertEqual(len(snapshot["stages"]), len(plan_nodes))
         self.assertEqual(
-            {stage["key"] for stage in snapshot["stages"]},
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
+            {
+                (stage["key"], stage["operation"])
+                for stage in snapshot["stages"]
+            },
+            {
+                (node["stage_key"], node["operation"])
+                for node in plan_nodes
+            },
+        )
+        self.assertEqual(
+            {stage["key"] for stage in snapshot["stages"]
+             if stage["key"] in {"p0", "t0"}},
             {"p0", "t0"},
         )
-        for durable_stage in snapshot["stages"]:
+        stages_by_key = {stage["key"]: stage for stage in snapshot["stages"]}
+        for output_id in ("p0", "t0"):
+            durable_stage = stages_by_key[output_id]
             self.assertEqual(durable_stage["status"], "FINISHED")
             self.assertEqual(len(durable_stage["attempts"]), 2)
             processing_attempt, publication_attempt = durable_stage["attempts"]
@@ -504,6 +522,15 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                     attempt["pricing_model_id"],
                     "relative-resource-index-v1",
                 )
+        internal_stages = [
+            stage for stage in snapshot["stages"]
+            if stage["key"] not in {"p0", "t0"}
+        ]
+        self.assertTrue(internal_stages)
+        self.assertTrue(all(
+            stage["status"] == "PENDING" and not stage["attempts"]
+            for stage in internal_stages
+        ))
         playlist_stage = next(
             stage for stage in snapshot["stages"] if stage["key"] == "p0"
         )
