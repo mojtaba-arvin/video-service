@@ -5,33 +5,29 @@
 - **Parent issue:** #71
 - **Scope:** Reliable dispatch of durable VOD workflows from PostgreSQL to Celery or a future execution adapter
 
-## Implementation status (2026-11-19)
+## Implementation status (2026-11-20)
 
-PR #123 adds the first durable Attempt lease primitives on top of the encrypted
-Job Secret Store work in PRs #119/#121. The implementation adds one-time
-worker lease tokens (persisted only as SHA-256 digests), lease owner/expiry and
-heartbeat timestamps, guarded renewal, expiry recovery and token checks on
-leased-attempt validation/publication/completion/failure writes.
+The implementation stack provides durable Attempt leases (PR #123), VOD
+processing/publication workers with attempt-scoped artifacts and cleanup
+(PR #127), and a normalized VOD DAG persisted atomically from CreateJob
+(PR #132). The legacy Celery graph remains the active executor; internal
+plan nodes are not yet independently dispatched or claimed.
 
-This is **not yet live worker integration**. Existing Celery task call sites
-still use the legacy `start_attempt()` API; no production task has switched to
-`claim_attempt()` or periodic heartbeat renewal. The lease API is not proof
-that FFmpeg/S3 side effects are fenced after a worker loses its lease.
-Attempt-scoped deterministic artifacts and side-effect idempotency remain
-required before dispatch replay can be enabled.
+The outbox foundation adds atomic dispatch-intent persistence, bounded
+PostgreSQL claims, hashed lease tokens, fenced acknowledgement, bounded
+retry and dead-letter state. It intentionally has no broker publisher or
+plan-to-Celery relay, and CreateJob does not enqueue dispatch intents.
 
-PR #123 is open and unmerged. Its CI run #44469241842 and Dependency Review
-run #44469241786 both passed on head `7356c90086c1b4948a662f2ca7686c4f01419f55`
-(2026-11-19). This verifies the repository-level lease primitives and existing
-regression/E2E suites; it does not verify live worker lease integration.
+Do not activate outbox publishing until every plan operation has an
+allow-listed executor mapping and durable claim/idempotency before side
+effects; callback secret resolution is integrated with authenticated
+CreateJob; and broker crash-after-publish, duplicate delivery, cancellation,
+poison-message and recovery tests pass. Operator replay/dead-letter controls,
+relay telemetry, alerts and a deployment runbook are also required.
 
-The required Celery integration sequence, including the separate processing
-and publication lease model, is specified as a proposed design in
-[ADR 0010](0010-celery-attempt-lease-worker-integration.md). The transactional
-outbox and relay are not implemented. Do not activate broker-backed plan
-dispatch until authenticated CreateJob/secret resolution, complete stage
-coverage, worker lease/heartbeat integration, external side-effect fencing,
-crash recovery and duplicate delivery tests all pass.
+This foundation is not an end-to-end transactional dispatch implementation
+or a deployment-ready release. See the
+[outbox foundation runbook](../operations/transactional-outbox-foundation.md).
 
 ## Context
 

@@ -294,6 +294,16 @@ jobs:
             -p 'test_workflow_repository.py' \
             -v
 
+      - name: Run transactional outbox tests (Python 3.9)
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_outbox.py' \
+            -v
+
       - name: Run full VOD integration test
         env:
           PYTHONPATH: video-streaming
@@ -356,6 +366,16 @@ jobs:
           python -m unittest discover \
             -s video-streaming/tests \
             -p 'test_workflow_repository.py' \
+            -v
+
+      - name: Run transactional outbox tests
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_outbox.py' \
             -v
 
   quality-gates:
