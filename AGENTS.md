@@ -58,6 +58,10 @@ checks only the current regression suite; it does not prove that the full
 service and its runtime dependencies are Python 3.12 compatible. Upgrade the
 runtime through a dedicated dependency/container compatibility increment.
 
+## Agent operating standard
+
+Follow `docs/engineering/agent-engineering-standard.md` for role selection, task lifecycle, handoffs, file ownership, parallelism, review gates, GitHub change management, and runtime capability boundaries. Use `.agents/skills/agent-task-orchestration/SKILL.md` when coordinating multi-role work. A profile is not a running subagent; never claim delegation or hook enforcement unless the active runtime demonstrably supports it.
+
 ## Task-specific skills
 
 Use the relevant procedural guide under .agents/skills/:
@@ -66,6 +70,7 @@ Use the relevant procedural guide under .agents/skills/:
 - mcp-agent-interface — typed tools, async jobs, authorization, budgets and agent-facing contracts.
 - cost-codec-benchmarking — corpus design, repeatable profile comparisons, resource metrics and billing reconciliation.
 - security-boundary-review — untrusted media, subprocesses, SSRF, secrets, tenancy and artifact access.
+- agent-task-orchestration — dependency planning, role selection, handoffs, parallel ownership and integration.
 
 Skills are guidance, not evidence that the corresponding platform capability exists.
 

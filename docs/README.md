@@ -18,10 +18,12 @@ This documentation describes both the **verified current implementation** and th
 6. [Codec and cost benchmark](engineering/codec-cost-benchmark.md) — licensed source manifests, matched-VMAF runs, raw measurements and cost limitations.
 7. [Parallel architecture research and delivery strategy](research/2026-11-18-parallel-architecture-and-benchmarks.md) — six-goal alignment, research evidence and parallel engineering lanes.
 8. [Agent engineering guide](../AGENTS.md) — shared instructions and portable skills.
-9. [GitHub Copilot specialist agents](../.github/agents/) — focused profiles for media engineering, read-only security review, and orchestration/MCP design.
-10. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch and at-least-once/idempotent recovery semantics.
-11. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation, manifest-last publication and retry behavior.
-12. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, state transitions, resource/cost accounting and application contracts.
+9. [Agent engineering standard](engineering/agent-engineering-standard.md) — role/permission matrix, task lifecycle, evidence handoffs, parallel ownership, security gates and runtime integration.
+10. [GitHub Copilot specialist agents](../.github/agents/) — orchestrator, media engineering, read-only security review, and orchestration/MCP design.
+11. [Agent task orchestration skill](../.agents/skills/agent-task-orchestration/SKILL.md) — practical delegation and integration procedure.
+12. [Transactional dispatch outbox (ADR 0004)](decisions/0004-transactional-dispatch-outbox-and-idempotent-execution.md) — durable dispatch and at-least-once/idempotent recovery semantics.
+13. [VOD package publication invariants (ADR 0001)](decisions/0001-vod-package-validation-and-publication.md) — validation, manifest-last publication and retry behavior.
+14. [Durable workflow state and typed operations (ADR 0002)](decisions/0002-durable-workflow-state-and-typed-operations.md) — PostgreSQL source of truth, state transitions, resource/cost accounting and application contracts.
 
 ## Documentation rules
 
