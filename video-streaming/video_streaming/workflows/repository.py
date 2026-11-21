@@ -1393,7 +1393,7 @@ class WorkflowRepository:
             )
 
     def get_job_secret_envelope_for_worker(
-            self, job_id, worker_identity, purpose, now=None):
+            self, job_id, worker_identity, purpose, secret_id, now=None):
         """Fetch encrypted callback material for an STS-verified worker only.
 
         This internal API is deliberately separate from the owner-facing
@@ -1415,6 +1415,11 @@ class WorkflowRepository:
             raise AuthorizationError("Workflow worker identity is required")
         if purpose != "webhook.callback":
             raise ValueError("unsupported Job secret purpose")
+        if (
+                not isinstance(secret_id, str)
+                or not secret_id
+                or len(secret_id) > 64):
+            raise ValueError("an exact opaque secret_id is required")
         current = now or utcnow()
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
@@ -1425,6 +1430,7 @@ class WorkflowRepository:
                 .join(JobRecord, JobRecord.id == JobSecretRecord.job_id)
                 .where(
                     JobSecretRecord.job_id == job_id,
+                    JobSecretRecord.secret_id == secret_id,
                     JobSecretRecord.purpose == purpose,
                     JobSecretRecord.status == "ACTIVE",
                     JobSecretRecord.deleted_at.is_(None),
