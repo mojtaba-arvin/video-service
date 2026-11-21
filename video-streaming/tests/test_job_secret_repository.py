@@ -19,6 +19,9 @@ from video_streaming.workflows.repository import (
     WorkflowRepository,
     utcnow,
 )
+from video_streaming.workflows.worker_identity import (
+    WorkflowWorkerIdentity,
+)
 
 
 class FakeKeyProvider:
@@ -189,6 +192,50 @@ class JobSecretRepositoryTests(unittest.TestCase):
             resolve_secret(persisted, original.context, self.provider),
             "https://first.invalid/hook",
         )
+
+    def test_iam_worker_can_fetch_only_job_scoped_encrypted_envelope(self):
+        job_id = str(uuid4())
+        original = self.envelope(job_id)
+        self.create_owned_job(job_id, envelope=original)
+        worker = WorkflowWorkerIdentity(
+            account_id="123456789012",
+            arn=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/worker-1"
+            ),
+            role_arn_prefix=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/"
+            ),
+        )
+        stored = self.repository.get_job_secret_envelope_for_worker(
+            job_id, worker, "webhook.callback"
+        )
+        self.assertEqual(stored.secret_id, original.secret_id)
+        self.assertEqual(
+            resolve_secret(stored, original.context, self.provider),
+            "https://callback.invalid/hook",
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope_for_worker(
+                job_id, object(), "webhook.callback"
+            )
+
+    def test_idempotency_lookup_returns_existing_job_without_secret_rotation(self):
+        job_id = str(uuid4())
+        key = "idem-lookup-{}".format(uuid4())
+        envelope = self.envelope(job_id)
+        self.create_owned_job(job_id, key=key, envelope=envelope)
+        self.assertEqual(
+            self.repository.find_idempotent_job(
+                key, "a" * 64, owner_principal=self.principal
+            ),
+            job_id,
+        )
+        with self.assertRaises(Exception):
+            self.repository.find_idempotent_job(
+                key, "b" * 64, owner_principal=self.principal
+            )
 
     def test_job_creation_failure_rolls_back_secret_and_parent_rows(self):
         job_id = str(uuid4())
