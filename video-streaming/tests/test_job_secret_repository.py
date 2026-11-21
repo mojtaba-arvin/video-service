@@ -220,7 +220,7 @@ class JobSecretRepositoryTests(unittest.TestCase):
             ),
         )
         stored = self.repository.get_job_secret_envelope_for_worker(
-            job_id, worker, "webhook.callback"
+            job_id, worker, "webhook.callback", original.secret_id
         )
         self.assertEqual(stored.secret_id, original.secret_id)
         self.assertEqual(
@@ -238,7 +238,11 @@ class JobSecretRepositoryTests(unittest.TestCase):
             self.assertNotIn("callback.invalid", repr(audit.payload_json))
         with self.assertRaises(AuthorizationError):
             self.repository.get_job_secret_envelope_for_worker(
-                job_id, object(), "webhook.callback"
+                job_id, object(), "webhook.callback", original.secret_id
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope_for_worker(
+                job_id, worker, "webhook.callback", "not-the-plan-secret"
             )
 
     def test_concurrent_idempotent_plan_reuses_accepted_secret_reference(self):
