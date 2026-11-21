@@ -27,12 +27,14 @@ class PackageProbeSupervisionTests(unittest.TestCase):
             b"",
         )
         cancelled = lambda: False
+        usage = lambda metrics: None
 
         result = _probe_media(
             "/tmp/rendition.ts",
             "/usr/bin/ffprobe",
             8,
             should_cancel=cancelled,
+            on_usage=usage,
         )
 
         self.assertEqual(result["format"]["duration"], "2.0")
@@ -41,6 +43,7 @@ class PackageProbeSupervisionTests(unittest.TestCase):
         self.assertIn("-show_entries", args[0])
         self.assertEqual(kwargs["timeout_seconds"], 8)
         self.assertIs(kwargs["should_cancel"], cancelled)
+        self.assertIs(kwargs["on_usage"], usage)
 
     @patch(
         "video_streaming.ffmpeg.package_validation.run_cancellable_process"
@@ -67,6 +70,7 @@ class PackageProbeSupervisionTests(unittest.TestCase):
         }
         metadata.return_value = []
         cancelled = lambda: False
+        usage = lambda metrics: None
 
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "master.m3u8"
@@ -79,11 +83,13 @@ class PackageProbeSupervisionTests(unittest.TestCase):
                 ffprobe_bin_path="/usr/bin/ffprobe",
                 metadata_probe_timeout_seconds=9,
                 should_cancel=cancelled,
+                on_usage=usage,
             )
 
         self.assertTrue(report.valid)
         self.assertEqual(metadata.call_args.kwargs["timeout_seconds"], 9)
         self.assertIs(metadata.call_args.kwargs["should_cancel"], cancelled)
+        self.assertIs(metadata.call_args.kwargs["on_usage"], usage)
 
 
 if __name__ == "__main__":
