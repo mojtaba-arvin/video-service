@@ -197,6 +197,7 @@ def add_watermark(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=capture_process_usage,
         )
         video_stream = next(
             (item for item in probe.get("streams", [])
