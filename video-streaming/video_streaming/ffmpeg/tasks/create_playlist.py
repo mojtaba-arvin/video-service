@@ -209,13 +209,30 @@ def create_playlist(
     process_usage = {}
 
     def record_process_usage(metrics):
-        process_usage.update(metrics)
+        process_id = str(metrics.get("process_id") or "legacy")
+        process_usage[process_id] = dict(metrics)
         lease_heartbeat.on_usage(metrics)
 
-    def process_resource_metrics():
+    def aggregate_process_usage():
+        samples = list(process_usage.values())
         return {
-            "peak_memory_bytes": process_usage.get("peak_memory_bytes"),
-            "memory_duration_ms": process_usage.get("memory_duration_ms"),
+            "cpu_seconds": sum(
+                float(item.get("cpu_seconds") or 0.0) for item in samples
+            ),
+            "peak_memory_bytes": max(
+                (int(item.get("peak_memory_bytes") or 0) for item in samples),
+                default=0,
+            ) or None,
+            "memory_duration_ms": sum(
+                int(item.get("memory_duration_ms") or 0) for item in samples
+            ),
+        }
+
+    def process_resource_metrics():
+        aggregate = aggregate_process_usage()
+        return {
+            "peak_memory_bytes": aggregate["peak_memory_bytes"],
+            "memory_duration_ms": aggregate["memory_duration_ms"],
         }
 
 
