@@ -199,6 +199,25 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertFalse(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
         self.assertEqual(settings.WORKFLOW_HANDLER_FACTORY, "")
 
+    def test_outbox_relay_is_not_scheduled_when_durable_dispatch_is_disabled(self):
+        settings = load_settings({})
+        self.assertNotIn(
+            "relay-durable-workflow-outbox", settings.CELERY_BEAT_SCHEDULE
+        )
+
+    def test_outbox_relay_is_scheduled_only_when_durable_dispatch_is_enabled(self):
+        settings = load_settings({
+            "WORKFLOW_DURABLE_DISPATCH_ENABLED": "True",
+        })
+        relay = settings.CELERY_BEAT_SCHEDULE[
+            "relay-durable-workflow-outbox"
+        ]
+        self.assertEqual(
+            relay["task"], "video_streaming.workflows.relay_outbox"
+        )
+        self.assertEqual(relay["schedule"], 5.0)
+        self.assertEqual(relay["options"]["expires"], 4)
+
     def test_workflow_dispatch_can_be_enabled_only_by_explicit_configuration(self):
         settings = load_settings({
             "WORKFLOW_DURABLE_DISPATCH_ENABLED": "True",
