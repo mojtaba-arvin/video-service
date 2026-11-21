@@ -195,6 +195,10 @@ class WorkflowNodeExecutor:
                 and attempt_number < node["retry_policy"]["max_attempts"]
                 and explicitly_retryable is not False
             )
+            retry_after_seconds = (
+                self._retry_delay(node["retry_policy"], attempt_number)
+                if retryable else None
+            )
             try:
                 self.repository.fail_attempt(
                     job_id,
@@ -205,6 +209,7 @@ class WorkflowNodeExecutor:
                     # Exception messages may include customer values or URLs.
                     error_message=type(exc).__name__,
                     lease_token=token,
+                    retry_after_seconds=retry_after_seconds,
                 )
             except AttemptLeaseLost:
                 current = self.repository.get_job_snapshot(job_id)
@@ -218,7 +223,5 @@ class WorkflowNodeExecutor:
                 "error_code": self._error_code(exc),
             }
             if retryable:
-                outcome["retry_after_seconds"] = self._retry_delay(
-                    node["retry_policy"], attempt_number
-                )
+                outcome["retry_after_seconds"] = retry_after_seconds
             return outcome
