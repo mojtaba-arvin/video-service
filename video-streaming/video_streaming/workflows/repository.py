@@ -2298,7 +2298,15 @@ class WorkflowRepository:
                     if expiry is not None and (
                             expiry.tzinfo is None or expiry.utcoffset() is None):
                         expiry = expiry.replace(tzinfo=timezone.utc)
-                    if running is None or expiry is None or expiry <= now:
+                    # Claim logic can recover only a concrete RUNNING
+                    # Attempt with a hashed token and an expired lease. A
+                    # missing Attempt or lease-free RUNNING row is corrupt/
+                    # operator-owned state, not scheduler-ready work.
+                    if (
+                            running is not None
+                            and running.lease_token_hash is not None
+                            and expiry is not None
+                            and expiry <= now):
                         claimable.add(stage.stage_key)
 
             ready = []
