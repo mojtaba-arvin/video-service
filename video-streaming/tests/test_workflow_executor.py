@@ -94,16 +94,23 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
             "validation_report": dict(VALID),
             "metrics": {"cpu_seconds": 0.01},
         })
+        self.assertEqual(
+            self.repository.get_ready_node_ids(self.job_id), ["check"]
+        )
         blocked = executor.execute(self.job_id, "analyze")
         self.assertEqual(blocked["status"], "dependencies_pending")
 
         first = executor.execute(self.job_id, "check")
         self.assertEqual(first["status"], "completed")
+        self.assertEqual(
+            self.repository.get_ready_node_ids(self.job_id), ["analyze"]
+        )
         duplicate = executor.execute(self.job_id, "check")
         self.assertEqual(duplicate["status"], "already_completed")
 
         second = executor.execute(self.job_id, "analyze")
         self.assertEqual(second["status"], "completed")
+        self.assertEqual(self.repository.get_ready_node_ids(self.job_id), [])
         snapshot = self.repository.get_job_snapshot(self.job_id)
         self.assertEqual(snapshot["status"], "FINISHED")
         self.assertTrue(all(stage["status"] == "FINISHED" for stage in snapshot["stages"]))
@@ -157,6 +164,19 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         stage = self.repository.get_stage_snapshot(self.job_id, "check")
         self.assertEqual(stage["status"], "RETRY_WAIT")
         self.assertEqual(stage["artifacts"], [])
+
+    def test_ready_node_scheduler_recovers_only_expired_processing_lease(self):
+        _attempt_id, _number, _token, expires_at = (
+            self.repository.claim_node_attempt(
+                self.job_id, "check", lease_owner="worker-crashed",
+                lease_ttl_seconds=30,
+            )
+        )
+        self.assertEqual(self.repository.get_ready_node_ids(self.job_id), [])
+        recovered = self.repository.get_ready_node_ids(
+            self.job_id, now=expires_at + __import__("datetime").timedelta(seconds=1)
+        )
+        self.assertEqual(recovered, ["check"])
 
     def test_crash_after_side_effect_reuses_stable_idempotency_key(self):
         seen_keys = set()
