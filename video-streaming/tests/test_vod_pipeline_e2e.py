@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -218,7 +219,28 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             streaming_pb2_grpc,
         )
         from video_streaming.grpc.servicers.streaming_servicer import Streaming
+        from video_streaming.grpc.authentication import OIDCBearerInterceptor
+        from video_streaming.security import RequestPrincipal
 
+        class E2EAuthenticator:
+            def authenticate(self, token):
+                if token != "e2e-test-token":
+                    raise ValueError("invalid test token")
+                return RequestPrincipal(
+                    issuer="https://e2e.example.test/",
+                    subject="vod-e2e-test",
+                    tenant_id="tenant-vod-e2e",
+                    scopes=frozenset({
+                        "video.jobs:create",
+                        "video.playback:write",
+                        "video.qoe:read",
+                    }),
+                    roles=frozenset(),
+                    authentication_method="test-bearer",
+                    expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+
+        cls.rpc_metadata = (("authorization", "Bearer e2e-test-token"),)
         cls.pb2 = streaming_pb2
         cls.pb2_grpc = streaming_pb2_grpc
         cls.Streaming = Streaming
@@ -277,7 +299,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
 
         cls.grpc_server = cls.grpc.server(
-            futures.ThreadPoolExecutor(max_workers=4)
+            futures.ThreadPoolExecutor(max_workers=4),
+            interceptors=(OIDCBearerInterceptor(E2EAuthenticator()),),
         )
         cls.servicer = Streaming()
         cls.servicer._add_to_server(cls.grpc_server)
@@ -465,10 +488,14 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             ],
         )
 
-        accepted = self.stub.create_job(request, timeout=120)
+        accepted = self.stub.create_job(
+            request, timeout=120, metadata=self.rpc_metadata
+        )
         self.assertTrue(accepted.tracking_id)
 
-        replayed = self.stub.create_job(request, timeout=120)
+        replayed = self.stub.create_job(
+            request, timeout=120, metadata=self.rpc_metadata
+        )
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
         from video_streaming.workflows.service import get_workflow_repository
@@ -554,6 +581,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 tracking_ids=[accepted.tracking_id]
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(len(results.results), 1)
         result = results.results[0]
@@ -616,6 +644,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 tracking_ids=[accepted.tracking_id]
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         ).results[0]
         self.assertEqual(recovered.status, self.pb2.PrimaryStatus.FINISHED)
         self.assertEqual(recovered.ready_outputs, 2)
@@ -639,6 +668,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 client_version="synthetic-player/1.0",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertTrue(playback.session_id)
         self.assertTrue(playback.session_token)
@@ -670,6 +700,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 event_type=self.pb2.PlaybackEventType.BUFFERING_STARTED,
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         buffering_end = self.stub.record_playback_event(
             self.pb2.RecordPlaybackEventRequest(
@@ -679,6 +710,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 event_type=self.pb2.PlaybackEventType.BUFFERING_ENDED,
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(buffering_end.rebuffer_count, 1)
 
@@ -692,6 +724,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 decoder="synthetic-decoder",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(decoder_error.decoder_error_count, 1)
 
@@ -715,6 +748,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 output_id="p0",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(qoe.session_count, 1)
         self.assertEqual(qoe.playback_started_count, 1)
