@@ -564,7 +564,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 OutboxRecord.dedupe_key.like("workflow.retry:%"),
             ).all()
         self.assertEqual(len(retry_rows), 1)
-        self.assertEqual(retry_rows[0].available_at, retry_due)
+        database_retry_due = retry_rows[0].available_at
+        if database_retry_due.tzinfo is None or database_retry_due.utcoffset() is None:
+            database_retry_due = database_retry_due.replace(tzinfo=timezone.utc)
+        if retry_due.tzinfo is None or retry_due.utcoffset() is None:
+            retry_due = retry_due.replace(tzinfo=timezone.utc)
+        self.assertEqual(database_retry_due, retry_due)
 
         self.assertEqual(
             self.repository.get_ready_node_ids(
