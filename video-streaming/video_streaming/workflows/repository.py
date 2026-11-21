@@ -835,6 +835,44 @@ class WorkflowRepository:
                 raise AuthorizationError("Resource not found or access denied")
         return True
 
+    def authorize_playback_session_access(
+            self, session_id, principal, required_scope):
+        """Authorize the Job owning a playback session before accepting events."""
+        from video_streaming.security import (
+            AuthorizationError,
+            authorize_tenant_resource,
+        )
+
+        if principal is None:
+            raise AuthorizationError("Resource not found or access denied")
+        with self._session() as session:
+            playback = session.execute(
+                select(PlaybackSessionRecord).where(
+                    PlaybackSessionRecord.id == session_id
+                )
+            ).scalar_one_or_none()
+            if playback is None:
+                raise AuthorizationError("Resource not found or access denied")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == playback.job_id
+                )
+            ).scalar_one_or_none()
+            if job is None:
+                raise AuthorizationError("Resource not found or access denied")
+            authorize_tenant_resource(
+                principal,
+                job.owner_tenant_id,
+                required_scope,
+            )
+            if (
+                    job.owner_issuer != principal.issuer
+                    or job.owner_subject != principal.subject):
+                raise AuthorizationError(
+                    "Resource not found or access denied"
+                )
+        return True
+
     @staticmethod
     def _verify_execution_plan_snapshot(workflow, job_id):
         """Verify plan bytes and their denormalized version/identity columns."""
