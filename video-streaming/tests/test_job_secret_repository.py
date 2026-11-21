@@ -1,5 +1,6 @@
 """SQLite-backed contract tests for atomic Job secret persistence."""
 
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -44,17 +45,25 @@ class FakeKeyProvider:
 
 class JobSecretRepositoryTests(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            future=True,
-        )
+        database_url = os.environ.get("WORKFLOW_DATABASE_URL")
+        if database_url:
+            self.engine = create_engine(
+                database_url,
+                pool_pre_ping=True,
+                future=True,
+            )
+        else:
+            self.engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                future=True,
+            )
 
-        @event.listens_for(self.engine, "connect")
-        def enable_foreign_keys(connection, _record):
-            cursor = connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+            @event.listens_for(self.engine, "connect")
+            def enable_foreign_keys(connection, _record):
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
         self.repository = WorkflowRepository(
             None, engine=self.engine, create_schema=True
