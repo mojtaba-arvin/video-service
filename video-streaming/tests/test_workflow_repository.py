@@ -13,6 +13,7 @@ from video_streaming.workflows.domain import (
     InvalidStateTransition,
     StageAlreadyRunning,
     StageState,
+    JobState,
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
@@ -285,6 +286,31 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.repository.authorize_playback_session_access(
                 "missing-session", principal, "video.playback:write"
             )
+
+    def test_node_claim_rejects_terminal_jobs_without_creating_attempts(self):
+        for terminal_state in (
+                JobState.FAILED.value,
+                JobState.FINISHED.value,
+                JobState.CANCELLED.value):
+            with self.subTest(job_state=terminal_state):
+                job_id = self.create_job("terminal-node")
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    job.state = terminal_state
+
+                with self.assertRaisesRegex(
+                        InvalidStateTransition, "terminal or missing Job"):
+                    self.repository.claim_node_attempt(
+                        job_id,
+                        "terminal-node",
+                        lease_owner="durable-worker",
+                    )
+
+                with self.repository._session() as session:
+                    attempts = session.query(AttemptRecord).join(
+                        StageRecord, StageRecord.id == AttemptRecord.stage_id
+                    ).filter(StageRecord.job_id == job_id).count()
+                self.assertEqual(attempts, 0)
 
     def test_attempt_lease_is_hashed_exclusive_and_renewable(self):
         job_id = self.create_job("p0")
