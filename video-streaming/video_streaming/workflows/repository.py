@@ -469,6 +469,91 @@ def _record_event(
 
 
 
+def _durable_retry_delay(workflow, stage_key, attempt_number):
+    """Return the persisted node policy delay for the next retry."""
+    plan = workflow.execution_plan_json if workflow is not None else None
+    if not isinstance(plan, dict):
+        return 0.0
+    node = next((
+        item for item in plan.get("nodes", [])
+        if item.get("stage_key") == stage_key
+    ), None)
+    policy = node.get("retry_policy", {}) if node else {}
+    try:
+        initial = float(policy["initial_delay_seconds"])
+        maximum = float(policy["max_delay_seconds"])
+        backoff = policy["backoff"]
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    if backoff == "fixed":
+        return min(initial, maximum)
+    if backoff == "exponential":
+        return min(maximum, initial * (2 ** max(0, attempt_number - 1)))
+    return 0.0
+
+
+def _durable_retry_not_before(workflow, stage_key, attempt):
+    if (
+            workflow is None
+            or workflow.execution_backend != "durable_vod_v1"
+            or attempt is None
+            or attempt.finished_at is None):
+        return None
+    finished_at = attempt.finished_at
+    if finished_at.tzinfo is None or finished_at.utcoffset() is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    delay = _durable_retry_delay(workflow, stage_key, attempt.attempt_number)
+    return finished_at + timedelta(seconds=delay)
+
+
+def _enqueue_durable_dispatch(
+        session, workflow, job_id, attempt_id, stage_id, available_at,
+        reason, event_type):
+    """Persist a retry/continuation wake-up with the state transition."""
+    if workflow.execution_backend != "durable_vod_v1":
+        return None
+    if not (
+            workflow.workflow_version
+            and workflow.execution_plan_fingerprint
+            and workflow.execution_plan_schema_version):
+        raise InvalidStateTransition(
+            "Durable dispatch requires an immutable execution-plan identity"
+        )
+    outbox_id = new_id()
+    session.add(OutboxRecord(
+        id=outbox_id,
+        job_id=job_id,
+        workflow_id=workflow.id,
+        event_type="WORKFLOW_PLAN_DISPATCH",
+        schema_version=workflow.execution_plan_schema_version,
+        plan_version=workflow.workflow_version,
+        plan_fingerprint=workflow.execution_plan_fingerprint,
+        dedupe_key="workflow.{}:{}:{}".format(
+            reason, workflow.id, attempt_id
+        ),
+        payload_json={
+            "schema_version": workflow.execution_plan_schema_version,
+            "job_id": job_id,
+            "workflow_version": workflow.workflow_version,
+            "plan_fingerprint": workflow.execution_plan_fingerprint,
+        },
+        state="PENDING",
+        attempts=0,
+        available_at=available_at,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    ))
+    _record_event(
+        session,
+        job_id,
+        workflow.id,
+        event_type,
+        stage_id=stage_id,
+        attempt_id=attempt_id,
+        payload={"outbox_id": outbox_id, "available_at": available_at.isoformat()},
+    )
+    return outbox_id
+
 
 class WorkflowRepository:
     """Persistent repository; Celery IDs are optional execution metadata only."""
@@ -1697,6 +1782,20 @@ class WorkflowRepository:
         self._clear_attempt_lease(attempt)
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
+        if not exhausted:
+            retry_delay = _durable_retry_delay(
+                workflow, stage.stage_key, attempt.attempt_number
+            )
+            _enqueue_durable_dispatch(
+                session,
+                workflow,
+                workflow.job_id,
+                attempt.id,
+                stage.id,
+                now + timedelta(seconds=retry_delay),
+                reason="retry",
+                event_type="WORKFLOW_RETRY_ENQUEUED",
+            )
         if exhausted:
             workflow.state = WorkflowState.FAILED.value
             workflow.updated_at = now
@@ -1825,6 +1924,24 @@ class WorkflowRepository:
                         session, stage, running, now, pricing):
                     raise StageAlreadyRunning(
                         "Stage {} already has a live attempt lease".format(stage_key)
+                    )
+
+            if (
+                    stage.status == StageState.RETRY_WAIT.value
+                    and require_dependencies
+                    and workflow.execution_backend == "durable_vod_v1"):
+                latest_attempt = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.stage_id == stage.id,
+                    ).order_by(AttemptRecord.attempt_number.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                retry_not_before = _durable_retry_not_before(
+                    workflow, stage.stage_key, latest_attempt
+                )
+                if retry_not_before is not None and utcnow() < retry_not_before:
+                    raise InvalidStateTransition(
+                        "Workflow node retry delay has not elapsed"
                     )
 
             if stage.status == StageState.RETRY_WAIT.value:
@@ -2105,45 +2222,16 @@ class WorkflowRepository:
                         raise InvalidStateTransition(
                             "Durable workflow continuation requires an immutable plan identity"
                         )
-                    # A completed node and its next dispatch intent commit in
-                    # one transaction. The broker publish after this commit is
-                    # merely a wake-up; the relay can recover a lost publish.
-                    outbox_id = new_id()
-                    dedupe_key = "workflow.continue:{}:{}".format(
-                        workflow.id, attempt_id
-                    )
-                    session.add(OutboxRecord(
-                        id=outbox_id,
-                        job_id=job_id,
-                        workflow_id=workflow.id,
-                        event_type="WORKFLOW_PLAN_DISPATCH",
-                        schema_version=workflow.execution_plan_schema_version,
-                        plan_version=workflow.workflow_version,
-                        plan_fingerprint=workflow.execution_plan_fingerprint,
-                        dedupe_key=dedupe_key,
-                        payload_json={
-                            "schema_version": workflow.execution_plan_schema_version,
-                            "job_id": job_id,
-                            "workflow_version": workflow.workflow_version,
-                            "plan_fingerprint": workflow.execution_plan_fingerprint,
-                        },
-                        state="PENDING",
-                        attempts=0,
-                        available_at=now,
-                        created_at=now,
-                        updated_at=now,
-                    ))
-                    _record_event(
+                    # Completion and continuation intent commit together.
+                    _enqueue_durable_dispatch(
                         session,
+                        workflow,
                         job_id,
-                        workflow.id,
-                        "WORKFLOW_CONTINUATION_ENQUEUED",
-                        stage_id=stage.id,
-                        attempt_id=attempt_id,
-                        payload={
-                            "outbox_id": outbox_id,
-                            "stage_key": stage_key,
-                        },
+                        attempt_id,
+                        stage.id,
+                        now,
+                        reason="continue",
+                        event_type="WORKFLOW_CONTINUATION_ENQUEUED",
                     )
             return True
 
@@ -2181,10 +2269,23 @@ class WorkflowRepository:
             by_key = {stage.stage_key: stage for stage in stages}
             claimable = set()
             for stage in stages:
-                if stage.status in (
-                        StageState.PENDING.value,
-                        StageState.RETRY_WAIT.value):
+                if stage.status == StageState.PENDING.value:
                     claimable.add(stage.stage_key)
+                elif stage.status == StageState.RETRY_WAIT.value:
+                    if workflow.execution_backend != "durable_vod_v1":
+                        claimable.add(stage.stage_key)
+                    else:
+                        latest_attempt = session.execute(
+                            select(AttemptRecord).where(
+                                AttemptRecord.stage_id == stage.id,
+                            ).order_by(AttemptRecord.attempt_number.desc())
+                            .limit(1)
+                        ).scalar_one_or_none()
+                        retry_not_before = _durable_retry_not_before(
+                            workflow, stage.stage_key, latest_attempt
+                        )
+                        if retry_not_before is None or retry_not_before <= now:
+                            claimable.add(stage.stage_key)
                 elif stage.status == StageState.PROCESSING.value:
                     running = session.execute(
                         select(AttemptRecord).where(
@@ -3096,7 +3197,14 @@ class WorkflowRepository:
             error_message=None,
             metrics=None,
             pricing=None,
-            lease_token=None):
+            lease_token=None,
+            retry_after_seconds=None):
+        if retry_after_seconds is not None and (
+                isinstance(retry_after_seconds, bool)
+                or not isinstance(retry_after_seconds, (int, float))
+                or not math.isfinite(float(retry_after_seconds))
+                or not 0 <= retry_after_seconds <= 86400):
+            raise ValueError("retry_after_seconds must be between 0 and 86400")
         metrics = dict(metrics or {})
         target = StageState.RETRY_WAIT if retryable else StageState.FAILED
         attempt_state = (
@@ -3135,6 +3243,24 @@ class WorkflowRepository:
             attempt.error_code = error_code
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if retryable and workflow.execution_backend == "durable_vod_v1":
+                delay = (
+                    float(retry_after_seconds)
+                    if retry_after_seconds is not None
+                    else _durable_retry_delay(
+                        workflow, stage.stage_key, attempt.attempt_number
+                    )
+                )
+                _enqueue_durable_dispatch(
+                    session,
+                    workflow,
+                    job_id,
+                    attempt_id,
+                    stage.id,
+                    attempt.finished_at + timedelta(seconds=delay),
+                    reason="retry",
+                    event_type="WORKFLOW_RETRY_ENQUEUED",
+                )
             if not retryable:
                 workflow.state = WorkflowState.FAILED.value
                 workflow.updated_at = utcnow()
