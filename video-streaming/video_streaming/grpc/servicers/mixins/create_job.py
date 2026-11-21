@@ -160,7 +160,7 @@ class CreateJobMixin(object):
             "thumbnails": thumbnails,
         }
 
-    def _build_durable_vod_plan(self, job_id, request):
+    def _build_durable_vod_plan(self, job_id, request, webhook_secret_ref=None):
         """Compile the public request into the complete, transport-neutral VOD DAG.
 
         Terminal output Stage keys retain legacy IDs (p0/wp0/t0/wt0/wv0) for
@@ -171,6 +171,7 @@ class CreateJobMixin(object):
         return build_vod_execution_plan(
             job_id=job_id,
             request=self._build_durable_vod_request(request),
+            webhook_secret_ref=webhook_secret_ref,
         )
 
     @staticmethod
@@ -608,9 +609,37 @@ class CreateJobMixin(object):
                 )
             )
 
+        # Encrypt callback material before opening the Job transaction. Only
+        # the opaque reference enters the immutable plan; ciphertext is
+        # persisted atomically with Job/Workflow/Stages by create_job().
+        webhook_envelopes = []
+        webhook_secret_ref = None
+        if request.webhook_url:
+            from video_streaming.security.secret_store import (
+                SecretContext, prepare_secret,
+            )
+            from video_streaming.workflows.secret_runtime import (
+                get_workflow_secret_key_provider,
+            )
+            webhook_envelope = prepare_secret(
+                request.webhook_url,
+                SecretContext(
+                    job_id=request_id,
+                    tenant_id=principal.tenant_id,
+                    issuer=principal.issuer,
+                    subject=principal.subject,
+                    purpose="webhook.callback",
+                ),
+                get_workflow_secret_key_provider(),
+            )
+            webhook_envelopes.append(webhook_envelope)
+            webhook_secret_ref = webhook_envelope.secret_id
+
         # Compile all preflight, input, processing, upload and callback nodes.
         # The repository derives Stage rows and dependency edges atomically.
-        execution_plan = self._build_durable_vod_plan(request_id, request)
+        execution_plan = self._build_durable_vod_plan(
+            request_id, request, webhook_secret_ref=webhook_secret_ref
+        )
 
         request_for_hash = self.pb2.JobRequest()
         request_for_hash.CopyFrom(request)
@@ -630,6 +659,7 @@ class CreateJobMixin(object):
                 execution_plan=execution_plan,
                 execution_backend="legacy_celery",
                 owner_principal=principal,
+                secret_envelopes=webhook_envelopes,
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": sum(
@@ -664,7 +694,6 @@ class CreateJobMixin(object):
 
         job_details = dict(
             reference_id=request.reference_id,
-            webhook_url=request.webhook_url,
             total_checks=len(first_level)+len(second_level),
             total_inputs=len(third_level),
             total_outputs=len(no_watermarked_tasks) + len(watermarked_tasks),
@@ -676,8 +705,8 @@ class CreateJobMixin(object):
             no_watermarked_playlists_ids=no_watermarked_playlists_ids,
             no_watermarked_thumbnails_ids=no_watermarked_thumbnails_ids
         )
-        # Persist job details, including the caller-provided webhook URL,
-        # without printing the full payload to operational logs.
+        # Redis contains status metadata only. Callback destinations are
+        # encrypted in the workflow database and resolved by the IAM worker.
 
         # saving job details
         self.cache.set(
