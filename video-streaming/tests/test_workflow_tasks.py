@@ -1,10 +1,19 @@
+import importlib.util
 import unittest
 from unittest.mock import patch
 
-from video_streaming import settings
-from video_streaming.workflows import tasks
+if importlib.util.find_spec("celery"):
+    from video_streaming import settings
+    from video_streaming.workflows import tasks
+else:
+    settings = None
+    tasks = None
 
 
+@unittest.skipUnless(
+    importlib.util.find_spec("celery"),
+    "Celery is installed only in the integration runtime",
+)
 class WorkflowTaskConsumerTests(unittest.TestCase):
     def test_dispatch_is_disabled_by_default_and_fails_closed(self):
         with patch.object(
