@@ -685,12 +685,12 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             client_version="synthetic-player/1.0",
         )
         started = self.stub.record_playback_event(
-            started_event, timeout=30
+            started_event, timeout=30, metadata=self.rpc_metadata
         )
         self.assertTrue(started.accepted)
         self.assertFalse(started.duplicate)
         replayed_start = self.stub.record_playback_event(
-            started_event, timeout=30
+            started_event, timeout=30, metadata=self.rpc_metadata
         )
         self.assertTrue(replayed_start.duplicate)
 
@@ -736,11 +736,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             event_id="e2e-playback-ended",
             event_type=self.pb2.PlaybackEventType.PLAYBACK_ENDED,
         )
-        ended = self.stub.record_playback_event(ended_event, timeout=30)
+        ended = self.stub.record_playback_event(ended_event, timeout=30, metadata=self.rpc_metadata)
         self.assertTrue(ended.ended)
         self.assertTrue(
             self.stub.record_playback_event(
-                ended_event, timeout=30
+                ended_event, timeout=30, metadata=self.rpc_metadata
             ).duplicate
         )
 
