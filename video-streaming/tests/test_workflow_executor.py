@@ -1,10 +1,11 @@
 """Durable node-claim, dependency, cancellation and idempotency tests."""
 
+import os
 import unittest
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
 from video_streaming.workflows.domain import InvalidStateTransition
@@ -34,11 +35,24 @@ def node(node_id, operation, dependencies=None, stage_key=None):
 
 class WorkflowNodeExecutorTests(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            future=True,
-        )
+        database_url = os.environ.get("WORKFLOW_DATABASE_URL")
+        if database_url:
+            self.engine = create_engine(
+                database_url, pool_pre_ping=True, future=True
+            )
+        else:
+            self.engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                future=True,
+            )
+
+            @event.listens_for(self.engine, "connect")
+            def enable_foreign_keys(connection, _record):
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
         self.repository = WorkflowRepository(
             None, engine=self.engine, create_schema=True
         )
