@@ -1,0 +1,125 @@
+"""Celery consumer for transactional durable workflow dispatch.
+
+The task boundary carries only immutable Job/plan/node identifiers. The
+production operation registry is loaded from an explicit trusted Python
+factory; missing or incomplete configuration fails closed. Dispatch remains
+disabled by default until the real handlers and infrastructure acceptance
+suite are enabled by operators.
+"""
+import importlib
+import socket
+import uuid
+
+from video_streaming import settings
+from video_streaming.celery import celery_app
+from video_streaming.workflows.executor import WorkflowNodeExecutor
+from video_streaming.workflows.service import get_workflow_repository
+
+DISPATCH_TASK = "video_streaming.workflows.dispatch_plan"
+EXECUTE_NODE_TASK = "video_streaming.workflows.execute_node"
+
+
+def _load_handler_factory():
+    target = settings.WORKFLOW_HANDLER_FACTORY
+    if not target or ":" not in target:
+        raise RuntimeError(
+            "WORKFLOW_HANDLER_FACTORY must be configured as module:callable"
+        )
+    module_name, attribute = target.split(":", 1)
+    if not module_name or not attribute:
+        raise RuntimeError("WORKFLOW_HANDLER_FACTORY is malformed")
+    factory = getattr(importlib.import_module(module_name), attribute, None)
+    if not callable(factory):
+        raise RuntimeError("WORKFLOW_HANDLER_FACTORY is not callable")
+    return factory
+
+
+def _build_artifact_store():
+    import boto3
+    bucket = settings.S3_DEFAULT_OUTPUT_BUCKET_NAME
+    if not bucket:
+        raise RuntimeError("S3_DEFAULT_OUTPUT_BUCKET_NAME is required")
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.S3_ENDPOINT_URL or None,
+        aws_access_key_id=settings.S3_ACCESS_KEY_ID or None,
+        aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY or None,
+        region_name=settings.S3_REGION_NAME or None,
+        use_ssl=settings.S3_IS_SECURE,
+    )
+    from video_streaming.workflows.artifact_store import S3ArtifactStore
+    return S3ArtifactStore(client, bucket)
+
+
+def _build_executor():
+    repository = get_workflow_repository()
+    factory = _load_handler_factory()
+    handlers = factory(
+        repository=repository,
+        artifact_store=_build_artifact_store(),
+    )
+    return WorkflowNodeExecutor(
+        repository=repository,
+        handlers=handlers,
+        worker_id="{}:{}".format(socket.gethostname(), uuid.uuid4().hex),
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
+    )
+
+
+def _assert_dispatch_identity(repository, job_id, workflow_id, plan_version,
+                              plan_fingerprint):
+    snapshot = repository.get_execution_plan(job_id)
+    if snapshot is None:
+        raise KeyError("durable workflow execution plan not found")
+    if (
+        snapshot["workflow_id"] != workflow_id
+        or snapshot["workflow_version"] != plan_version
+        or snapshot["fingerprint"] != plan_fingerprint
+    ):
+        raise ValueError("durable workflow dispatch identity mismatch")
+    return snapshot
+
+
+@celery_app.task(name=DISPATCH_TASK)
+def dispatch_plan(job_id, workflow_id, plan_version, plan_fingerprint):
+    """Fan out idempotent node references for one immutable plan."""
+    if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+        raise RuntimeError("durable workflow dispatch is disabled")
+    repository = get_workflow_repository()
+    snapshot = _assert_dispatch_identity(
+        repository, job_id, workflow_id, plan_version, plan_fingerprint
+    )
+    # Validate the complete operation registry before emitting any child task.
+    _build_executor()
+    published = 0
+    for node in snapshot["plan"]["nodes"]:
+        execute_node.apply_async(
+            args=(job_id, node["node_id"], workflow_id, plan_version,
+                  plan_fingerprint),
+            task_id="workflow-node-{}-{}".format(job_id, node["node_id"]),
+        )
+        published += 1
+    return {"status": "dispatched", "nodes": published}
+
+
+@celery_app.task(name=EXECUTE_NODE_TASK)
+def execute_node(job_id, node_id, workflow_id, plan_version, plan_fingerprint):
+    """Execute one node and re-drive the immutable plan after progress."""
+    if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+        raise RuntimeError("durable workflow dispatch is disabled")
+    repository = get_workflow_repository()
+    snapshot = _assert_dispatch_identity(
+        repository, job_id, workflow_id, plan_version, plan_fingerprint
+    )
+    executor = _build_executor()
+    outcome = executor.execute(job_id, node_id)
+    if outcome["status"] in ("completed", "already_completed"):
+        dispatch_plan.apply_async(
+            args=(job_id, workflow_id, plan_version, plan_fingerprint)
+        )
+    elif outcome["status"] == "retryable_failure":
+        execute_node.apply_async(
+            args=(job_id, node_id, workflow_id, plan_version, plan_fingerprint),
+            countdown=outcome["retry_after_seconds"],
+        )
+    return outcome
