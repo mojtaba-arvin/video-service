@@ -1783,7 +1783,7 @@ class WorkflowRepository:
 
     def complete_node_attempt(
             self, job_id, stage_key, attempt_id, validation_report,
-            lease_token, metrics=None, pricing=None):
+            lease_token, metrics=None, pricing=None, artifacts=None):
         """Finish an internal DAG node under its current fenced lease."""
         if not isinstance(validation_report, dict):
             raise ValueError("validation_report must be a dictionary")
@@ -1792,6 +1792,40 @@ class WorkflowRepository:
                 or not isinstance(validation_report.get("errors"), list)
                 or validation_report.get("errors")):
             raise ValueError("A workflow node requires a successful validation report")
+        artifacts = list(artifacts or [])
+        if len(artifacts) > 1000:
+            raise ValueError("a workflow node cannot publish more than 1000 artifacts")
+        normalized_artifacts = []
+        from video_streaming.workflows.artifact_store import parse_artifact_uri
+        for item in artifacts:
+            if not isinstance(item, dict):
+                raise ValueError("node artifacts must be dictionaries")
+            logical_name = item.get("logical_name")
+            artifact_type = item.get("artifact_type")
+            uri = item.get("uri")
+            media_type = item.get("media_type")
+            size_bytes = item.get("size_bytes")
+            checksum = item.get("checksum_sha256")
+            if not isinstance(logical_name, str) or not logical_name.strip() or len(logical_name) > 255:
+                raise ValueError("artifact logical_name must contain 1 to 255 characters")
+            if not isinstance(artifact_type, str) or not artifact_type.strip() or len(artifact_type) > 64:
+                raise ValueError("artifact_type must contain 1 to 64 characters")
+            parse_artifact_uri(uri)
+            if media_type is not None and (
+                    not isinstance(media_type, str) or len(media_type) > 128):
+                raise ValueError("artifact media_type is invalid")
+            if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:
+                raise ValueError("artifact size_bytes must be a non-negative integer")
+            if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+                raise ValueError("artifact checksum_sha256 must be a lowercase SHA-256 digest")
+            normalized_artifacts.append({
+                "logical_name": logical_name,
+                "artifact_type": artifact_type,
+                "uri": uri,
+                "media_type": media_type,
+                "size_bytes": size_bytes,
+                "checksum_sha256": checksum,
+            })
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
@@ -1869,6 +1903,21 @@ class WorkflowRepository:
                 status="AVAILABLE",
                 metadata_json=safe_report,
             ))
+            for published in normalized_artifacts:
+                session.add(ArtifactRecord(
+                    id=new_id(),
+                    job_id=job_id,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    artifact_type=published["artifact_type"],
+                    logical_name=published["logical_name"],
+                    uri=published["uri"],
+                    media_type=published["media_type"],
+                    size_bytes=published["size_bytes"],
+                    checksum_sha256=published["checksum_sha256"],
+                    status="AVAILABLE",
+                    metadata_json={},
+                ))
             _record_event(
                 session,
                 job_id,
@@ -1903,6 +1952,44 @@ class WorkflowRepository:
                     to_state=JobState.FINISHED.value,
                 )
             return True
+
+    def get_dependency_artifacts(self, job_id, node_id):
+        """Return durable Artifact references from a node's completed parents."""
+        snapshot = self.get_execution_plan(job_id)
+        if snapshot is None:
+            raise KeyError("workflow execution plan not found")
+        nodes = {item["node_id"]: item for item in snapshot["plan"]["nodes"]}
+        node = nodes.get(node_id)
+        if node is None:
+            raise KeyError("workflow node not found")
+        dependency_keys = [
+            nodes[parent]["stage_key"] for parent in node["depends_on"]
+        ]
+        if not dependency_keys:
+            return {}
+        with self._session() as session:
+            rows = session.execute(
+                select(ArtifactRecord, StageRecord.stage_key)
+                .join(StageRecord, StageRecord.id == ArtifactRecord.stage_id)
+                .where(
+                    ArtifactRecord.job_id == job_id,
+                    StageRecord.stage_key.in_(dependency_keys),
+                    ArtifactRecord.status == "AVAILABLE",
+                    ArtifactRecord.uri.like("s3://%"),
+                ).order_by(ArtifactRecord.created_at, ArtifactRecord.id)
+            ).all()
+            result = {key: [] for key in dependency_keys}
+            for artifact, stage_key in rows:
+                result[stage_key].append({
+                    "artifact_id": artifact.id,
+                    "artifact_type": artifact.artifact_type,
+                    "logical_name": artifact.logical_name,
+                    "uri": artifact.uri,
+                    "media_type": artifact.media_type,
+                    "size_bytes": artifact.size_bytes,
+                    "checksum_sha256": artifact.checksum_sha256,
+                })
+            return result
 
     def renew_attempt_lease(
             self,
