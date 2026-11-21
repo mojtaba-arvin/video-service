@@ -1656,9 +1656,32 @@ class WorkflowRepository:
                     StageState.PUBLISHING.value)):
             return False
 
+        workflow = session.get(WorkflowRecord, stage.workflow_id)
+        retry_limit = None
+        if (
+                workflow is not None
+                and workflow.execution_backend == "durable_vod_v1"
+                and isinstance(workflow.execution_plan_json, dict)):
+            node = next((
+                item for item in workflow.execution_plan_json.get("nodes", [])
+                if item.get("stage_key") == stage.stage_key
+            ), None)
+            retry_policy = node.get("retry_policy", {}) if node else {}
+            retry_limit = retry_policy.get("max_attempts")
+        exhausted = (
+            isinstance(retry_limit, int)
+            and not isinstance(retry_limit, bool)
+            and attempt.attempt_number >= retry_limit
+        )
+        target_stage = (
+            StageState.FAILED if exhausted else StageState.RETRY_WAIT
+        )
         previous_status = stage.status
-        self._transition(stage, StageState.RETRY_WAIT)
-        attempt.state = AttemptState.RETRYABLE.value
+        self._transition(stage, target_stage)
+        attempt.state = (
+            AttemptState.FAILED.value
+            if exhausted else AttemptState.RETRYABLE.value
+        )
         attempt.finished_at = now
         started = attempt.started_at
         if started.tzinfo is None:
@@ -1674,17 +1697,47 @@ class WorkflowRepository:
         self._clear_attempt_lease(attempt)
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
-        workflow = session.get(WorkflowRecord, stage.workflow_id)
+        if exhausted:
+            workflow.state = WorkflowState.FAILED.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, workflow.job_id)
+            if job is not None:
+                job.state = JobState.FAILED.value
+                job.updated_at = now
+                job.version += 1
+                _record_event(
+                    session,
+                    workflow.job_id,
+                    workflow.id,
+                    "JOB_FAILED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FAILED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt.id,
+                    payload={
+                        "error_code": "WORKER_LEASE_RETRY_LIMIT_EXHAUSTED",
+                    },
+                )
         _record_event(
             session,
             workflow.job_id,
             workflow.id,
-            "ATTEMPT_LEASE_EXPIRED",
+            (
+                "ATTEMPT_LEASE_RETRY_LIMIT_EXHAUSTED"
+                if exhausted else "ATTEMPT_LEASE_EXPIRED"
+            ),
             from_state=previous_status,
-            to_state=StageState.RETRY_WAIT.value,
+            to_state=target_stage.value,
             stage_id=stage.id,
             attempt_id=attempt.id,
-            payload={"reason": "WORKER_LEASE_EXPIRED"},
+            payload={
+                "reason": (
+                    "WORKER_LEASE_RETRY_LIMIT_EXHAUSTED"
+                    if exhausted else "WORKER_LEASE_EXPIRED"
+                ),
+                "attempt_number": attempt.attempt_number,
+                "max_attempts": retry_limit,
+            },
         )
         return True
 
