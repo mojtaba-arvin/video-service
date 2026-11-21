@@ -30,6 +30,7 @@ class NodeExecutionContext:
     heartbeat: object
     cancel: object
     is_cancelled: object
+    input_artifacts: dict = None
 
 
 class WorkflowNodeExecutor:
@@ -143,6 +144,9 @@ class WorkflowNodeExecutor:
             heartbeat=heartbeat,
             cancel=cancel,
             is_cancelled=is_cancelled,
+            input_artifacts=self.repository.get_dependency_artifacts(
+                job_id, node_id
+            ),
         )
         try:
             if is_cancelled():
@@ -165,6 +169,7 @@ class WorkflowNodeExecutor:
                 validation_report,
                 lease_token=token,
                 metrics=result.get("metrics"),
+                artifacts=result.get("artifacts"),
             )
             if not completed:
                 return {"status": "cancelled", "node_id": node_id}
