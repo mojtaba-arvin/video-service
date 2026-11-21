@@ -40,7 +40,7 @@ def get_verified_workflow_worker_identity():
     return authenticate_workflow_worker(sts, prefix)
 
 
-def resolve_job_webhook_secret(job_id, repository=None):
+def resolve_job_webhook_secret(job_id, secret_id, repository=None):
     """Resolve one Job-scoped callback URL after live IAM identity verification."""
     if not isinstance(job_id, str) or not job_id.strip():
         raise ValueError("job_id is required")
@@ -52,6 +52,7 @@ def resolve_job_webhook_secret(job_id, repository=None):
         job_id,
         worker_identity,
         "webhook.callback",
+        secret_id,
     )
     return resolve_secret(
         envelope,
