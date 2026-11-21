@@ -173,6 +173,7 @@ def generate_thumbnail(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=capture_usage,
         )
         lease_heartbeat.assert_owned()
         validation_report = {
