@@ -364,6 +364,55 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "missing-session", principal, "video.playback:write"
             )
 
+    def test_running_node_is_fenced_when_job_becomes_failed(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 2,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 1,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="terminal-completion-" + job_id,
+            request_hash="8" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="in-flight-worker"
+        )
+        with self.repository._session.begin() as session:
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.FAILED.value
+
+        self.assertFalse(self.repository.complete_node_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        ))
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.FAILED.value)
+        stage = next(item for item in snapshot["stages"] if item["key"] == "check-input")
+        self.assertEqual(stage["status"], StageState.CANCELLED.value)
+        self.assertEqual(stage["attempts"][-1]["status"], AttemptState.CANCELLED.value)
+
     def test_scheduler_does_not_advertise_lease_free_running_attempts(self):
         job_id = str(uuid4())
         plan = {
