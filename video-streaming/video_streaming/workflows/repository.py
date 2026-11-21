@@ -1642,6 +1642,13 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if (
+                    workflow.execution_backend == "durable_vod_v1"
+                    and execution_backend != "workflow_node"):
+                raise InvalidStateTransition(
+                    "Legacy task cannot claim an Attempt owned by the durable workflow executor"
+                )
             if require_dependencies:
                 job = session.get(JobRecord, job_id)
                 if job is None or job.state == JobState.CANCELLED.value:
@@ -2062,6 +2069,11 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if workflow.execution_backend == "durable_vod_v1":
+                raise InvalidStateTransition(
+                    "Legacy publication task cannot claim an Attempt owned by the durable workflow executor"
+                )
             if stage.status in (
                     StageState.VALIDATED.value,
                     StageState.PUBLISHING.value):
