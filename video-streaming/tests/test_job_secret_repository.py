@@ -13,6 +13,7 @@ from video_streaming.security.secret_store import (
     prepare_secret,
     resolve_secret,
 )
+from video_streaming.workflows.domain import IdempotencyConflict
 from video_streaming.workflows.repository import (
     JobRecord,
     JobSecretRecord,
@@ -242,7 +243,7 @@ class JobSecretRepositoryTests(unittest.TestCase):
             ),
             job_id,
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(IdempotencyConflict):
             self.repository.find_idempotent_job(
                 key, "b" * 64, owner_principal=self.principal
             )
