@@ -3237,6 +3237,45 @@ class WorkflowRepository:
                     StageState.FAILED.value,
                     StageState.CANCELLED.value):
                 return False
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                # A sibling may have made the Job terminal while this worker
+                # was still running. Fence it rather than scheduling a retry.
+                now = utcnow()
+                previous_status = stage.status
+                self._transition(stage, StageState.CANCELLED)
+                attempt.state = AttemptState.CANCELLED.value
+                attempt.finished_at = now
+                started = attempt.started_at
+                if started.tzinfo is None or started.utcoffset() is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                attempt.duration_ms = max(
+                    0, int((now - started).total_seconds() * 1000)
+                )
+                metrics["duration_ms"] = attempt.duration_ms
+                self._apply_attempt_accounting(attempt, metrics, pricing)
+                self._clear_attempt_lease(attempt)
+                attempt.error_code = "JOB_TERMINAL"
+                attempt.error_message = "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE"
+                _record_event(
+                    session,
+                    job_id,
+                    stage.workflow_id,
+                    "STAGE_CANCELLED",
+                    from_state=previous_status,
+                    to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    payload={"reason": "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE"},
+                )
+                return False
             previous_status = stage.status
             self._transition(stage, target)
             attempt.state = attempt_state.value
