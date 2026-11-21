@@ -264,6 +264,14 @@ FFMPEG_WATERMARK_TIMEOUT_SECONDS = env_config.get(
     default=3600,
     cast=int)
 
+# Maximum wall time for one playlist encode, including FFmpeg supervision.
+FFMPEG_PLAYLIST_TIMEOUT_SECONDS = env_config.get(
+    "FFMPEG_PLAYLIST_TIMEOUT_SECONDS",
+    default=7200,
+    cast=int)
+if FFMPEG_PLAYLIST_TIMEOUT_SECONDS <= 0:
+    raise ValueError("FFMPEG_PLAYLIST_TIMEOUT_SECONDS must be greater than zero")
+
 # Metadata-only ffprobe validation timeout per package/rendition.
 PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS = env_config.get(
     "PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS",
@@ -288,6 +296,29 @@ WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
     "WORKFLOW_DATABASE_MAX_OVERFLOW",
     default=5,
     cast=int)
+
+# Lease duration shared by processing and publication worker integrations.
+WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS = env_config.get(
+    "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS",
+    default=60,
+    cast=int)
+
+if not 1 <= WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS <= 86400:
+    raise ValueError(
+        "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS must be between 1 and 86400"
+    )
+
+# Package objects are retained for at least one day before an explicit
+# database-guarded cleanup task may reclaim an abandoned Attempt namespace.
+WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS = env_config.get(
+    "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS",
+    default=86400,
+    cast=int)
+if not 3600 <= WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS <= 2592000:
+    raise ValueError(
+        "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS must be between "
+        "3600 and 2592000"
+    )
 
 # Optional infrastructure price card. Resource measurements are persisted
 # even when no monetary rates are configured.
@@ -370,3 +401,12 @@ OIDC_JWKS_TIMEOUT_SECONDS = env_config.get(
 OIDC_CLOCK_LEEWAY_SECONDS = env_config.get(
     "OIDC_CLOCK_LEEWAY_SECONDS", default=0, cast=int
 )
+
+
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-abandoned-package-attempts": {
+        "task": "cleanup_abandoned_packages",
+        "schedule": 3600.0,
+        "options": {"expires": 1800},
+    },
+}

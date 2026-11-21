@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from video_streaming.workflows.domain import (
     AttemptLeaseLost,
+    AttemptState,
     IdempotencyConflict,
     InvalidStateTransition,
     StageAlreadyRunning,
@@ -15,11 +16,12 @@ from video_streaming.workflows.domain import (
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    WorkflowEventRecord, utcnow
+    ArtifactRecord, WorkflowEventRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
+from video_streaming.workflows.artifacts import attempt_scoped_object_key
 
 
 @unittest.skipUnless(
@@ -70,11 +72,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             issuer="https://issuer.example.test/",
             subject=subject,
             tenant_id=tenant,
-            scopes=frozenset([
-                "video.jobs:read",
-                "video.jobs:create",
-                "video.playback:write",
-            ]),
+            scopes=frozenset(["video.jobs:read", "video.jobs:create"]),
             roles=frozenset(),
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -110,6 +108,73 @@ class WorkflowRepositoryTests(unittest.TestCase):
         with self.assertRaises(AuthorizationError):
             self.repository.authorize_job_access(
                 job_id, principal, "video.jobs:cancel"
+            )
+
+    def test_playback_session_authorization_uses_durable_job_owner(self):
+        def principal(tenant="tenant-a", subject="subject-1"):
+            return RequestPrincipal(
+                issuer="https://issuer.example.test/",
+                subject=subject,
+                tenant_id=tenant,
+                scopes=frozenset([
+                    "video.jobs:read",
+                    "video.jobs:create",
+                    "video.playback:write",
+                ]),
+                roles=frozenset(),
+                authentication_method="bearer",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+
+        owner = principal()
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id,
+            "idem-playback-owner-{}".format(uuid4()),
+            "d" * 64,
+            stage_specs=[{
+                "stage_key": "p0",
+                "operation": "video.package_and_publish",
+            }],
+            owner_principal=owner,
+        )
+        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
+        self.repository.mark_validated(
+            job_id, "p0", attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, "p0", attempt_id)
+        self.repository.finish_stage(
+            job_id, "p0", attempt_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://video/master.m3u8",
+                "size_bytes": 12,
+            }],
+        )
+        playback = self.repository.start_playback_session(job_id, "p0")
+
+        self.assertTrue(self.repository.authorize_playback_session_access(
+            playback["session_id"], owner, "video.playback:write"
+        ))
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                playback["session_id"],
+                principal(tenant="tenant-b"),
+                "video.playback:write",
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                playback["session_id"],
+                principal(subject="different-subject"),
+                "video.playback:write",
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                playback["session_id"],
+                owner,
+                "video.playback:admin",
             )
 
     def test_attempt_lease_is_hashed_exclusive_and_renewable(self):
@@ -612,51 +677,6 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(
             event_types.count("STAGE_ATTEMPT_STARTED"), 3
         )
-
-    def test_playback_session_authorization_uses_durable_job_owner(self):
-        principal = self.make_owner_principal()
-        job_id = str(uuid4())
-        self.repository.create_job(
-            job_id,
-            "idem-owned-playback-{}".format(uuid4()),
-            "d" * 64,
-            stage_specs=[{
-                "stage_key": "p0",
-                "operation": "video.hls.package_and_publish",
-            }],
-            owner_principal=principal,
-        )
-        attempt_id, _ = self.repository.start_attempt(job_id, "p0")
-        self.repository.mark_validated(
-            job_id, "p0", attempt_id,
-            {"valid": True, "errors": []},
-        )
-        self.repository.start_publishing(job_id, "p0", attempt_id)
-        self.repository.finish_stage(
-            job_id, "p0", attempt_id,
-            artifacts=[{
-                "artifact_type": "streaming_manifest",
-                "logical_name": "master",
-                "uri": "s3://video/master.m3u8",
-                "size_bytes": 12,
-            }],
-        )
-        playback = self.repository.start_playback_session(job_id, "p0")
-        self.assertTrue(self.repository.authorize_playback_session_access(
-            playback["session_id"], principal, "video.playback:write"
-        ))
-        with self.assertRaises(AuthorizationError):
-            self.repository.authorize_playback_session_access(
-                playback["session_id"],
-                self.make_owner_principal(tenant="tenant-b"),
-                "video.playback:write",
-            )
-        with self.assertRaises(AuthorizationError):
-            self.repository.authorize_playback_session_access(
-                playback["session_id"],
-                self.make_owner_principal(subject="different-subject"),
-                "video.playback:write",
-            )
 
     def test_playback_qoe_events_are_idempotent_and_correlate_with_stage_cost(self):
         job_id = self.create_job("p0")
@@ -1180,6 +1200,924 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
 
 
+    def test_processing_completion_closes_lease_but_keeps_stage_validated(self):
+        job_id = self.create_job("p0")
+        attempt_id, number, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing-complete"
+        )
+        report = {"valid": True, "errors": []}
+
+        self.assertTrue(self.repository.complete_processing_attempt(
+            job_id,
+            "p0",
+            attempt_id,
+            report,
+            lease_token=token,
+            metrics={"cpu_seconds": 0.25, "input_bytes": 4096},
+        ))
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["number"], number)
+        self.assertEqual(stage["attempts"][0]["status"], AttemptState.SUCCEEDED.value)
+        self.assertEqual(len(stage["artifacts"]), 1)
+        self.assertEqual(stage["artifacts"][0]["metadata"], report)
+
+        with self.repository._session() as session:
+            record = session.get(AttemptRecord, attempt_id)
+            self.assertIsNone(record.lease_owner)
+            self.assertIsNone(record.lease_token_hash)
+            self.assertIsNone(record.lease_expires_at)
+            self.assertIsNone(record.heartbeat_at)
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.renew_attempt_lease(
+                job_id, "p0", attempt_id, token
+            )
+
+    def test_publication_claim_uses_a_new_attempt_and_new_token(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        stage_version_before_claim = self.repository.get_stage_snapshot(
+            job_id, "p0"
+        )["version"]
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-wrong-processing-proof",
+                processing_attempt_id="not-the-processing-attempt",
+            )
+
+        publication_id, number, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-publisher",
+                processing_attempt_id=processing_id,
+            )
+        )
+        self.assertNotEqual(processing_id, publication_id)
+        self.assertNotEqual(processing_token, publication_token)
+        self.assertEqual(number, 2)
+        self.assertGreater(
+            self.repository.get_stage_snapshot(job_id, "p0")["version"],
+            stage_version_before_claim,
+        )
+
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(
+            [item["status"] for item in stage["attempts"]],
+            ["SUCCEEDED", "RUNNING"],
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.start_publishing(
+                job_id, "p0", publication_id, lease_token=processing_token
+            )
+
+    def test_publication_claim_requires_a_persisted_valid_report(self):
+        job_id = self.create_job("p0")
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-without-report"
+            )
+
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-too-early"
+            )
+
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        stage["artifacts"][0]["metadata"]["valid"] = False
+        # The detached snapshot is not authoritative; the stored proof remains valid.
+        publication = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="worker-valid-proof"
+        )
+        self.assertEqual(publication[1], 2)
+
+    def test_publication_retry_reuses_validation_proof_without_reprocessing(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+            metrics={"cpu_seconds": 1.0},
+        )
+
+        first_publish_id, _, first_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-first"
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", first_publish_id, lease_token=first_token
+        )
+        self.assertTrue(self.repository.fail_attempt(
+            job_id, "p0", first_publish_id,
+            retryable=True,
+            error_code="UPLOAD_TIMEOUT",
+            lease_token=first_token,
+        ))
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_attempt(
+                job_id, "p0", lease_owner="wrong-processing-retry"
+            )
+
+        second_publish_id, second_number, second_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-retry"
+            )
+        )
+        self.assertNotEqual(first_publish_id, second_publish_id)
+        self.assertEqual(second_number, 3)
+        self.repository.start_publishing(
+            job_id, "p0", second_publish_id, lease_token=second_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(len([
+            artifact for artifact in stage["artifacts"]
+            if artifact["logical_name"] == "validation-report"
+        ]), 1)
+
+    def test_concurrent_publication_claim_has_exactly_one_database_winner(self):
+        job_id = self.create_job("p0")
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        )
+
+        barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def claim(owner):
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner=owner
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=claim, args=("publisher-a",)),
+            threading.Thread(target=claim, args=("publisher-b",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], StageAlreadyRunning)
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(len(stage["attempts"]), 2)
+
+
+
+    def test_processing_completion_rejects_wrong_or_expired_lease(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        attempt_id, _, token, expires_at = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-completion-fence"
+        )
+        report = {"valid": True, "errors": []}
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.complete_processing_attempt(
+                job_id, "p0", attempt_id, report,
+                lease_token="not-the-owner-token",
+            )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=expires_at):
+            with self.assertRaises(AttemptLeaseLost):
+                self.repository.complete_processing_attempt(
+                    job_id, "p0", attempt_id, report,
+                    lease_token=token,
+                )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PROCESSING")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+        self.assertEqual(stage["artifacts"], [])
+
+    def test_processing_completion_rejects_invalid_validation_report(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-invalid-completion-report"
+        )
+        for report in (
+                {"valid": False, "errors": []},
+                {"valid": True, "errors": [{"code": "BROKEN"}]},
+                {"valid": True},
+                None):
+            with self.subTest(report=report):
+                with self.assertRaises(ValueError):
+                    self.repository.complete_processing_attempt(
+                        job_id, "p0", attempt_id, report,
+                        lease_token=token,
+                    )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PROCESSING")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+        self.assertEqual(stage["artifacts"], [])
+
+    def test_publication_claim_event_never_contains_raw_token(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-event-redaction"
+            )
+        )
+
+        with self.repository._session() as session:
+            event = session.query(WorkflowEventRecord).filter_by(
+                attempt_id=publication_id,
+                event_type="STAGE_PUBLICATION_ATTEMPT_CLAIMED",
+            ).one()
+
+        self.assertNotIn(publication_token, repr(event.payload_json))
+        self.assertNotIn("lease_token", event.payload_json)
+        self.assertEqual(
+            event.payload_json["lease_owner"], "worker-event-redaction"
+        )
+
+
+
+    def test_expired_publication_lease_recovers_and_fences_stale_publisher(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        first_id, _, first_token, first_expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-stale"
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", first_id, lease_token=first_token
+        )
+
+        second_id = None
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=first_expiry):
+            second_id, second_number, second_token, _ = (
+                self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner="publisher-recovery"
+                )
+            )
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(second_number, 3)
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id, "p0", first_id,
+                artifacts=[],
+                lease_token=first_token,
+            )
+
+        self.repository.start_publishing(
+            job_id, "p0", second_id, lease_token=second_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(
+            [item["status"] for item in stage["attempts"]],
+            ["SUCCEEDED", "RETRYABLE", "RUNNING"],
+        )
+
+
+
+    def test_publication_claim_rejects_legacy_nonterminal_processing_attempt(self):
+        job_id = self.create_job("p0")
+        processing_id, _ = self.repository.start_attempt(
+            job_id, "p0", execution_ref="legacy-processing-task"
+        )
+        self.repository.mark_validated(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+        )
+
+        with self.assertRaises(StageAlreadyRunning):
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-before-terminal"
+            )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["status"], "RUNNING")
+
+
+
+    def test_processing_completion_is_idempotent_for_existing_validation_artifact(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-idempotent-validation"
+        )
+        report = {"valid": True, "errors": []}
+        self.assertTrue(self.repository.mark_validated(
+            job_id, "p0", attempt_id, report, lease_token=token
+        ))
+
+        self.assertFalse(self.repository.complete_processing_attempt(
+            job_id, "p0", attempt_id, report,
+            lease_token=token,
+            metrics={"cpu_seconds": 0.5},
+        ))
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "VALIDATED")
+        self.assertEqual(stage["attempts"][0]["status"], "SUCCEEDED")
+        self.assertEqual(len(stage["artifacts"]), 1)
+
+        with self.repository._session() as session:
+            events = session.query(WorkflowEventRecord).filter_by(
+                attempt_id=attempt_id,
+                event_type="STAGE_PROCESSING_ATTEMPT_COMPLETED",
+            ).all()
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0].payload_json["idempotent_validation_replay"])
+
+
+
+    def test_cancel_attempt_is_lease_fenced_and_clears_lease_tuple(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="cancel-worker"
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.cancel_attempt(
+                job_id, "p0", attempt_id, lease_token="wrong-token"
+            )
+
+        self.assertTrue(self.repository.cancel_attempt(
+            job_id, "p0", attempt_id, lease_token=token
+        ))
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            self.assertEqual(attempt.state, AttemptState.CANCELLED.value)
+            self.assertIsNone(attempt.lease_owner)
+            self.assertIsNone(attempt.lease_token_hash)
+            self.assertIsNone(attempt.lease_expires_at)
+            self.assertIsNone(attempt.heartbeat_at)
+
+    def test_failed_attempt_clears_lease_tuple_for_safe_reclamation(self):
+        job_id = self.create_job("p0")
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="failed-worker"
+        )
+        self.assertTrue(self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=False,
+            error_code="SYNTHETIC_FAILURE",
+            error_message="test",
+            lease_token=token,
+        ))
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            self.assertIsNone(attempt.lease_owner)
+            self.assertIsNone(attempt.lease_token_hash)
+            self.assertIsNone(attempt.lease_expires_at)
+            self.assertIsNone(attempt.heartbeat_at)
+
+    def test_available_artifact_blocks_attempt_prefix_reclamation(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        attempt_id, _, token, _ = self.repository.claim_publication_attempt(
+            job_id, "p0",
+            lease_owner="failed-with-object",
+            processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
+        )
+        self.repository.fail_attempt(
+            job_id, "p0", attempt_id,
+            retryable=False,
+            error_code="SYNTHETIC_FAILURE",
+            error_message="test",
+            lease_token=token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            session.add(ArtifactRecord(
+                id=str(uuid4()),
+                job_id=job_id,
+                stage_id=attempt.stage_id,
+                attempt_id=attempt_id,
+                artifact_type="streaming_manifest",
+                logical_name="master.m3u8",
+                uri="s3://vod-output/vod/.attempts/{}/master.m3u8".format(
+                    attempt_id
+                ),
+                status="AVAILABLE",
+                metadata_json={},
+            ))
+
+        self.assertFalse(self.repository.is_attempt_reclaimable(
+            attempt_id,
+            "vod-output",
+            "vod/.attempts/{}".format(attempt_id),
+            minimum_age_seconds=86400,
+        ))
+
+    def test_recovered_publication_attempt_is_reclaimable_only_after_replacement(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        old_id, _, _, expiry = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="publisher-crashed",
+            processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
+        )
+        self.repository.recover_expired_attempts(now=expiry)
+        with self.repository._session.begin() as session:
+            old_attempt = session.get(AttemptRecord, old_id)
+            old_attempt.finished_at = utcnow() - timedelta(days=2)
+
+        prefix = "vod/.attempts/{}".format(old_id)
+        self.assertFalse(self.repository.is_attempt_reclaimable(
+            old_id, "vod-output", prefix, minimum_age_seconds=86400
+        ))
+
+        new_id, _, _, _ = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="replacement-publisher",
+            processing_attempt_id=processing_id,
+        )
+        self.assertNotEqual(old_id, new_id)
+        self.assertTrue(self.repository.is_attempt_reclaimable(
+            old_id, "vod-output", prefix, minimum_age_seconds=86400
+        ))
+
+    def test_publication_cancellation_wins_before_artifact_pointer_commit(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="publisher-cancel-race",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        self.repository.cancel_attempt(
+            job_id,
+            "p0",
+            publication_id,
+            reason="CANCELLED_BEFORE_PACKAGE_ARTIFACT_COMMIT",
+            lease_token=publication_token,
+        )
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id,
+                "p0",
+                publication_id,
+                artifacts=[{
+                    "artifact_type": "streaming_manifest",
+                    "logical_name": "master",
+                    "uri": "s3://vod-output/vod/.attempts/{}/master.m3u8".format(
+                        publication_id
+                    ),
+                }],
+                lease_token=publication_token,
+            )
+
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "CANCELLED")
+        self.assertFalse(any(
+            item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+            for item in stage["artifacts"]
+        ))
+        self.assertEqual(
+            stage["attempts"][-1]["status"],
+            "CANCELLED",
+        )
+
+    def test_crash_after_package_upload_retries_with_a_new_namespace(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        old_id, _, old_token, old_expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-before-db-commit",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        old_key = attempt_scoped_object_key(
+            "vod/master.m3u8", old_id
+        )
+        self.repository.start_publishing(
+            job_id, "p0", old_id, lease_token=old_token
+        )
+
+        # Model a worker crash after remote upload/readback but before the
+        # Artifact-pointer transaction commits.
+        self.repository.recover_expired_attempts(now=old_expiry)
+        with self.repository._session.begin() as session:
+            old_attempt = session.get(AttemptRecord, old_id)
+            old_attempt.finished_at = utcnow() - timedelta(days=2)
+
+        new_id, _, new_token, _ = self.repository.claim_publication_attempt(
+            job_id, "p0", lease_owner="replacement-after-crash",
+            processing_attempt_id=processing_id,
+            package_output_key="vod/master.m3u8",
+            package_output_bucket="vod-output",
+        )
+        new_key = attempt_scoped_object_key(
+            "vod/master.m3u8", new_id
+        )
+        self.assertNotEqual(old_key, new_key)
+
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.finish_stage(
+                job_id, "p0", old_id,
+                artifacts=[{
+                    "artifact_type": "streaming_manifest",
+                    "logical_name": "master",
+                    "uri": "s3://vod-output/{}".format(old_key),
+                }],
+                lease_token=old_token,
+            )
+
+        self.repository.start_publishing(
+            job_id, "p0", new_id, lease_token=new_token
+        )
+        self.repository.finish_stage(
+            job_id, "p0", new_id,
+            artifacts=[{
+                "artifact_type": "streaming_manifest",
+                "logical_name": "master",
+                "uri": "s3://vod-output/{}".format(new_key),
+            }],
+            lease_token=new_token,
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        available_manifests = [
+            item["uri"] for item in stage["artifacts"]
+            if item["type"] == "streaming_manifest"
+            and item["status"] == "AVAILABLE"
+        ]
+        self.assertEqual(
+            available_manifests, ["s3://vod-output/{}".format(new_key)]
+        )
+        self.assertTrue(self.repository.is_attempt_reclaimable(
+            old_id,
+            "vod-output",
+            "vod/.attempts/{}".format(old_id),
+            minimum_age_seconds=86400,
+        ))
+
+    def test_package_namespace_survives_failure_and_is_listed_for_janitor(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="package-publisher",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/master.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.fail_attempt(
+            job_id, "p0", publication_id,
+            retryable=False,
+            error_code="PACKAGE_UPLOAD_FAILED",
+            error_message="synthetic failure",
+            metrics={"output_bytes": 12},
+            lease_token=publication_token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, publication_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+            self.assertEqual(
+                attempt.metrics_json["package_publication"]["prefix"],
+                "vod/.attempts/{}".format(publication_id),
+            )
+            self.assertEqual(attempt.metrics_json["output_bytes"], 12)
+
+        candidates = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400,
+            limit=10,
+        )
+        candidate = next(
+            item for item in candidates
+            if item["attempt_id"] == publication_id
+        )
+        self.assertEqual(candidate["bucket"], "vod-output")
+        self.assertEqual(
+            candidate["inventory_key"],
+            "vod/.attempts/{}/.master.m3u8.artifacts.json".format(
+                publication_id
+            ),
+        )
+
+        self.assertTrue(self.repository.mark_package_attempt_cleaned(
+            publication_id,
+            "vod-output",
+            "vod/.attempts/{}".format(publication_id),
+        ))
+        with self.repository._session() as session:
+            cleaned_attempt = session.get(AttemptRecord, publication_id)
+            self.assertTrue(
+                cleaned_attempt.metrics_json["package_publication"][
+                    "cleanup_completed_at"
+                ]
+            )
+        self.assertNotIn(
+            publication_id,
+            [
+                item["attempt_id"]
+                for item in self.repository.list_reclaimable_package_attempts(
+                    minimum_age_seconds=86400,
+                    limit=100,
+                )
+            ],
+        )
+
+    def test_single_file_publication_namespace_is_registered_for_janitor(self):
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+            metrics={
+                "cpu_seconds": 0.1,
+                "peak_memory_bytes": 1024,
+                "memory_duration_ms": 100,
+                "output_bytes": 0,
+            },
+            pricing={
+                "model_id": "test-model",
+                "model_version": "1",
+                "currency": "RUNIT",
+                "cpu_per_second": 1,
+                "memory_gb_second": 0.25,
+                "storage_gb": 0.01,
+            },
+        )
+        publication_id, _, publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0",
+                lease_owner="file-publisher",
+                processing_attempt_id=processing_id,
+                package_output_key="vod/thumbnail.jpg",
+                package_output_bucket="vod-output",
+                package_output_kind="single_file",
+            )
+        )
+        namespace = self.repository.get_attempt_publication_namespace(
+            publication_id
+        )
+        self.assertEqual(namespace["kind"], "single_file")
+        self.assertEqual(namespace["bucket"], "vod-output")
+        self.assertEqual(
+            namespace["object_key"],
+            "vod/.attempts/{}/thumbnail.jpg".format(publication_id),
+        )
+        self.assertNotIn("inventory_key", namespace)
+
+        self.repository.fail_attempt(
+            job_id, "p0", publication_id,
+            retryable=False,
+            error_code="FILE_PUBLICATION_FAILED",
+            error_message="synthetic failure",
+            metrics={
+                "cpu_seconds": 0.01,
+                "peak_memory_bytes": 1024,
+                "memory_duration_ms": 10,
+                "output_bytes": 0,
+            },
+            pricing={
+                "model_id": "test-model",
+                "model_version": "1",
+                "currency": "RUNIT",
+                "cpu_per_second": 1,
+                "memory_gb_second": 0.25,
+                "storage_gb": 0.01,
+            },
+            lease_token=publication_token,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, publication_id)
+            attempt.finished_at = utcnow() - timedelta(days=2)
+
+        candidates = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400, limit=100
+        )
+        candidate = next(
+            item for item in candidates
+            if item["attempt_id"] == publication_id
+        )
+        self.assertEqual(candidate["kind"], "single_file")
+        self.assertEqual(
+            candidate["object_key"],
+            namespace["object_key"],
+        )
+        self.assertIsNone(candidate["inventory_key"])
+
+    def test_missing_local_package_invalidates_validation_and_allows_reprocessing(self):
+        job_id = self.create_job("p0")
+        processing_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="playlist-worker"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+            metrics={
+                "local_package": {
+                    "directory": "/missing/package",
+                    "manifest_path": "/missing/package/master.m3u8",
+                    "expected_renditions": ["master_144p.m3u8"],
+                    "package_type": "hls",
+                },
+            },
+        )
+        self.assertEqual(
+            self.repository.get_attempt_local_package(processing_id)[
+                "directory"
+            ],
+            "/missing/package",
+        )
+
+        validation_snapshot = self.repository.get_stage_snapshot(
+            job_id, "p0"
+        )["artifacts"][0]["metadata"]
+        self.assertNotIn("local_output_directory", validation_snapshot)
+        self.assertNotIn("manifest_path", validation_snapshot)
+
+        self.assertTrue(
+            self.repository.requeue_processing_after_local_package_loss(
+                job_id,
+                "p0",
+                processing_id,
+                reason="VALIDATED_LOCAL_PACKAGE_MISSING_ON_TASK_REPLAY",
+            )
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "RETRY_WAIT")
+        validation = next(
+            item for item in stage["artifacts"]
+            if item["type"] == "validation_report"
+        )
+        self.assertEqual(validation["status"], "UNAVAILABLE")
+        self.assertEqual(
+            validation["metadata"]["invalidated_reason"],
+            "VALIDATED_LOCAL_PACKAGE_MISSING_ON_TASK_REPLAY",
+        )
+
+        replacement_id, _, replacement_token, _ = (
+            self.repository.claim_attempt(
+                job_id, "p0", lease_owner="playlist-reprocessor"
+            )
+        )
+        self.assertNotEqual(processing_id, replacement_id)
+        self.assertTrue(replacement_token)
+
+    def test_expired_publication_claim_recovers_before_publishing_transition(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing"
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        first_id, _, first_token, first_expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="publisher-crashed-before-start"
+            )
+        )
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=first_expiry):
+            second_id, number, second_token, _ = (
+                self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner="publisher-after-expiry"
+                )
+            )
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(number, 3)
+        with self.assertRaises(AttemptLeaseLost):
+            self.repository.start_publishing(
+                job_id, "p0", first_id, lease_token=first_token
+            )
+        self.repository.start_publishing(
+            job_id, "p0", second_id, lease_token=second_token
+        )
+        stage = self.repository.get_stage_snapshot(job_id, "p0")
+        self.assertEqual(stage["status"], "PUBLISHING")
+        self.assertEqual(
+            [attempt["status"] for attempt in stage["attempts"]],
+            ["SUCCEEDED", "RETRYABLE", "RUNNING"],
+        )
+
+
     def test_lease_ttl_rejects_invalid_values(self):
         invalid_values = (
             True, False, 0, -1, 86401,
@@ -1354,6 +2292,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertNotIn(token, serialized_snapshot)
         self.assertNotIn("lease_token_hash", serialized_snapshot)
         self.assertEqual(snapshot["attempts"][0]["id"], attempt_id)
+
 
 
 
