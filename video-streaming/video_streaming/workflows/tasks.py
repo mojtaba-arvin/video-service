@@ -14,6 +14,7 @@ from video_streaming import settings
 from video_streaming.celery import celery_app
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.relay import WorkflowOutboxRelay
 
 DISPATCH_TASK = "video_streaming.workflows.dispatch_plan"
 EXECUTE_NODE_TASK = "video_streaming.workflows.execute_node"
@@ -136,3 +137,26 @@ def execute_node(job_id, node_id, workflow_id, plan_version, plan_fingerprint):
             countdown=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS + 1,
         )
     return outcome
+
+
+@celery_app.task(
+    name="video_streaming.workflows.relay_outbox",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def relay_workflow_outbox():
+    """Publish committed outbox rows only after the full handler registry loads."""
+    if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+        return {"status": "disabled"}
+    # Validate every handler and required artifact-storage configuration before
+    # claiming any outbox row. A bad deployment must not mark dispatch as sent.
+    _build_executor()
+    repository = get_workflow_repository()
+    relay = WorkflowOutboxRelay(
+        repository=repository,
+        publisher=celery_app,
+        owner="{}:{}".format(socket.gethostname(), uuid.uuid4().hex),
+        lease_ttl_seconds=30,
+        batch_size=25,
+    )
+    return relay.run_once()
