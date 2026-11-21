@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.ffmpeg.package_validation import (
     _probe_media,
     validate_package,
@@ -48,6 +49,33 @@ class PackageProbeSupervisionTests(unittest.TestCase):
     @patch(
         "video_streaming.ffmpeg.package_validation.run_cancellable_process"
     )
+    @patch(
+        "video_streaming.ffmpeg.package_validation._probe_package_metadata",
+        side_effect=AttemptLeaseLost("worker lease expired"),
+    )
+    @patch(
+        "video_streaming.ffmpeg.package_validation.validate_streaming_package"
+    )
+    def test_attempt_lease_loss_is_not_converted_to_validation_report(
+            self, structural, metadata):
+        structural.return_value = {
+            "protocol": "hls",
+            "manifest": "master.m3u8",
+            "rendition_names": ["720p.m3u8"],
+            "segments": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "master.m3u8"
+            manifest.write_text("#EXTM3U\\n", encoding="utf-8")
+            with self.assertRaises(AttemptLeaseLost):
+                validate_package(
+                    directory=directory,
+                    package_type="hls",
+                    manifest_path=str(manifest),
+                    expected_renditions=["720p.m3u8"],
+                    ffprobe_bin_path="/usr/bin/ffprobe",
+                )
+
     def test_timeout_is_propagated_from_supervisor(self, runner):
         runner.side_effect = subprocess.TimeoutExpired(["ffprobe"], 3)
         with self.assertRaises(subprocess.TimeoutExpired):
