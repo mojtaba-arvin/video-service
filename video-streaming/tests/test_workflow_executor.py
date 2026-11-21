@@ -6,6 +6,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine
 
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
+from video_streaming.workflows.domain import InvalidStateTransition
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.repository import WorkflowRepository
 
@@ -73,6 +74,20 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
             worker_id=worker,
             lease_ttl_seconds=30,
         )
+
+    def test_legacy_tasks_cannot_claim_durable_owned_processing_or_publication(self):
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_attempt(
+                self.job_id, "check", lease_owner="legacy-celery-worker"
+            )
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_publication_attempt(
+                self.job_id, "check", lease_owner="legacy-celery-worker"
+            )
+        result = self.executor(
+            lambda _node, _context: {"validation_report": dict(VALID)}
+        ).execute(self.job_id, "check")
+        self.assertEqual(result["status"], "completed")
 
     def test_node_claim_enforces_dependencies_and_completes_workflow(self):
         executor = self.executor(lambda _node, _context: {
