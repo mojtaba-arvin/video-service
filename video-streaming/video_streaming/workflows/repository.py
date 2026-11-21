@@ -931,9 +931,32 @@ class WorkflowRepository:
                         WorkflowRecord.job_id == existing.id
                     )
                 ).scalar_one()
+                replay_plan = None
+                if plan is not None:
+                    replay_plan = deepcopy(plan)
+                    replay_plan["job_id"] = existing.id
+                    for node in replay_plan["nodes"]:
+                        parameters = node["parameters"]
+                        if "webhook_secret_ref" not in parameters:
+                            continue
+                        accepted_secret = session.execute(
+                            select(JobSecretRecord).where(
+                                JobSecretRecord.job_id == existing.id,
+                                JobSecretRecord.purpose == "webhook.callback",
+                                JobSecretRecord.status == "ACTIVE",
+                                JobSecretRecord.deleted_at.is_(None),
+                                (JobSecretRecord.expires_at.is_(None)
+                                 | (JobSecretRecord.expires_at > utcnow())),
+                            )
+                        ).scalar_one_or_none()
+                        if accepted_secret is None:
+                            raise IdempotencyConflict(
+                                "Concurrent idempotent plan references a missing callback secret"
+                            )
+                        parameters["webhook_secret_ref"] = accepted_secret.secret_id
                 replay_fingerprint = (
-                    execution_plan_sha256(dict(plan, job_id=existing.id))
-                    if plan is not None else None
+                    execution_plan_sha256(replay_plan)
+                    if replay_plan is not None else None
                 )
                 if (
                         replay_fingerprint is not None
