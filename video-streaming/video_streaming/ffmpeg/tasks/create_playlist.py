@@ -375,11 +375,11 @@ def create_playlist(
                 "input_bytes": input_bytes,
                 # Storage is charged to the separate publication Attempt.
                 "output_bytes": 0,
-                "cpu_seconds": process_usage.get(
-                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                "cpu_seconds": max(
+                    child_cpu_seconds_since(cpu_started),
+                    aggregate_process_usage()["cpu_seconds"],
                 ),
-                "peak_memory_bytes": process_usage.get("peak_memory_bytes"),
-                "memory_duration_ms": process_usage.get("memory_duration_ms"),
+                **process_resource_metrics(),
                 "local_package": {
                     "directory": directory,
                     "manifest_path": output_path,
