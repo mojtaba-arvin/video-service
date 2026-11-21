@@ -503,6 +503,37 @@ class WorkflowRepository:
     def close(self):
         self.engine.dispose()
 
+    def find_idempotent_job(
+            self, idempotency_key, request_hash, owner_principal=None):
+        """Return an existing accepted Job after enforcing idempotency ownership.
+
+        CreateJob uses this read before generating a new random secret envelope,
+        so a legitimate retry reuses the original Job and never rotates its
+        encrypted callback secret or changes its plan fingerprint.
+        """
+        with self._session() as session:
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.idempotency_key == idempotency_key
+                )
+            ).scalar_one_or_none()
+            if job is None:
+                return None
+            if job.request_hash != request_hash:
+                raise IdempotencyConflict(
+                    "Idempotency key was already used with a different request"
+                )
+            if job.owner_tenant_id is not None and owner_principal is None:
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+            if owner_principal is not None and (
+                    job.owner_tenant_id != owner_principal.tenant_id
+                    or job.owner_issuer != owner_principal.issuer
+                    or job.owner_subject != owner_principal.subject):
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+            return job.id
+
     def create_job(
             self,
             job_id,
