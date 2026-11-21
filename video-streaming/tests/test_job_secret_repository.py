@@ -241,6 +241,69 @@ class JobSecretRepositoryTests(unittest.TestCase):
                 job_id, object(), "webhook.callback"
             )
 
+    def test_concurrent_idempotent_plan_reuses_accepted_secret_reference(self):
+        accepted_job_id = str(uuid4())
+        candidate_job_id = str(uuid4())
+        key = "idem-plan-secret-{}".format(uuid4())
+        accepted = self.envelope(
+            accepted_job_id, value="https://first.invalid/callback"
+        )
+        candidate = self.envelope(
+            candidate_job_id, value="https://first.invalid/callback"
+        )
+
+        def plan(job_id, secret_id):
+            return {
+                "schema_version": 1,
+                "workflow_name": "video.vod",
+                "workflow_version": "1",
+                "job_id": job_id,
+                "nodes": [{
+                    "node_id": "callback",
+                    "operation": "video.webhook.deliver",
+                    "stage_key": "callback",
+                    "depends_on": [],
+                    "parameters": {
+                        "enabled": True,
+                        "webhook_secret_ref": secret_id,
+                    },
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "control",
+                }],
+            }
+
+        self.repository.create_job(
+            job_id=accepted_job_id,
+            idempotency_key=key,
+            request_hash="f" * 64,
+            execution_plan=plan(accepted_job_id, accepted.secret_id),
+            owner_principal=self.principal,
+            secret_envelopes=[accepted],
+        )
+        replay_id, created = self.repository.create_job(
+            job_id=candidate_job_id,
+            idempotency_key=key,
+            request_hash="f" * 64,
+            execution_plan=plan(candidate_job_id, candidate.secret_id),
+            owner_principal=self.principal,
+            secret_envelopes=[candidate],
+        )
+        self.assertEqual((replay_id, created), (accepted_job_id, False))
+        stored = self.repository.get_job_secret_envelope(
+            accepted_job_id, self.principal, "webhook.callback"
+        )
+        self.assertEqual(stored.secret_id, accepted.secret_id)
+        self.assertEqual(
+            self.repository.get_execution_plan(accepted_job_id)["plan"]
+            ["nodes"][0]["parameters"]["webhook_secret_ref"],
+            accepted.secret_id,
+        )
+
     def test_idempotency_lookup_returns_existing_job_without_secret_rotation(self):
         job_id = str(uuid4())
         key = "idem-lookup-{}".format(uuid4())
