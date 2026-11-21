@@ -27,10 +27,21 @@ def authenticate_workflow_worker(sts_client, allowed_role_arn_prefix):
     """Verify the worker's actual AWS credentials using STS GetCallerIdentity."""
     if sts_client is None:
         raise ValueError("STS client is required")
+    parts = (
+        allowed_role_arn_prefix.split(":")
+        if isinstance(allowed_role_arn_prefix, str) else []
+    )
+    resource = parts[5] if len(parts) == 6 else ""
     if (
-        not isinstance(allowed_role_arn_prefix, str)
-        or not allowed_role_arn_prefix.startswith("arn:")
-        or not allowed_role_arn_prefix.endswith("/")
+        len(parts) != 6
+        or parts[0] != "arn"
+        or parts[2] != "sts"
+        or not parts[4].isdigit()
+        or not resource.startswith("assumed-role/")
+        or not resource.endswith("/")
+        or len(resource.split("/")) != 3
+        or not resource.split("/")[1]
+        or any(char in allowed_role_arn_prefix for char in "*?")
     ):
         raise ValueError("an exact assumed-role ARN prefix is required")
     try:
@@ -41,7 +52,12 @@ def authenticate_workflow_worker(sts_client, allowed_role_arn_prefix):
     arn = identity.get("Arn")
     if not isinstance(account, str) or not account.isdigit():
         raise PermissionError("STS returned an invalid account identity")
-    if not isinstance(arn, str) or not arn.startswith(allowed_role_arn_prefix):
+    arn_parts = arn.split(":") if isinstance(arn, str) else []
+    if (
+        len(arn_parts) != 6
+        or arn_parts[4] != account
+        or not arn.startswith(allowed_role_arn_prefix)
+    ):
         raise PermissionError("workflow worker role is not authorized")
     return WorkflowWorkerIdentity(
         account_id=account,
