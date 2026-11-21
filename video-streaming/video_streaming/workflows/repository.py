@@ -2105,9 +2105,15 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
-            if job.state == JobState.CANCELLED.value:
-                # Fence a live worker after a sibling node cancels the Job.
+            if job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                # Fence a live worker after any terminal Job transition.
                 now = utcnow()
+                terminal_reason = "JOB_{}_BEFORE_NODE_COMPLETION".format(
+                    job.state
+                )
                 previous_status = stage.status
                 self._transition(stage, StageState.CANCELLED)
                 started = attempt.started_at
@@ -2124,13 +2130,13 @@ class WorkflowRepository:
                 attempt.output_bytes = usage.get("output_bytes")
                 self._apply_attempt_accounting(attempt, usage, pricing)
                 self._clear_attempt_lease(attempt)
-                attempt.error_code = "CANCELLED"
-                attempt.error_message = "JOB_CANCELLED_BEFORE_NODE_COMPLETION"
+                attempt.error_code = "JOB_TERMINAL"
+                attempt.error_message = terminal_reason
                 _record_event(
                     session, job_id, stage.workflow_id, "STAGE_CANCELLED",
                     from_state=previous_status, to_state=StageState.CANCELLED.value,
                     stage_id=stage.id, attempt_id=attempt_id,
-                    payload={"reason": "JOB_CANCELLED_BEFORE_NODE_COMPLETION"},
+                    payload={"reason": terminal_reason},
                 )
                 return False
             now = utcnow()
