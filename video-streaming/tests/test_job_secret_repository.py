@@ -16,6 +16,7 @@ from video_streaming.security.secret_store import (
 from video_streaming.workflows.repository import (
     JobRecord,
     JobSecretRecord,
+    WorkflowEventRecord,
     WorkflowRepository,
     utcnow,
 )
@@ -216,6 +217,15 @@ class JobSecretRepositoryTests(unittest.TestCase):
             resolve_secret(stored, original.context, self.provider),
             "https://callback.invalid/hook",
         )
+        with self.repository._session() as session:
+            audit = session.query(WorkflowEventRecord).filter_by(
+                job_id=job_id,
+                event_type="JOB_SECRET_RESOLVE_AUTHORIZED",
+            ).one()
+            self.assertEqual(
+                audit.payload_json["worker_arn"], worker.arn
+            )
+            self.assertNotIn("callback.invalid", repr(audit.payload_json))
         with self.assertRaises(AuthorizationError):
             self.repository.get_job_secret_envelope_for_worker(
                 job_id, object(), "webhook.callback"
