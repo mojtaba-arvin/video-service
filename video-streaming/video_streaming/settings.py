@@ -433,3 +433,14 @@ WORKFLOW_DURABLE_DISPATCH_ENABLED = env_config.get(
     "WORKFLOW_DURABLE_DISPATCH_ENABLED", default=False, cast=bool)
 WORKFLOW_HANDLER_FACTORY = env_config.get(
     "WORKFLOW_HANDLER_FACTORY", default="", cast=str)
+
+
+# Start the transactional outbox relay only when the durable backend has been
+# explicitly enabled. The relay itself validates the complete handler registry
+# before claiming rows.
+if WORKFLOW_DURABLE_DISPATCH_ENABLED:
+    CELERY_BEAT_SCHEDULE["relay-durable-workflow-outbox"] = {
+        "task": "video_streaming.workflows.relay_outbox",
+        "schedule": 5.0,
+        "options": {"expires": 4},
+    }
