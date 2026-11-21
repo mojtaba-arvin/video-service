@@ -406,9 +406,10 @@ jobs:
             -p 'test_job_secret_repository.py' \
             -v
 
-      - name: Run durable executor and artifact handoff tests
+      - name: Run durable executor and artifact handoff tests (PostgreSQL)
         env:
           PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
         run: |
           python -m unittest discover \
             -s video-streaming/tests \
