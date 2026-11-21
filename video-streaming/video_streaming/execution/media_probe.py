@@ -9,7 +9,8 @@ def probe_media(
         media_path,
         ffprobe_bin_path,
         timeout_seconds,
-        should_cancel=None):
+        should_cancel=None,
+        on_usage=None):
     """Return structurally valid FFprobe JSON under a process-tree deadline.
 
     The command runs in its own process group through the same supervisor as
@@ -31,6 +32,7 @@ def probe_media(
         command,
         timeout_seconds=timeout_seconds,
         should_cancel=should_cancel,
+        on_usage=on_usage,
     )
     try:
         result = json.loads(stdout.decode("utf-8"))
