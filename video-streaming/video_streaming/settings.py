@@ -32,7 +32,8 @@ CELERY_BROKER_HEARTBEAT = 60
 AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.core',
     f'{PROJECT_NAME}.grpc',
-    f'{PROJECT_NAME}.ffmpeg'
+    f'{PROJECT_NAME}.ffmpeg',
+    f'{PROJECT_NAME}.workflows',
 ]
 
 BASE_TASK_CLASS = 'video_streaming.core.tasks:BaseTask'
@@ -424,3 +425,11 @@ WORKFLOW_SECRET_KMS_REGION = env_config.get(
     "WORKFLOW_SECRET_KMS_REGION", default=S3_REGION_NAME, cast=str)
 WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX = env_config.get(
     "WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX", default="", cast=str)
+
+
+# Durable workflow dispatch remains opt-in until the complete production
+# operation registry and real infrastructure acceptance suite are installed.
+WORKFLOW_DURABLE_DISPATCH_ENABLED = env_config.get(
+    "WORKFLOW_DURABLE_DISPATCH_ENABLED", default=False, cast=bool)
+WORKFLOW_HANDLER_FACTORY = env_config.get(
+    "WORKFLOW_HANDLER_FACTORY", default="", cast=str)
