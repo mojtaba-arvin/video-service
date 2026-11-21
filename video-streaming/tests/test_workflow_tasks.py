@@ -30,6 +30,38 @@ class WorkflowTaskConsumerTests(unittest.TestCase):
                 Repository(), "job", "workflow-expected", "1", "a" * 64
             )
 
+    def test_dispatch_fans_out_only_repository_ready_nodes(self):
+        class Repository:
+            def get_execution_plan(self, job_id):
+                return {
+                    "workflow_id": "workflow",
+                    "workflow_version": "1",
+                    "fingerprint": "a" * 64,
+                    "plan": {"nodes": [
+                        {"node_id": "root"},
+                        {"node_id": "blocked-child"},
+                    ]},
+                }
+
+            def get_ready_node_ids(self, job_id):
+                return ["root"]
+
+        with (
+            patch.object(settings, "WORKFLOW_DURABLE_DISPATCH_ENABLED", True),
+            patch.object(tasks, "get_workflow_repository",
+                         return_value=Repository()),
+            patch.object(tasks, "_build_executor"),
+            patch.object(tasks.execute_node, "apply_async") as publish,
+        ):
+            result = tasks.dispatch_plan.run(
+                "job", "workflow", "1", "a" * 64
+            )
+
+        self.assertEqual(result, {"status": "dispatched", "nodes": 1})
+        publish.assert_called_once_with(
+            args=("job", "root", "workflow", "1", "a" * 64)
+        )
+
     def test_handler_factory_is_mandatory_and_explicit(self):
         with patch.object(settings, "WORKFLOW_HANDLER_FACTORY", ""):
             with self.assertRaisesRegex(RuntimeError, "module:callable"):
