@@ -7,7 +7,7 @@ from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
-from .job_authorization import require_job_access
+from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
 
 
 class GetResultsMixin(object):
