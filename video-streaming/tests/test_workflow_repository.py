@@ -364,6 +364,57 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "missing-session", principal, "video.playback:write"
             )
 
+    def test_expired_durable_attempt_exhausts_persisted_retry_budget(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 1,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 1,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="lease-budget-" + job_id,
+            request_hash="e" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="worker-that-will-die"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_node_attempt(
+                job_id, "check-input", lease_owner="replacement-worker"
+            )
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.FAILED.value)
+        self.assertEqual(snapshot["workflow"]["status"], JobState.FAILED.value)
+        stage = next(
+            item for item in snapshot["stages"]
+            if item["key"] == "check-input"
+        )
+        self.assertEqual(stage["status"], StageState.FAILED.value)
+        self.assertEqual(stage["attempts"][-1]["status"], AttemptState.FAILED.value)
+
     def test_node_claim_rejects_terminal_jobs_without_creating_attempts(self):
         for terminal_state in (
                 JobState.FAILED.value,
