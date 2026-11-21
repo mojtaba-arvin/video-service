@@ -2042,6 +2042,56 @@ class WorkflowRepository:
                     from_state=JobState.RUNNING.value,
                     to_state=JobState.FINISHED.value,
                 )
+            else:
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                if workflow.execution_backend == "durable_vod_v1":
+                    if not (
+                            workflow.workflow_version
+                            and workflow.execution_plan_fingerprint
+                            and workflow.execution_plan_schema_version):
+                        raise InvalidStateTransition(
+                            "Durable workflow continuation requires an immutable plan identity"
+                        )
+                    # A completed node and its next dispatch intent commit in
+                    # one transaction. The broker publish after this commit is
+                    # merely a wake-up; the relay can recover a lost publish.
+                    outbox_id = new_id()
+                    dedupe_key = "workflow.continue:{}:{}".format(
+                        workflow.id, attempt_id
+                    )
+                    session.add(OutboxRecord(
+                        id=outbox_id,
+                        job_id=job_id,
+                        workflow_id=workflow.id,
+                        event_type="WORKFLOW_PLAN_DISPATCH",
+                        schema_version=workflow.execution_plan_schema_version,
+                        plan_version=workflow.workflow_version,
+                        plan_fingerprint=workflow.execution_plan_fingerprint,
+                        dedupe_key=dedupe_key,
+                        payload_json={
+                            "schema_version": workflow.execution_plan_schema_version,
+                            "job_id": job_id,
+                            "workflow_version": workflow.workflow_version,
+                            "plan_fingerprint": workflow.execution_plan_fingerprint,
+                        },
+                        state="PENDING",
+                        attempts=0,
+                        available_at=now,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+                    _record_event(
+                        session,
+                        job_id,
+                        workflow.id,
+                        "WORKFLOW_CONTINUATION_ENQUEUED",
+                        stage_id=stage.id,
+                        attempt_id=attempt_id,
+                        payload={
+                            "outbox_id": outbox_id,
+                            "stage_key": stage_key,
+                        },
+                    )
             return True
 
     def get_ready_node_ids(self, job_id, now=None):
