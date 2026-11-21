@@ -2020,7 +2020,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         with self.repository._session.begin() as session:
             attempt = session.get(AttemptRecord, publication_id)
-            attempt.finished_at = utcnow() - timedelta(days=2)
+            attempt.finished_at = utcnow() - timedelta(days=10)
             self.assertEqual(
                 attempt.metrics_json["package_publication"]["prefix"],
                 "vod/.attempts/{}".format(publication_id),
@@ -2064,6 +2064,48 @@ class WorkflowRepositoryTests(unittest.TestCase):
                     limit=100,
                 )
             ],
+        )
+
+        # A cleaned old row must not consume the SQL work limit and starve
+        # the next eligible Attempt.
+        next_job_id = self.create_job("p0")
+        next_processing_id, _, next_processing_token, _ = (
+            self.repository.claim_attempt(
+                next_job_id, "p0", lease_owner="processing-next"
+            )
+        )
+        self.repository.complete_processing_attempt(
+            next_job_id, "p0", next_processing_id,
+            {"valid": True, "errors": []},
+            lease_token=next_processing_token,
+        )
+        next_publication_id, _, next_publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                next_job_id, "p0",
+                lease_owner="package-publisher-next",
+                processing_attempt_id=next_processing_id,
+                package_output_key="vod/next.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.fail_attempt(
+            next_job_id, "p0", next_publication_id,
+            retryable=False,
+            error_code="PACKAGE_UPLOAD_FAILED",
+            error_message="synthetic failure",
+            lease_token=next_publication_token,
+        )
+        with self.repository._session.begin() as session:
+            next_attempt = session.get(AttemptRecord, next_publication_id)
+            next_attempt.finished_at = utcnow() - timedelta(days=9)
+
+        limited = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400,
+            limit=1,
+        )
+        self.assertEqual(
+            [item["attempt_id"] for item in limited],
+            [next_publication_id],
         )
 
     def test_single_file_publication_namespace_is_registered_for_janitor(self):
