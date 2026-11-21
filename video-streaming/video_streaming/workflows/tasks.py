@@ -80,7 +80,11 @@ def _assert_dispatch_identity(repository, job_id, workflow_id, plan_version,
     return snapshot
 
 
-@celery_app.task(name=DISPATCH_TASK)
+@celery_app.task(
+    name=DISPATCH_TASK,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def dispatch_plan(job_id, workflow_id, plan_version, plan_fingerprint):
     """Fan out idempotent node references for one immutable plan."""
     if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
@@ -91,18 +95,20 @@ def dispatch_plan(job_id, workflow_id, plan_version, plan_fingerprint):
     )
     # Validate the complete operation registry before emitting any child task.
     _build_executor()
-    published = 0
-    for node in snapshot["plan"]["nodes"]:
+    ready_node_ids = repository.get_ready_node_ids(job_id)
+    for node_id in ready_node_ids:
         execute_node.apply_async(
-            args=(job_id, node["node_id"], workflow_id, plan_version,
+            args=(job_id, node_id, workflow_id, plan_version,
                   plan_fingerprint),
-            task_id="workflow-node-{}-{}".format(job_id, node["node_id"]),
         )
-        published += 1
-    return {"status": "dispatched", "nodes": published}
+    return {"status": "dispatched", "nodes": len(ready_node_ids)}
 
 
-@celery_app.task(name=EXECUTE_NODE_TASK)
+@celery_app.task(
+    name=EXECUTE_NODE_TASK,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def execute_node(job_id, node_id, workflow_id, plan_version, plan_fingerprint):
     """Execute one node and re-drive the immutable plan after progress."""
     if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
@@ -121,5 +127,12 @@ def execute_node(job_id, node_id, workflow_id, plan_version, plan_fingerprint):
         execute_node.apply_async(
             args=(job_id, node_id, workflow_id, plan_version, plan_fingerprint),
             countdown=outcome["retry_after_seconds"],
+        )
+    elif outcome["status"] in ("already_running", "lease_lost"):
+        # A duplicate delivery must not acquire a second lease. Recheck after
+        # the current lease window so an abandoned Attempt can be recovered.
+        execute_node.apply_async(
+            args=(job_id, node_id, workflow_id, plan_version, plan_fingerprint),
+            countdown=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS + 1,
         )
     return outcome
