@@ -1,6 +1,7 @@
 """Durable node-claim, dependency, cancellation and idempotency tests."""
 
 import unittest
+from datetime import timedelta
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -174,7 +175,7 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         )
         self.assertEqual(self.repository.get_ready_node_ids(self.job_id), [])
         recovered = self.repository.get_ready_node_ids(
-            self.job_id, now=expires_at + __import__("datetime").timedelta(seconds=1)
+            self.job_id, now=expires_at + timedelta(seconds=1)
         )
         self.assertEqual(recovered, ["check"])
 
