@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from video_streaming.execution.process_control import run_cancellable_process
+from video_streaming.workflows.domain import AttemptLeaseLost
 
 
 class StreamingPackageValidationError(ValueError):
@@ -655,7 +656,8 @@ def validate_package(
         manifest_path: str = None,
         ffprobe_bin_path: str = None,
         metadata_probe_timeout_seconds: int = 10,
-        should_cancel=None) -> PackageValidationReport:
+        should_cancel=None,
+        on_usage=None) -> PackageValidationReport:
     """Return a structured reusable validation report for a VOD package.
 
     expected_renditions is a list of HLS rendition playlist paths relative
@@ -714,7 +716,11 @@ def validate_package(
                 ffprobe_bin_path=ffprobe_bin_path,
                 timeout_seconds=metadata_probe_timeout_seconds,
                 should_cancel=should_cancel,
+                on_usage=on_usage,
             ))
+    except AttemptLeaseLost:
+        # Lease loss is an ownership failure, not a media-validation result.
+        raise
     except Exception as exc:
         message = str(exc)
         report.errors.append(PackageValidationIssue(
@@ -958,7 +964,9 @@ def reset_package_directory(directory: str, expected_parent: str):
 
 
 
-def _probe_media(path, ffprobe_bin_path, timeout_seconds, should_cancel=None):
+def _probe_media(
+        path, ffprobe_bin_path, timeout_seconds, should_cancel=None,
+        on_usage=None):
     command = [
         ffprobe_bin_path,
         "-v", "error",
@@ -972,6 +980,7 @@ def _probe_media(path, ffprobe_bin_path, timeout_seconds, should_cancel=None):
         command,
         timeout_seconds=timeout_seconds,
         should_cancel=should_cancel,
+        on_usage=on_usage,
     )
     return json.loads(stdout.decode("utf-8") or "{}")
 
@@ -1073,7 +1082,8 @@ def _hls_segment_paths(playlist):
 
 
 def _probe_hls_media_duration(
-        playlist, ffprobe_bin_path, timeout_seconds, should_cancel=None):
+        playlist, ffprobe_bin_path, timeout_seconds, should_cancel=None,
+        on_usage=None):
     """Derive media duration from actual packet timestamps, not EXTINF tags.
 
     Fragmented MP4 media fragments require their initialization section and are
@@ -1110,6 +1120,7 @@ def _probe_hls_media_duration(
             command,
             timeout_seconds=timeout_seconds,
             should_cancel=should_cancel,
+            on_usage=on_usage,
         )
         first_pts = None
         last_packet_end = None
@@ -1142,7 +1153,8 @@ def _probe_package_metadata(
         manifest_path,
         ffprobe_bin_path,
         timeout_seconds,
-        should_cancel=None):
+        should_cancel=None,
+        on_usage=None):
     """Probe headers/metadata only; never decode or re-encode media."""
     root = Path(directory).resolve()
     manifest = Path(manifest_path).resolve()
@@ -1159,6 +1171,7 @@ def _probe_package_metadata(
                 metadata = _probe_media(
                     local_path, ffprobe_bin_path, timeout_seconds,
                     should_cancel=should_cancel,
+                    on_usage=on_usage,
                 )
                 streams = metadata.get("streams", [])
                 video_stream = next(
@@ -1229,6 +1242,7 @@ def _probe_package_metadata(
                     ffprobe_bin_path,
                     timeout_seconds,
                     should_cancel=should_cancel,
+                    on_usage=on_usage,
                 )
                 if durations and measured_duration:
                     manifest_duration = sum(durations)
@@ -1250,6 +1264,7 @@ def _probe_package_metadata(
             metadata = _probe_media(
                 manifest, ffprobe_bin_path, timeout_seconds,
                 should_cancel=should_cancel,
+                on_usage=on_usage,
             )
             streams = [
                 stream for stream in metadata.get("streams", [])
