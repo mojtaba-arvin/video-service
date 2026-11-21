@@ -85,6 +85,9 @@ class WorkflowNodeExecutor:
         if operation not in PLAN_OPERATIONS or operation not in self.handlers:
             raise ValueError("workflow operation is not allow-listed")
         stage_key = node["stage_key"]
+        input_artifacts = self.repository.get_dependency_artifacts(
+            job_id, node_id
+        )
         try:
             attempt_id, attempt_number, token, _ = (
                 self.repository.claim_node_attempt(
@@ -144,9 +147,7 @@ class WorkflowNodeExecutor:
             heartbeat=heartbeat,
             cancel=cancel,
             is_cancelled=is_cancelled,
-            input_artifacts=self.repository.get_dependency_artifacts(
-                job_id, node_id
-            ),
+            input_artifacts=input_artifacts,
         )
         try:
             if is_cancelled():
