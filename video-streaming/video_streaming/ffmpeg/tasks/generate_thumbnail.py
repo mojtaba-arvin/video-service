@@ -121,8 +121,24 @@ def generate_thumbnail(
     usage_metrics = {}
 
     def capture_usage(metrics):
-        usage_metrics.update(metrics)
+        process_id = str(metrics.get("process_id") or "legacy")
+        usage_metrics[process_id] = dict(metrics)
         lease_heartbeat.on_usage(metrics)
+
+    def aggregate_process_usage():
+        samples = list(usage_metrics.values())
+        return {
+            "cpu_seconds": sum(
+                float(item.get("cpu_seconds") or 0.0) for item in samples
+            ),
+            "peak_memory_bytes": max(
+                (int(item.get("peak_memory_bytes") or 0) for item in samples),
+                default=0,
+            ) or None,
+            "memory_duration_ms": sum(
+                int(item.get("memory_duration_ms") or 0) for item in samples
+            ),
+        }
 
     try:
         # Redis status is a projection; the PostgreSQL lease remains authoritative.
@@ -195,11 +211,16 @@ def generate_thumbnail(
                 "input_bytes": input_bytes,
                 # The publisher owns the storage charge for the final object.
                 "output_bytes": 0,
-                "cpu_seconds": usage_metrics.get(
-                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                "cpu_seconds": max(
+                    child_cpu_seconds_since(cpu_started),
+                    aggregate_process_usage()["cpu_seconds"],
                 ),
-                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
-                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                "peak_memory_bytes": aggregate_process_usage()[
+                    "peak_memory_bytes"
+                ],
+                "memory_duration_ms": aggregate_process_usage()[
+                    "memory_duration_ms"
+                ],
             },
             pricing=configured_pricing(settings),
         )
