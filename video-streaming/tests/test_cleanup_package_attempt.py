@@ -1,10 +1,14 @@
 """Tests for failure-isolated abandoned package cleanup sweeps."""
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import video_streaming.ffmpeg.tasks.cleanup_package_attempt as cleanup_task
+if importlib.util.find_spec("celery"):
+    import video_streaming.ffmpeg.tasks.cleanup_package_attempt as cleanup_task
+else:
+    cleanup_task = None
 
 
 class _Repository:
@@ -36,6 +40,10 @@ class _Repository:
         self.cleaned.append((attempt_id, bucket, prefix))
 
 
+@unittest.skipUnless(
+    importlib.util.find_spec("celery"),
+    "Celery task runtime is required for cleanup task tests",
+)
 class CleanupPackageAttemptTests(unittest.TestCase):
     def test_one_candidate_failure_does_not_abort_remaining_sweep(self):
         repository = _Repository()
