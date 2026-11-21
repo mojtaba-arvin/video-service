@@ -76,6 +76,22 @@ class ArtifactStoreTests(unittest.TestCase):
             with open(destination, "rb") as stream:
                 self.assertEqual(stream.read(), payload)
 
+    def test_put_bytes_persists_json_without_exposing_local_path(self):
+        store = S3ArtifactStore(_S3(), "media-output")
+        payload = b'{"duration": 3.5}'
+        published = store.put_bytes(
+            payload,
+            "jobs/j1/probe.json",
+            "attempt_03",
+            media_type="application/json",
+        )
+        self.assertTrue(published["uri"].startswith("s3://media-output/"))
+        self.assertNotIn("/tmp/", published["uri"])
+        self.assertEqual(
+            published["checksum_sha256"],
+            hashlib.sha256(payload).hexdigest(),
+        )
+
     def test_checksum_mismatch_never_replaces_destination(self):
         s3 = _S3()
         store = S3ArtifactStore(s3, "media-output")
