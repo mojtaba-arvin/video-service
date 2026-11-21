@@ -133,7 +133,14 @@ class AwsKMSKeyProvider:
                 KeySpec="AES_256",
                 EncryptionContext=encryption_context,
             )
-            return bytearray(response["Plaintext"]), bytes(response["CiphertextBlob"])
+            actual_key_id = _required_text(
+                response.get("KeyId"), "resolved KMS key identity"
+            )
+            return (
+                bytearray(response["Plaintext"]),
+                bytes(response["CiphertextBlob"]),
+                actual_key_id,
+            )
         except Exception as exc:
             raise SecretDecryptionError(
                 "KMS data-key generation failed"
@@ -201,7 +208,22 @@ def prepare_secret(value, context, key_provider, expires_at=None):
     kms_context = _kms_context(secret_id, context)
     data_key = None
     try:
-        data_key, wrapped_key = key_provider.generate_data_key(kms_context)
+        generated = key_provider.generate_data_key(kms_context)
+        if not isinstance(generated, tuple) or len(generated) not in (2, 3):
+            raise SecretDecryptionError(
+                "Key provider returned an invalid data-key result"
+            )
+        data_key, wrapped_key = generated[:2]
+        if len(generated) == 3:
+            kms_key_id = _required_text(
+                generated[2], "resolved KMS key identity"
+            )
+        else:
+            # Backward-compatible custom providers must expose a stable key ID.
+            kms_key_id = (
+                key_provider.key_id
+                if hasattr(key_provider, "key_id") else "provider-managed"
+            )
         if len(data_key) != 32:
             raise SecretDecryptionError("KMS returned an invalid AES-256 data key")
         nonce = os.urandom(NONCE_BYTES)
@@ -222,7 +244,7 @@ def prepare_secret(value, context, key_provider, expires_at=None):
             nonce=_b64encode(nonce),
             ciphertext=_b64encode(ciphertext),
             wrapped_dek=_b64encode(wrapped_key),
-            kms_key_id=key_provider.key_id if hasattr(key_provider, "key_id") else "provider-managed",
+            kms_key_id=kms_key_id,
             created_at=now,
             expires_at=expiry,
         )
