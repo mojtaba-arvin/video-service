@@ -15,6 +15,7 @@ from video_streaming.workflows.domain import (
     StageAlreadyRunning,
 )
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
+from video_streaming.workflows.operation_contracts import OPERATION_CONTRACTS
 
 
 @dataclass(frozen=True)
@@ -187,7 +188,13 @@ class WorkflowNodeExecutor:
                 return {"status": "cancelled", "node_id": node_id}
             return {"status": "lease_lost", "node_id": node_id}
         except Exception as exc:
-            retryable = attempt_number < node["retry_policy"]["max_attempts"]
+            contract = OPERATION_CONTRACTS[operation]
+            explicitly_retryable = getattr(exc, "retryable", None)
+            retryable = (
+                contract.retry_class != "never"
+                and attempt_number < node["retry_policy"]["max_attempts"]
+                and explicitly_retryable is not False
+            )
             try:
                 self.repository.fail_attempt(
                     job_id,
