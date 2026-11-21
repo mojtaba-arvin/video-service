@@ -47,9 +47,6 @@ class PackageProbeSupervisionTests(unittest.TestCase):
         self.assertIs(kwargs["on_usage"], usage)
 
     @patch(
-        "video_streaming.ffmpeg.package_validation.run_cancellable_process"
-    )
-    @patch(
         "video_streaming.ffmpeg.package_validation._probe_package_metadata",
         side_effect=AttemptLeaseLost("worker lease expired"),
     )
@@ -76,6 +73,9 @@ class PackageProbeSupervisionTests(unittest.TestCase):
                     ffprobe_bin_path="/usr/bin/ffprobe",
                 )
 
+    @patch(
+        "video_streaming.ffmpeg.package_validation.run_cancellable_process"
+    )
     def test_timeout_is_propagated_from_supervisor(self, runner):
         runner.side_effect = subprocess.TimeoutExpired(["ffprobe"], 3)
         with self.assertRaises(subprocess.TimeoutExpired):
