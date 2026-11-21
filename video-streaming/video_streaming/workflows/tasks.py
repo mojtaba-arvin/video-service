@@ -113,7 +113,7 @@ def execute_node(job_id, node_id, workflow_id, plan_version, plan_fingerprint):
     )
     executor = _build_executor()
     outcome = executor.execute(job_id, node_id)
-    if outcome["status"] in ("completed", "already_completed"):
+    if outcome["status"] == "completed":
         dispatch_plan.apply_async(
             args=(job_id, workflow_id, plan_version, plan_fingerprint)
         )
