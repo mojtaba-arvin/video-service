@@ -1727,9 +1727,12 @@ class WorkflowRepository:
                 )
             if require_dependencies:
                 job = session.get(JobRecord, job_id)
-                if job is None or job.state == JobState.CANCELLED.value:
+                if job is None or job.state in (
+                        JobState.CANCELLED.value,
+                        JobState.FAILED.value,
+                        JobState.FINISHED.value):
                     raise InvalidStateTransition(
-                        "A cancelled or missing Job cannot claim a workflow node"
+                        "A terminal or missing Job cannot claim a workflow node"
                     )
                 dependency_rows = session.execute(
                     select(StageRecord)
@@ -2158,7 +2161,6 @@ class WorkflowRepository:
             lease_ttl_seconds=60):
         """Extend a live lease; an expired or stale worker cannot resurrect it."""
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.execute(
@@ -2169,6 +2171,9 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if attempt is None:
                 raise AttemptLeaseLost("Attempt lease is no longer valid")
+            # Capture time only after both row locks are held. A transaction
+            # may have waited past expiry while acquiring either lock.
+            now = utcnow()
             self._assert_attempt_lease(attempt, lease_token, now=now)
             attempt.heartbeat_at = now
             attempt.lease_expires_at = now + timedelta(seconds=ttl)
