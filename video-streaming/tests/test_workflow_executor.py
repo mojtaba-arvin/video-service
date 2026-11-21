@@ -115,6 +115,35 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(len(set(attempts)), 1)
         self.assertEqual(len(logical_effects), 1)
 
+    def test_retryable_failure_returns_bounded_exponential_delay(self):
+        executor = self.executor(
+            lambda _node, _context: (_ for _ in ()).throw(RuntimeError("retry"))
+        )
+        first = executor.execute(self.job_id, "check")
+        self.assertEqual(first["status"], "retryable_failure")
+        self.assertEqual(first["retry_after_seconds"], 1.0)
+        second = executor.execute(self.job_id, "check")
+        self.assertEqual(second["status"], "retryable_failure")
+        self.assertEqual(second["retry_after_seconds"], 2.0)
+
+    def test_fixed_retry_policy_does_not_exponentially_grow(self):
+        plan = self.repository.get_execution_plan(self.job_id)["plan"]
+        plan["nodes"][0]["retry_policy"].update({
+            "backoff": "fixed", "initial_delay_seconds": 7, "max_delay_seconds": 10,
+        })
+        job_id = str(uuid4())
+        plan["job_id"] = job_id
+        self.repository.create_job(
+            job_id=job_id, idempotency_key="fixed-retry-" + job_id,
+            request_hash="d" * 64, execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        executor = self.executor(
+            lambda _node, _context: (_ for _ in ()).throw(RuntimeError("retry"))
+        )
+        result = executor.execute(job_id, "check")
+        self.assertEqual(result["retry_after_seconds"], 7.0)
+
     def test_duplicate_delivery_during_live_attempt_does_not_run_handler_twice(self):
         nested_results = []
         calls = []
@@ -141,6 +170,50 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         snapshot = self.repository.get_job_snapshot(self.job_id)
         self.assertEqual(snapshot["status"], "CANCELLED")
         self.assertEqual(snapshot["stages"][0]["status"], "CANCELLED")
+
+    def test_handler_exception_after_cancellation_is_reported_as_cancelled(self):
+        def handler(_node, context):
+            context.cancel(reason="operator requested cancellation")
+            raise RuntimeError("handler observed cancellation")
+        result = self.executor(handler).execute(self.job_id, "check")
+        self.assertEqual(result["status"], "cancelled")
+        snapshot = self.repository.get_job_snapshot(self.job_id)
+        self.assertEqual(snapshot["status"], "CANCELLED")
+        self.assertEqual(snapshot["stages"][0]["status"], "CANCELLED")
+
+    def test_cancellation_by_sibling_node_fences_live_worker_completion(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1, "workflow_name": "video.vod",
+            "workflow_version": "1", "job_id": job_id,
+            "nodes": [
+                node("active", "video.input.check"),
+                node("canceller", "video.output.bucket.check"),
+            ],
+        }
+        self.repository.create_job(
+            job_id=job_id, idempotency_key="sibling-cancel-" + job_id,
+            request_hash="c" * 64, execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        other_id, _, other_token, _ = self.repository.claim_node_attempt(
+            job_id, "canceller", lease_owner="worker-2", lease_ttl_seconds=30,
+        )
+        def handler(_node, _context):
+            self.repository.cancel_attempt(
+                job_id, "canceller", other_id,
+                reason="sibling requested cancellation", lease_token=other_token,
+            )
+            return {"validation_report": dict(VALID)}
+        result = self.executor(handler).execute(job_id, "active")
+        self.assertEqual(result["status"], "cancelled")
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "CANCELLED")
+        stages = {stage["key"]: stage for stage in snapshot["stages"]}
+        self.assertEqual(stages["active"]["status"], "CANCELLED")
+        self.assertEqual(stages["active"]["attempts"][-1]["status"], "CANCELLED")
+        self.assertEqual(stages["canceller"]["status"], "CANCELLED")
+        self.assertFalse(stages["active"]["artifacts"])
 
     def test_handler_registry_must_cover_every_plan_operation(self):
         with self.assertRaisesRegex(ValueError, "exactly cover"):

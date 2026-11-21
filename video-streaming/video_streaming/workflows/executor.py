@@ -60,6 +60,15 @@ class WorkflowNodeExecutor:
     def _error_code(exc):
         return re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:128]
 
+    @staticmethod
+    def _retry_delay(retry_policy, attempt_number):
+        """Calculate the persisted node policy's bounded retry delay."""
+        initial = float(retry_policy["initial_delay_seconds"])
+        maximum = float(retry_policy["max_delay_seconds"])
+        if retry_policy["backoff"] == "fixed":
+            return min(initial, maximum)
+        return min(maximum, initial * (2 ** max(0, attempt_number - 1)))
+
     def execute(self, job_id, node_id, execution_ref=None):
         snapshot = self.repository.get_execution_plan(job_id)
         if snapshot is None:
@@ -149,7 +158,7 @@ class WorkflowNodeExecutor:
             validation_report = result.get("validation_report")
             if not isinstance(validation_report, dict):
                 raise ValueError("node handler omitted validation_report")
-            self.repository.complete_node_attempt(
+            completed = self.repository.complete_node_attempt(
                 job_id,
                 stage_key,
                 attempt_id,
@@ -157,6 +166,8 @@ class WorkflowNodeExecutor:
                 lease_token=token,
                 metrics=result.get("metrics"),
             )
+            if not completed:
+                return {"status": "cancelled", "node_id": node_id}
             return {
                 "status": "completed",
                 "node_id": node_id,
@@ -183,10 +194,18 @@ class WorkflowNodeExecutor:
                     lease_token=token,
                 )
             except AttemptLeaseLost:
+                current = self.repository.get_job_snapshot(job_id)
+                if current and current["status"] == "CANCELLED":
+                    return {"status": "cancelled", "node_id": node_id}
                 return {"status": "lease_lost", "node_id": node_id}
-            return {
+            outcome = {
                 "status": "retryable_failure" if retryable else "failed",
                 "node_id": node_id,
                 "attempt_id": attempt_id,
                 "error_code": self._error_code(exc),
             }
+            if retryable:
+                outcome["retry_after_seconds"] = self._retry_delay(
+                    node["retry_policy"], attempt_number
+                )
+            return outcome

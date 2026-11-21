@@ -1668,6 +1668,41 @@ class WorkflowRepository:
                 )
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Workflow node Attempt is not running")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state == JobState.CANCELLED.value:
+                # Fence a live worker after a sibling node cancels the Job.
+                now = utcnow()
+                previous_status = stage.status
+                self._transition(stage, StageState.CANCELLED)
+                started = attempt.started_at
+                if started.tzinfo is None or started.utcoffset() is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                attempt.state = AttemptState.CANCELLED.value
+                attempt.finished_at = now
+                attempt.duration_ms = max(0, int((now - started).total_seconds() * 1000))
+                usage = dict(metrics or {})
+                usage["duration_ms"] = attempt.duration_ms
+                attempt.cpu_seconds = usage.get("cpu_seconds")
+                attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
+                attempt.input_bytes = usage.get("input_bytes")
+                attempt.output_bytes = usage.get("output_bytes")
+                self._apply_attempt_accounting(attempt, usage, pricing)
+                self._clear_attempt_lease(attempt)
+                attempt.error_code = "CANCELLED"
+                attempt.error_message = "JOB_CANCELLED_BEFORE_NODE_COMPLETION"
+                _record_event(
+                    session, job_id, stage.workflow_id, "STAGE_CANCELLED",
+                    from_state=previous_status, to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id, attempt_id=attempt_id,
+                    payload={"reason": "JOB_CANCELLED_BEFORE_NODE_COMPLETION"},
+                )
+                return False
             now = utcnow()
             previous_status = stage.status
             self._complete_processing_attempt_in_session(
