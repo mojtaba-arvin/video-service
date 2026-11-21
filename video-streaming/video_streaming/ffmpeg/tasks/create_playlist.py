@@ -343,6 +343,7 @@ def create_playlist(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=record_process_usage,
         )
         validation_report.require_valid()
         validation_payload = validation_report.as_dict()
