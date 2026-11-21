@@ -1365,7 +1365,7 @@ class WorkflowRepository:
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
 
-        with self._session() as session:
+        with self._session.begin() as session:
             record = session.execute(
                 select(JobSecretRecord)
                 .join(JobRecord, JobRecord.id == JobSecretRecord.job_id)
@@ -1393,6 +1393,22 @@ class WorkflowRepository:
                 issuer=record.issuer,
                 subject=record.subject,
                 purpose=record.purpose,
+            )
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one()
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "JOB_SECRET_RESOLVE_AUTHORIZED",
+                payload={
+                    "secret_id": record.secret_id,
+                    "purpose": purpose,
+                    "worker_arn": worker_identity.arn,
+                },
             )
             return SecretEnvelope(
                 secret_id=record.secret_id,
