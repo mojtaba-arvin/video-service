@@ -1803,6 +1803,7 @@ class WorkflowRepository:
         if len(artifacts) > 1000:
             raise ValueError("a workflow node cannot publish more than 1000 artifacts")
         normalized_artifacts = []
+        logical_names = set()
         from video_streaming.workflows.artifact_store import parse_artifact_uri
         for item in artifacts:
             if not isinstance(item, dict):
@@ -1818,6 +1819,9 @@ class WorkflowRepository:
             if not isinstance(artifact_type, str) or not artifact_type.strip() or len(artifact_type) > 64:
                 raise ValueError("artifact_type must contain 1 to 64 characters")
             parse_artifact_uri(uri)
+            if logical_name in logical_names:
+                raise ValueError("artifact logical_name values must be unique per Attempt")
+            logical_names.add(logical_name)
             if media_type is not None and (
                     not isinstance(media_type, str) or len(media_type) > 128):
                 raise ValueError("artifact media_type is invalid")
@@ -1885,6 +1889,7 @@ class WorkflowRepository:
             self._complete_processing_attempt_in_session(
                 attempt, metrics or {}, pricing
             )
+            attempt.artifact_count = len(normalized_artifacts) + 1
             stage.status = StageState.FINISHED.value
             stage.updated_at = now
             stage.version += 1
