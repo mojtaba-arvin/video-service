@@ -106,6 +106,7 @@ class S3ArtifactStore:
                 if (
                     existing.get("ContentLength") != size
                     or existing_metadata.get("sha256") != checksum
+                    or existing_metadata.get("attempt_id") != attempt_id
                 ):
                     raise ArtifactStoreError(
                         "immutable artifact key already contains different content"
@@ -152,10 +153,13 @@ class S3ArtifactStore:
         response = self._client.get_object(Bucket=bucket, Key=key)
         body = response["Body"]
         digest = hashlib.sha256()
-        os.makedirs(os.path.dirname(os.path.abspath(destination_path)), exist_ok=True)
-        temporary = destination_path + ".partial"
+        destination_dir = os.path.dirname(os.path.abspath(destination_path))
+        os.makedirs(destination_dir, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".artifact-download-", dir=destination_dir
+        )
         try:
-            with open(temporary, "wb") as target:
+            with os.fdopen(descriptor, "wb") as target:
                 while True:
                     chunk = body.read(1024 * 1024)
                     if not chunk:
