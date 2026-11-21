@@ -628,7 +628,7 @@ class CreateJobMixin(object):
         # persisted atomically with Job/Workflow/Stages by create_job().
         webhook_envelopes = []
         webhook_secret_ref = None
-        if request.webhook_url:
+        if request.webhook_url and request.webhook_url.strip():
             from video_streaming.security.secret_store import (
                 SecretContext, prepare_secret,
             )
