@@ -336,6 +336,18 @@ jobs:
             -p 'test_workflow_tasks.py' \
             -v
 
+      - name: Run real Redis/Celery durable duplicate and retry acceptance tests
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+          WORKFLOW_TEST_BROKER_URL: redis://127.0.0.1:6379/5
+          WORKFLOW_TEST_RESULT_BACKEND: redis://127.0.0.1:6379/6
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_redis_celery.py' \
+            -v
+
   durable-workflow-state:
     name: Durable workflow repository (PostgreSQL, Python 3.12)
     needs: [detect-changes]
