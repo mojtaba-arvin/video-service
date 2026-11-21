@@ -47,8 +47,15 @@ def main(argv=None):
                 raise SystemExit("outbox row is missing or not DEAD")
             output = repository.get_outbox_snapshot(args.outbox_id)
         else:
-            # Imported only for explicit relay invocation; read-only inspection
-            # does not require importing the Celery runtime.
+            # Manual relay has the same fail-closed gates as the scheduled task.
+            # Never publish or acknowledge durable work while dispatch is off
+            # or the complete production handler registry is unavailable.
+            from video_streaming import settings
+            if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+                raise SystemExit("durable workflow dispatch is disabled")
+            from video_streaming.workflows.tasks import _build_executor
+            _build_executor()
+
             from video_streaming.celery import celery_app
             from video_streaming.workflows.relay import WorkflowOutboxRelay
 
