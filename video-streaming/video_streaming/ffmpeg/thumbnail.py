@@ -36,7 +36,8 @@ def validate_thumbnail_output(
         expected_width: Optional[int] = None,
         expected_height: Optional[int] = None,
         timeout_seconds: int = 30,
-        should_cancel: Optional[Callable[[], bool]] = None
+        should_cancel: Optional[Callable[[], bool]] = None,
+        on_usage: Optional[Callable[[Dict[str, float]], None]] = None
         ) -> Dict[str, int]:
     """Require a non-empty, probeable image with the requested dimensions."""
     path = Path(output_path)
@@ -55,6 +56,7 @@ def validate_thumbnail_output(
             ffprobe_bin_path=ffprobe_bin_path,
             timeout_seconds=timeout_seconds,
             should_cancel=should_cancel,
+            on_usage=on_usage,
         )
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         raise ThumbnailValidationError(
@@ -137,5 +139,6 @@ def render_thumbnail(
         expected_height=scale_height if scale_height > 0 else None,
         timeout_seconds=ffprobe_timeout_seconds,
         should_cancel=should_cancel,
+        on_usage=usage_callback,
     )
     return output_path
