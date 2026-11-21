@@ -410,3 +410,17 @@ CELERY_BEAT_SCHEDULE = {
         "options": {"expires": 1800},
     },
 }
+
+
+##################################################
+#    Durable workflow secret envelope             #
+##################################################
+
+# Durable callback secrets are disabled unless a KMS key and an exact
+# workload-role ARN prefix are configured. No local/static fallback exists.
+WORKFLOW_SECRET_KMS_KEY_ID = env_config.get(
+    "WORKFLOW_SECRET_KMS_KEY_ID", default="", cast=str)
+WORKFLOW_SECRET_KMS_REGION = env_config.get(
+    "WORKFLOW_SECRET_KMS_REGION", default=S3_REGION_NAME, cast=str)
+WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX = env_config.get(
+    "WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX", default="", cast=str)
