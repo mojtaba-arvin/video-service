@@ -223,6 +223,47 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         from video_streaming.grpc.servicers.streaming_servicer import Streaming
         from video_streaming.grpc.authentication import OIDCBearerInterceptor
         from video_streaming.security import RequestPrincipal
+        from video_streaming.workflows import secret_runtime
+        from video_streaming.workflows.worker_identity import (
+            WorkflowWorkerIdentity,
+        )
+
+        class E2EKeyProvider:
+            key_id = "kms-e2e-test-key"
+
+            def __init__(self):
+                self.key = bytearray(range(32))
+
+            def generate_data_key(self, encryption_context):
+                wrapped = bytes(value ^ 0x5A for value in self.key)
+                return bytearray(self.key), wrapped
+
+            def decrypt_data_key(
+                    self, wrapped_key, encryption_context, key_id=None):
+                if key_id != self.key_id:
+                    raise ValueError("unexpected E2E KMS key")
+                return bytearray(value ^ 0x5A for value in wrapped_key)
+
+        # The end-to-end suite uses an in-process KMS/STS contract double;
+        # production code still requires live AWS KMS and STS credentials.
+        e2e_key_provider = E2EKeyProvider()
+        e2e_worker_identity = WorkflowWorkerIdentity(
+            account_id="123456789012",
+            arn=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/e2e"
+            ),
+            role_arn_prefix=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/"
+            ),
+        )
+        secret_runtime.get_workflow_secret_key_provider = (
+            lambda: e2e_key_provider
+        )
+        secret_runtime.get_verified_workflow_worker_identity = (
+            lambda: e2e_worker_identity
+        )
 
         class E2EAuthenticator:
             def authenticate(self, token):
