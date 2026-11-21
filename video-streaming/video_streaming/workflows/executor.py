@@ -200,7 +200,7 @@ class WorkflowNodeExecutor:
                 if retryable else None
             )
             try:
-                self.repository.fail_attempt(
+                failure_recorded = self.repository.fail_attempt(
                     job_id,
                     stage_key,
                     attempt_id,
@@ -211,6 +211,15 @@ class WorkflowNodeExecutor:
                     lease_token=token,
                     retry_after_seconds=retry_after_seconds,
                 )
+                if not failure_recorded:
+                    current = self.repository.get_job_snapshot(job_id)
+                    return {
+                        "status": "terminal",
+                        "node_id": node_id,
+                        "job_status": (
+                            current["status"] if current else "UNKNOWN"
+                        ),
+                    }
             except AttemptLeaseLost:
                 current = self.repository.get_job_snapshot(job_id)
                 if current and current["status"] == "CANCELLED":
