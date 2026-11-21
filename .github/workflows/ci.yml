@@ -327,6 +327,15 @@ jobs:
             -p 'test_vod_pipeline_e2e.py' \
             -v
 
+      - name: Run durable workflow Celery consumer tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_tasks.py' \
+            -v
+
   durable-workflow-state:
     name: Durable workflow repository (PostgreSQL, Python 3.12)
     needs: [detect-changes]
@@ -412,10 +421,6 @@ jobs:
           python -m unittest discover \
             -s video-streaming/tests \
             -p 'test_workflow_worker_identity.py' \
-            -v
-          python -m unittest discover \
-            -s video-streaming/tests \
-            -p 'test_workflow_tasks.py' \
             -v
 
   quality-gates:
