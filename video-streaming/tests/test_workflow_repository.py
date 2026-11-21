@@ -364,6 +364,51 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "missing-session", principal, "video.playback:write"
             )
 
+    def test_scheduler_does_not_advertise_lease_free_running_attempts(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "exponential",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 30,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="lease-free-running-" + job_id,
+            request_hash="9" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="worker"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_token_hash = None
+            attempt.lease_expires_at = None
+            attempt.lease_owner = None
+            attempt.heartbeat_at = None
+
+        self.assertEqual(self.repository.get_ready_node_ids(job_id), [])
+        with self.assertRaises(StageAlreadyRunning):
+            self.repository.claim_node_attempt(
+                job_id, "check-input", lease_owner="replacement"
+            )
+
     def test_durable_retry_delay_is_enforced_and_has_due_outbox(self):
         job_id = str(uuid4())
         plan = {
