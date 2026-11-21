@@ -1995,6 +1995,7 @@ class WorkflowRepository:
         if snapshot is None:
             return []
         nodes = snapshot["plan"]["nodes"]
+        node_by_id = {node["node_id"]: node for node in nodes}
         with self._session() as session:
             workflow = session.execute(
                 select(WorkflowRecord).where(
@@ -2038,16 +2039,14 @@ class WorkflowRepository:
                 stage_key = node["stage_key"]
                 if stage_key not in claimable:
                     continue
-                if all(
-                    by_key.get(next(
-                        parent["stage_key"] for parent in nodes
-                        if parent["node_id"] == dependency
-                    )) is not None
-                    and by_key[next(
-                        parent["stage_key"] for parent in nodes
-                        if parent["node_id"] == dependency
-                    )].status == StageState.FINISHED.value
+                dependency_keys = [
+                    node_by_id[dependency]["stage_key"]
                     for dependency in node["depends_on"]
+                ]
+                if all(
+                    dependency_key in by_key
+                    and by_key[dependency_key].status == StageState.FINISHED.value
+                    for dependency_key in dependency_keys
                 ):
                     ready.append(node["node_id"])
             return ready
