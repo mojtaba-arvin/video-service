@@ -106,25 +106,39 @@ def add_watermark(
     )
     process_usage = {}
 
+    def aggregate_process_usage():
+        samples = list(process_usage.values())
+        return {
+            "cpu_seconds": sum(
+                float(item.get("cpu_seconds") or 0.0) for item in samples
+            ),
+            "peak_memory_bytes": max(
+                (int(item.get("peak_memory_bytes") or 0) for item in samples),
+                default=0,
+            ) or None,
+            "memory_duration_ms": sum(
+                int(item.get("memory_duration_ms") or 0) for item in samples
+            ),
+        }
+
     def measured_cpu_seconds():
         return max(
             child_cpu_seconds_since(cpu_started),
-            float(process_usage.get("cpu_seconds") or 0.0),
+            aggregate_process_usage()["cpu_seconds"],
         )
 
     def process_resource_metrics():
-        peak_memory_bytes = process_usage.get("peak_memory_bytes")
+        aggregate = aggregate_process_usage()
         return {
-            "peak_memory_bytes": (
-                int(peak_memory_bytes) if peak_memory_bytes else None
-            ),
-            "memory_duration_ms": process_usage.get("memory_duration_ms"),
+            "peak_memory_bytes": aggregate["peak_memory_bytes"],
+            "memory_duration_ms": aggregate["memory_duration_ms"],
         }
 
     output_path = None
 
     def capture_process_usage(metrics):
-        process_usage.update(metrics)
+        process_id = str(metrics.get("process_id") or "legacy")
+        process_usage[process_id] = dict(metrics)
         lease_heartbeat.on_usage(metrics)
 
     try:
