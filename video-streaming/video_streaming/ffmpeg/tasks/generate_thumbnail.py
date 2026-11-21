@@ -12,6 +12,8 @@ from video_streaming.ffmpeg.thumbnail import (
     validate_thumbnail_output,
 )
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.domain import AttemptLeaseLost
+from video_streaming.workflows.lease import AttemptLeaseHeartbeat
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
@@ -94,40 +96,56 @@ def generate_thumbnail(
     if self.is_output_forced_to_stop(request_id, output_id):
         raise self.raise_revoke_output(request_id, output_id)
 
-    repository = get_workflow_repository()
-    attempt_id, attempt_number = repository.start_attempt(
-        job_id=request_id,
-        stage_key=output_id,
-        execution_backend="celery",
-        execution_ref=self.request.id.__str__(),
-    )
     input_bytes = os.path.getsize(video_path)
     cpu_started = capture_child_cpu_seconds()
-
-    # save primary status using request_id
-    self.save_primary_status(
-        self.primary_status.OUTPUTS_PROGRESSING,
-        request_id)
-
-    self.save_output_status(
-        self.output_status.PREPARATION_PROCESSING,
-        output_id,
-        request_id)
-
-    output_path, directory = self.ensure_set_output_location(
+    repository = get_workflow_repository()
+    attempt_id, attempt_number, lease_token, _ = repository.claim_attempt(
+        job_id=request_id,
+        stage_key=output_id,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
+        lease_owner=("celery:{}".format(
+            getattr(self.request, "hostname", None) or "worker"
+        ))[:255],
+        execution_backend="celery",
+        execution_ref=str(self.request.id),
+    )
+    lease_heartbeat = AttemptLeaseHeartbeat(
+        repository,
         request_id,
         output_id,
-        output_path=output_path,
-        s3_output_key=s3_output_key,
+        attempt_id,
+        lease_token,
+        lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
-    Path(directory).mkdir(parents=True, exist_ok=True)
-
+    output_path = None
     usage_metrics = {}
 
     def capture_usage(metrics):
         usage_metrics.update(metrics)
+        lease_heartbeat.on_usage(metrics)
 
     try:
+        # Redis status is a projection; the PostgreSQL lease remains authoritative.
+        lease_heartbeat.assert_owned()
+        self.save_primary_status(
+            self.primary_status.OUTPUTS_PROGRESSING,
+            request_id)
+        self.save_output_status(
+            self.output_status.PREPARATION_PROCESSING,
+            output_id,
+            request_id)
+
+        output_path, directory = self.ensure_set_output_location(
+            request_id,
+            output_id,
+            output_path=output_path,
+            s3_output_key=s3_output_key,
+        )
+        directory = os.path.join(directory, ".attempts", attempt_id)
+        output_path = os.path.join(directory, os.path.basename(output_path))
+        Path(directory).mkdir(parents=True, exist_ok=True)
+
+        lease_heartbeat.assert_owned()
         render_thumbnail(
             video_path=video_path,
             output_path=output_path,
@@ -144,6 +162,7 @@ def generate_thumbnail(
             ),
             usage_callback=capture_usage,
         )
+        lease_heartbeat.assert_owned()
         dimensions = validate_thumbnail_output(
             output_path=output_path,
             ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
@@ -155,6 +174,7 @@ def generate_thumbnail(
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
         )
+        lease_heartbeat.assert_owned()
         validation_report = {
             "valid": True,
             "artifact_type": "image_thumbnail",
@@ -163,17 +183,39 @@ def generate_thumbnail(
             "size_bytes": os.path.getsize(output_path),
             "errors": [],
         }
-        repository.mark_validated(
+        lease_heartbeat.assert_owned()
+        repository.complete_processing_attempt(
             job_id=request_id,
             stage_key=output_id,
             attempt_id=attempt_id,
             validation_report=validation_report,
+            lease_token=lease_token,
+            metrics={
+                "input_bytes": input_bytes,
+                # The publisher owns the storage charge for the final object.
+                "output_bytes": 0,
+                "cpu_seconds": usage_metrics.get(
+                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
+                ),
+                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+            },
+            pricing=configured_pricing(settings),
         )
     except Exception as exc:
+        if output_path:
+            try:
+                Path(output_path).unlink()
+            except OSError:
+                pass
+        if isinstance(exc, AttemptLeaseLost):
+            raise
         if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
                 request_id, output_id):
             repository.cancel_attempt(
-                request_id, output_id, attempt_id,
+                request_id,
+                output_id,
+                attempt_id,
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
                 metrics={
                     "input_bytes": input_bytes,
@@ -184,6 +226,7 @@ def generate_thumbnail(
                     "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
                 },
                 pricing=configured_pricing(settings),
+                lease_token=lease_token,
             )
             if self.is_forced_to_stop(request_id):
                 raise self.raise_revoke(request_id)
@@ -205,8 +248,10 @@ def generate_thumbnail(
                     "cpu_seconds", child_cpu_seconds_since(cpu_started)
                 ),
                 "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
+                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
             },
             pricing=configured_pricing(settings),
+            lease_token=lease_token,
         )
         if retryable:
             raise self.retry(
@@ -214,25 +259,6 @@ def generate_thumbnail(
                 max_retries=settings.TASK_RETRY_FFMPEG_COMMAND_MAX,
             )
         raise
-
-    if self.is_forced_to_stop(request_id) or self.is_output_forced_to_stop(
-            request_id, output_id):
-        repository.cancel_attempt(
-            request_id, output_id, attempt_id,
-            reason="CANCELLED_AFTER_THUMBNAIL_VALIDATION",
-            metrics={
-                "input_bytes": input_bytes,
-                "cpu_seconds": usage_metrics.get(
-                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
-                ),
-                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
-                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
-            },
-            pricing=configured_pricing(settings),
-        )
-        if self.is_forced_to_stop(request_id):
-            raise self.raise_revoke(request_id)
-        raise self.raise_revoke_output(request_id, output_id)
 
     return dict(
         file_path=output_path,
