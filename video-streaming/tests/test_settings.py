@@ -193,6 +193,22 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertEqual(pricing["model_version"], "1")
         self.assertEqual(pricing["currency"], "RUNIT")
 
+    def test_workflow_tasks_are_discovered_but_dispatch_is_disabled_by_default(self):
+        settings = load_settings({})
+        self.assertIn("video_streaming.workflows", settings.AUTO_DISCOVER_TASKS)
+        self.assertFalse(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
+        self.assertEqual(settings.WORKFLOW_HANDLER_FACTORY, "")
+
+    def test_workflow_dispatch_can_be_enabled_only_by_explicit_configuration(self):
+        settings = load_settings({
+            "WORKFLOW_DURABLE_DISPATCH_ENABLED": "True",
+            "WORKFLOW_HANDLER_FACTORY": "my_handlers:build_handlers",
+        })
+        self.assertTrue(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
+        self.assertEqual(
+            settings.WORKFLOW_HANDLER_FACTORY, "my_handlers:build_handlers"
+        )
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 
