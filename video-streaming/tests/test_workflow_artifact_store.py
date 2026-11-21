@@ -146,6 +146,40 @@ class ArtifactStoreTests(unittest.TestCase):
             ]
             self.assertEqual(stored["body"], source_payload)
 
+    def test_identical_bytes_with_wrong_attempt_metadata_are_not_replayed(self):
+        s3 = _S3()
+        store = S3ArtifactStore(s3, "media-output")
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "source")
+            with open(source, "wb") as stream:
+                stream.write(b"same-bytes")
+            key = ".attempts/attempt-metadata/output.bin"
+            checksum = hashlib.sha256(b"same-bytes").hexdigest()
+            s3.objects[("media-output", key)] = {
+                "body": b"same-bytes",
+                "Metadata": {
+                    "sha256": checksum,
+                    "attempt_id": "different-attempt",
+                },
+                "ContentType": "application/octet-stream",
+            }
+            with self.assertRaises(ArtifactStoreError):
+                store.put_file(source, "output.bin", "attempt-metadata")
+
+    def test_download_uses_unique_temporary_file_in_destination_directory(self):
+        s3 = _S3()
+        store = S3ArtifactStore(s3, "media-output")
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "source")
+            destination = os.path.join(directory, "destination")
+            with open(source, "wb") as stream:
+                stream.write(b"download-payload")
+            published = store.put_file(source, "output.bin", "attempt-download")
+            store.download_file(published["uri"], destination)
+            self.assertFalse(os.path.exists(destination + ".partial"))
+            with open(destination, "rb") as stream:
+                self.assertEqual(stream.read(), b"download-payload")
+
     def test_download_requires_a_valid_checksum_before_replacing_destination(self):
         s3 = _S3()
         store = S3ArtifactStore(s3, "media-output")
