@@ -185,6 +185,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "FFMPEG_BIN_PATH={}".format(shutil.which("ffmpeg")),
                 "REDIS_TIMEOUT_SECOND=3600",
                 "REDIS_URL=redis://127.0.0.1:6379/0",
+                # The callback server is bound to loopback in this isolated E2E.
+                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
             ]) + "\n",
             encoding="utf-8",
         )
