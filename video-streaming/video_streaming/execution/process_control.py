@@ -339,6 +339,7 @@ def run_streaming_process(
         peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
         if on_usage is not None:
             on_usage({
+                "process_id": process.pid,
                 "cpu_seconds": sampled_cpu_seconds,
                 "peak_memory_bytes": peak_memory_bytes or None,
                 "memory_duration_ms": max(
