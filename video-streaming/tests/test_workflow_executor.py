@@ -246,6 +246,20 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         ).execute(self.job_id, "check")
         self.assertEqual(permanent["status"], "failed")
 
+    def test_terminal_job_failure_does_not_schedule_another_retry(self):
+        def handler(_node, _context):
+            with self.repository._session.begin() as session:
+                from video_streaming.workflows.repository import JobRecord
+                job = session.get(JobRecord, self.job_id)
+                job.state = "FAILED"
+            raise RuntimeError("worker failed after sibling job failure")
+
+        result = self.executor(handler).execute(self.job_id, "check")
+        self.assertEqual(result["status"], "terminal")
+        self.assertEqual(result["job_status"], "FAILED")
+        stage = self.repository.get_stage_snapshot(self.job_id, "check")
+        self.assertEqual(stage["status"], "CANCELLED")
+
     def test_retryable_failure_returns_bounded_exponential_delay(self):
         executor = self.executor(
             lambda _node, _context: (_ for _ in ()).throw(RuntimeError("retry"))
