@@ -1981,6 +1981,77 @@ class WorkflowRepository:
                 )
             return True
 
+    def get_ready_node_ids(self, job_id, now=None):
+        """Return only nodes whose dependencies are FINISHED and stage is claimable.
+
+        Expired PROCESSING leases are included so a replay can fence and recover
+        a worker that died after broker delivery. Live attempts are never
+        fanned out repeatedly.
+        """
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        snapshot = self.get_execution_plan(job_id)
+        if snapshot is None:
+            return []
+        nodes = snapshot["plan"]["nodes"]
+        with self._session() as session:
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one_or_none()
+            job = session.get(JobRecord, job_id)
+            if workflow is None or job is None or job.state in (
+                    JobState.CANCELLED.value, JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                return []
+            stages = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == workflow.id
+                )
+            ).scalars().all()
+            by_key = {stage.stage_key: stage for stage in stages}
+            claimable = set()
+            for stage in stages:
+                if stage.status in (
+                        StageState.PENDING.value,
+                        StageState.RETRY_WAIT.value):
+                    claimable.add(stage.stage_key)
+                elif stage.status == StageState.PROCESSING.value:
+                    running = session.execute(
+                        select(AttemptRecord).where(
+                            AttemptRecord.stage_id == stage.id,
+                            AttemptRecord.state == AttemptState.RUNNING.value,
+                        ).order_by(AttemptRecord.attempt_number.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    expiry = running.lease_expires_at if running else None
+                    if expiry is not None and (
+                            expiry.tzinfo is None or expiry.utcoffset() is None):
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    if running is None or expiry is None or expiry <= now:
+                        claimable.add(stage.stage_key)
+
+            ready = []
+            for node in nodes:
+                stage_key = node["stage_key"]
+                if stage_key not in claimable:
+                    continue
+                if all(
+                    by_key.get(next(
+                        parent["stage_key"] for parent in nodes
+                        if parent["node_id"] == dependency
+                    )) is not None
+                    and by_key[next(
+                        parent["stage_key"] for parent in nodes
+                        if parent["node_id"] == dependency
+                    )].status == StageState.FINISHED.value
+                    for dependency in node["depends_on"]
+                ):
+                    ready.append(node["node_id"])
+            return ready
+
     def get_dependency_artifacts(self, job_id, node_id):
         """Return durable Artifact references from a node's completed parents."""
         snapshot = self.get_execution_plan(job_id)
