@@ -1861,15 +1861,17 @@ class WorkflowRepository:
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
         lease_token = secrets.token_urlsafe(32)
-        lease_expires_at = now + timedelta(seconds=ttl)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
         ).hexdigest()
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            # Lease timing starts after the stage lock is acquired; lock wait
+            # must not consume the new worker's lease or stale recovery clock.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             if (
                     workflow.execution_backend == "durable_vod_v1"
@@ -2434,15 +2436,16 @@ class WorkflowRepository:
             attempt_scoped_object_key(package_output_key, "validation-id")
 
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
         lease_token = secrets.token_urlsafe(32)
-        lease_expires_at = now + timedelta(seconds=ttl)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
         ).hexdigest()
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            # Publication lease timing also begins after acquiring the lock.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             if workflow.execution_backend == "durable_vod_v1":
                 raise InvalidStateTransition(
