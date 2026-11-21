@@ -3735,6 +3735,11 @@ class WorkflowRepository:
                     ]),
                     AttemptRecord.finished_at <= cutoff,
                     AttemptRecord.metrics_json["package_publication"].is_not(None),
+                    # Exclude completed cleanup before LIMIT. Filtering only
+                    # after the SQL limit can permanently starve later rows.
+                    AttemptRecord.metrics_json["package_publication"][
+                        "cleanup_completed_at"
+                    ].as_string().is_(None),
                 ).order_by(AttemptRecord.finished_at.asc())
                 .limit(limit)
             ).scalars().all()
