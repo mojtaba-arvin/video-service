@@ -93,6 +93,56 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(snapshot["status"], "FINISHED")
         self.assertTrue(all(stage["status"] == "FINISHED" for stage in snapshot["stages"]))
 
+    def test_handler_artifacts_are_persisted_and_passed_to_dependent_node(self):
+        observed = {}
+        checksum = "a" * 64
+
+        def handler(current_node, context):
+            if current_node["node_id"] == "check":
+                return {
+                    "validation_report": dict(VALID),
+                    "artifacts": [{
+                        "logical_name": "source-video",
+                        "artifact_type": "media_file",
+                        "uri": (
+                            "s3://media-output/.attempts/"
+                            + context.attempt_id + "/source.mp4"
+                        ),
+                        "media_type": "video/mp4",
+                        "size_bytes": 1234,
+                        "checksum_sha256": checksum,
+                    }],
+                }
+            observed.update(context.input_artifacts)
+            return {"validation_report": dict(VALID)}
+
+        executor = self.executor(handler)
+        self.assertEqual(executor.execute(self.job_id, "check")["status"], "completed")
+        self.assertEqual(executor.execute(self.job_id, "analyze")["status"], "completed")
+        self.assertIn("check", observed)
+        self.assertEqual(observed["check"][0]["logical_name"], "source-video")
+        self.assertEqual(observed["check"][0]["checksum_sha256"], checksum)
+        self.assertTrue(observed["check"][0]["uri"].startswith("s3://"))
+
+    def test_node_cannot_publish_local_paths_as_artifacts(self):
+        def handler(_node, _context):
+            return {
+                "validation_report": dict(VALID),
+                "artifacts": [{
+                    "logical_name": "local-video",
+                    "artifact_type": "media_file",
+                    "uri": "/tmp/worker-a/video.mp4",
+                    "media_type": "video/mp4",
+                    "size_bytes": 10,
+                    "checksum_sha256": "b" * 64,
+                }],
+            }
+        result = self.executor(handler).execute(self.job_id, "check")
+        self.assertEqual(result["status"], "retryable_failure")
+        stage = self.repository.get_stage_snapshot(self.job_id, "check")
+        self.assertEqual(stage["status"], "RETRY_WAIT")
+        self.assertEqual(stage["artifacts"], [])
+
     def test_crash_after_side_effect_reuses_stable_idempotency_key(self):
         seen_keys = set()
         logical_effects = []
