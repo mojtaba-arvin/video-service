@@ -46,16 +46,17 @@ class WorkflowTaskConsumerTests(unittest.TestCase):
             def get_ready_node_ids(self, job_id):
                 return ["root"]
 
-        with (
-            patch.object(settings, "WORKFLOW_DURABLE_DISPATCH_ENABLED", True),
-            patch.object(tasks, "get_workflow_repository",
-                         return_value=Repository()),
-            patch.object(tasks, "_build_executor"),
-            patch.object(tasks.execute_node, "apply_async") as publish,
-        ):
-            result = tasks.dispatch_plan.run(
-                "job", "workflow", "1", "a" * 64
-            )
+        with patch.object(
+                settings, "WORKFLOW_DURABLE_DISPATCH_ENABLED", True):
+            with patch.object(
+                    tasks, "get_workflow_repository",
+                    return_value=Repository()):
+                with patch.object(tasks, "_build_executor"):
+                    with patch.object(
+                            tasks.execute_node, "apply_async") as publish:
+                        result = tasks.dispatch_plan.run(
+                            "job", "workflow", "1", "a" * 64
+                        )
 
         self.assertEqual(result, {"status": "dispatched", "nodes": 1})
         publish.assert_called_once_with(
