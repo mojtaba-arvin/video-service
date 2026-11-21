@@ -387,6 +387,37 @@ jobs:
             -p 'test_workflow_outbox.py' \
             -v
 
+      - name: Run atomic secret-envelope repository tests (PostgreSQL)
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_job_secret_repository.py' \
+            -v
+
+      - name: Run durable executor and artifact handoff tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_executor.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_artifact_store.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_worker_identity.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_tasks.py' \
+            -v
+
   quality-gates:
     name: Quality gates
     if: always()
