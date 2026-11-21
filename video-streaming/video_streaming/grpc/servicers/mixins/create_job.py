@@ -609,6 +609,20 @@ class CreateJobMixin(object):
                 )
             )
 
+        request_for_hash = self.pb2.JobRequest()
+        request_for_hash.CopyFrom(request)
+        request_for_hash.idempotency_key = ""
+        request_hash = hashlib.sha256(
+            request_for_hash.SerializeToString(deterministic=True)
+        ).hexdigest()
+        client_idempotency_key = request.idempotency_key.strip()
+        durable_idempotency_key = client_idempotency_key or request_id
+        existing_job_id = get_workflow_repository().find_idempotent_job(
+            durable_idempotency_key, request_hash, owner_principal=principal
+        )
+        if existing_job_id is not None:
+            return self._job_response(existing_job_id)
+
         # Encrypt callback material before opening the Job transaction. Only
         # the opaque reference enters the immutable plan; ciphertext is
         # persisted atomically with Job/Workflow/Stages by create_job().
@@ -641,14 +655,6 @@ class CreateJobMixin(object):
             request_id, request, webhook_secret_ref=webhook_secret_ref
         )
 
-        request_for_hash = self.pb2.JobRequest()
-        request_for_hash.CopyFrom(request)
-        request_for_hash.idempotency_key = ""
-        request_hash = hashlib.sha256(
-            request_for_hash.SerializeToString(deterministic=True)
-        ).hexdigest()
-        client_idempotency_key = request.idempotency_key.strip()
-        durable_idempotency_key = client_idempotency_key or request_id
         persisted_request_id, is_new_job = (
             get_workflow_repository().create_job(
                 job_id=request_id,
