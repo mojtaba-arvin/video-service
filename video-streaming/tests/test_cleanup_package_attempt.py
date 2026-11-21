@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from video_streaming.ffmpeg.tasks import cleanup_package_attempt as cleanup_task
+import video_streaming.ffmpeg.tasks.cleanup_package_attempt as cleanup_task
 
 
 class _Repository:
