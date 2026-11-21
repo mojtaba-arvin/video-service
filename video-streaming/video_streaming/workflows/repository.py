@@ -1307,6 +1307,74 @@ class WorkflowRepository:
                 algorithm=record.algorithm,
             )
 
+    def get_job_secret_envelope_for_worker(
+            self, job_id, worker_identity, purpose, now=None):
+        """Fetch encrypted callback material for an STS-verified worker only.
+
+        This internal API is deliberately separate from the owner-facing
+        get_job_secret_envelope method. The worker identity must have been
+        produced by the STS verifier; it is never accepted from task arguments.
+        KMS Decrypt permissions must independently be restricted to this
+        workload role and the configured encryption context.
+        """
+        from video_streaming.workflows.worker_identity import (
+            WorkflowWorkerIdentity,
+        )
+        from video_streaming.security import AuthorizationError
+        from video_streaming.security.secret_store import (
+            SecretContext,
+            SecretEnvelope,
+        )
+
+        if not isinstance(worker_identity, WorkflowWorkerIdentity):
+            raise AuthorizationError("Workflow worker identity is required")
+        if purpose != "webhook.callback":
+            raise ValueError("unsupported Job secret purpose")
+        current = now or utcnow()
+        if current.tzinfo is None or current.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+
+        with self._session() as session:
+            record = session.execute(
+                select(JobSecretRecord)
+                .join(JobRecord, JobRecord.id == JobSecretRecord.job_id)
+                .where(
+                    JobSecretRecord.job_id == job_id,
+                    JobSecretRecord.purpose == purpose,
+                    JobSecretRecord.status == "ACTIVE",
+                    JobSecretRecord.deleted_at.is_(None),
+                    JobRecord.owner_tenant_id == JobSecretRecord.tenant_id,
+                    JobRecord.owner_issuer == JobSecretRecord.issuer,
+                    JobRecord.owner_subject == JobSecretRecord.subject,
+                )
+            ).scalar_one_or_none()
+            if record is None:
+                raise AuthorizationError("Resource not found or access denied")
+            expires_at = record.expires_at
+            if expires_at is not None and (
+                    expires_at.tzinfo is None or expires_at.utcoffset() is None):
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at is not None and current >= expires_at:
+                raise AuthorizationError("Resource not found or access denied")
+            context = SecretContext(
+                job_id=record.job_id,
+                tenant_id=record.tenant_id,
+                issuer=record.issuer,
+                subject=record.subject,
+                purpose=record.purpose,
+            )
+            return SecretEnvelope(
+                secret_id=record.secret_id,
+                context=context,
+                nonce=record.nonce,
+                ciphertext=record.ciphertext,
+                wrapped_dek=record.wrapped_dek,
+                kms_key_id=record.kms_key_id,
+                created_at=record.created_at.isoformat(),
+                expires_at=expires_at.isoformat() if expires_at else None,
+                algorithm=record.algorithm,
+            )
+
     def authorize_job_access(self, job_id, principal, required_scope):
         """Authorize one durable Job without exposing cross-tenant existence."""
         from video_streaming.security import authorize_tenant_resource
