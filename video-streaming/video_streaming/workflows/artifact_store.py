@@ -153,13 +153,16 @@ class S3ArtifactStore:
         response = self._client.get_object(Bucket=bucket, Key=key)
         body = response["Body"]
         digest = hashlib.sha256()
-        destination_dir = os.path.dirname(os.path.abspath(destination_path))
-        os.makedirs(destination_dir, exist_ok=True)
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=".artifact-download-", dir=destination_dir
-        )
+        descriptor = None
+        temporary = None
         try:
+            destination_dir = os.path.dirname(os.path.abspath(destination_path))
+            os.makedirs(destination_dir, exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".artifact-download-", dir=destination_dir
+            )
             with os.fdopen(descriptor, "wb") as target:
+                descriptor = None
                 while True:
                     chunk = body.read(1024 * 1024)
                     if not chunk:
@@ -181,18 +184,23 @@ class S3ArtifactStore:
             if actual != expected:
                 raise ArtifactStoreError("artifact checksum mismatch")
             os.replace(temporary, destination_path)
+            temporary = None
             return {
                 "path": destination_path,
                 "size_bytes": os.path.getsize(destination_path),
                 "checksum_sha256": actual,
             }
-        except Exception:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-            raise
         finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
             close = getattr(body, "close", None)
             if close:
                 close()
