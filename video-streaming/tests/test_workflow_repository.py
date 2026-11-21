@@ -17,7 +17,7 @@ from video_streaming.workflows.domain import (
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    ArtifactRecord, WorkflowEventRecord, StageRecord,
+    ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
     StageDependencyRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
@@ -139,6 +139,83 @@ class WorkflowRepositoryTests(unittest.TestCase):
             {(stage.stage_key, stage.operation) for stage in stages},
             {(node["stage_key"], node["operation"]) for node in plan["nodes"]},
         )
+
+    def test_durable_node_completion_atomically_enqueues_continuation(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [
+                {
+                    "node_id": "check-input",
+                    "operation": "video.input.check",
+                    "stage_key": "check-input",
+                    "depends_on": [],
+                    "parameters": {},
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "control",
+                },
+                {
+                    "node_id": "download-input",
+                    "operation": "video.input.download",
+                    "stage_key": "download-input",
+                    "depends_on": ["check-input"],
+                    "parameters": {},
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "probe",
+                },
+            ],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="durable-continuation-" + job_id,
+            request_hash="d" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+            enqueue_dispatch=True,
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="workflow-worker"
+        )
+        self.assertTrue(self.repository.complete_node_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        ))
+
+        with self.repository._session() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.job_id == job_id
+                ).order_by(OutboxRecord.created_at, OutboxRecord.id)
+            ).scalars().all()
+            events = session.query(WorkflowEventRecord).filter_by(
+                job_id=job_id,
+                event_type="WORKFLOW_CONTINUATION_ENQUEUED",
+            ).all()
+        self.assertEqual(len(rows), 2)
+        continuation = next(
+            row for row in rows if row.dedupe_key.startswith("workflow.continue:")
+        )
+        self.assertEqual(continuation.state, "PENDING")
+        self.assertEqual(continuation.event_type, "WORKFLOW_PLAN_DISPATCH")
+        self.assertEqual(continuation.plan_fingerprint, execution_plan_sha256(plan))
+        self.assertEqual(continuation.payload_json["job_id"], job_id)
+        self.assertEqual(len(events), 1)
 
     def test_legacy_celery_completes_output_stages_without_faking_internal_nodes(self):
         job_id = str(uuid4())
