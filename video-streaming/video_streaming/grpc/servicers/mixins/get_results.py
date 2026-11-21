@@ -542,11 +542,14 @@ class GetResultsMixin(object):
             return self.pb2.ResultDetails(**result_details)
 
     def _get_results(self, request, context):
-        results: list[streaming_pb2.ResultDetails] = []
-        for request_id in request.tracking_ids:
-            # Authorize the durable owner before reading any cache projection.
-            # A missing or foreign Job receives the same not-found response.
+        # Authorize the entire batch before touching Redis or any result
+        # projection. A mixed owned/foreign batch must not partially read data.
+        request_ids = tuple(request.tracking_ids)
+        for request_id in request_ids:
             require_job_access(request_id, "video.jobs:read", context)
+
+        results: list[streaming_pb2.ResultDetails] = []
+        for request_id in request_ids:
             result = self._get_result(request_id)
             if result:
                 results.append(result)
