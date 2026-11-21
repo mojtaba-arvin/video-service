@@ -541,8 +541,28 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
+        # The callback destination is encrypted in PostgreSQL, never copied
+        # into the Redis status projection, and idempotent replay does not
+        # generate a second envelope.
+        cached_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=accepted.tracking_id
+            )
+        )
+        self.assertNotIn(self.webhook_url, repr(cached_details))
+        from video_streaming.workflows.repository import JobSecretRecord
         from video_streaming.workflows.service import get_workflow_repository
         repository = get_workflow_repository()
+        with repository._session() as session:
+            envelopes = session.query(JobSecretRecord).filter_by(
+                job_id=accepted.tracking_id,
+                purpose="webhook.callback",
+                status="ACTIVE",
+            ).all()
+            self.assertEqual(len(envelopes), 1)
+            self.assertNotIn(self.webhook_url, repr(envelopes[0]))
+            self.assertTrue(envelopes[0].ciphertext)
+            self.assertTrue(envelopes[0].wrapped_dek)
         snapshot = repository.get_job_snapshot(accepted.tracking_id)
         persisted_plan = repository.get_execution_plan(accepted.tracking_id)
         self.assertIsNotNone(snapshot)
