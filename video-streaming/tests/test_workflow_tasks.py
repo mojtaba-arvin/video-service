@@ -24,6 +24,15 @@ class WorkflowTaskConsumerTests(unittest.TestCase):
                     "job", "workflow", "1", "a" * 64
                 )
 
+    def test_outbox_relay_is_disabled_with_the_durable_feature_gate(self):
+        with patch.object(
+            settings, "WORKFLOW_DURABLE_DISPATCH_ENABLED", False
+        ):
+            self.assertEqual(
+                tasks.relay_workflow_outbox.run(),
+                {"status": "disabled"},
+            )
+
     def test_dispatch_rejects_plan_identity_mismatch_before_fanout(self):
         class Repository:
             def get_execution_plan(self, job_id):
