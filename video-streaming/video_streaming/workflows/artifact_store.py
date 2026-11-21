@@ -92,6 +92,29 @@ class S3ArtifactStore:
             "media_type": media_type,
         }
 
+    def put_bytes(self, payload, logical_key, attempt_id, media_type=None):
+        """Persist a bounded in-memory payload as an immutable S3 Artifact."""
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes")
+        import tempfile
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix="workflow-artifact-"
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as target:
+                target.write(payload)
+            return self.put_file(
+                temporary_path,
+                logical_key,
+                attempt_id,
+                media_type=media_type,
+            )
+        finally:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
     def download_file(self, uri, destination_path, expected_sha256=None):
         bucket, key = parse_artifact_uri(uri)
         if not isinstance(destination_path, str) or not destination_path:
