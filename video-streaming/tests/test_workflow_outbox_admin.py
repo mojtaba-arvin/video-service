@@ -1,7 +1,9 @@
 """Operator CLI tests for fail-closed outbox relay preflight."""
 
+import sys
+import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from video_streaming.workflows import outbox_admin
 
@@ -31,15 +33,19 @@ class WorkflowOutboxAdminTests(unittest.TestCase):
                 "video_streaming.settings.WORKFLOW_DURABLE_DISPATCH_ENABLED",
                 True,
             ):
-                with patch(
-                    "video_streaming.workflows.tasks._build_executor",
-                    side_effect=RuntimeError("handler registry unavailable"),
-                ) as preflight:
+                fake_tasks = types.ModuleType("video_streaming.workflows.tasks")
+                fake_tasks._build_executor = Mock(
+                    side_effect=RuntimeError("handler registry unavailable")
+                )
+                with patch.dict(
+                    sys.modules,
+                    {"video_streaming.workflows.tasks": fake_tasks},
+                ):
                     with self.assertRaisesRegex(
                         RuntimeError, "handler registry unavailable"
                     ):
                         outbox_admin.main(["relay-once"])
-                    preflight.assert_called_once()
+                fake_tasks._build_executor.assert_called_once()
 
 
 if __name__ == "__main__":
