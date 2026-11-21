@@ -33,10 +33,26 @@ def call_webhook(self, *args, request_id: str = None):
         raise self.raise_revoke(request_id)
 
     try:
+        from video_streaming.workflows.service import get_workflow_repository
         from video_streaming.workflows.secret_runtime import (
             resolve_job_webhook_secret,
         )
-        webhook_url = resolve_job_webhook_secret(request_id)
+        repository = get_workflow_repository()
+        persisted_plan = repository.get_execution_plan(request_id)
+        if persisted_plan is None:
+            raise RuntimeError("persisted callback plan is unavailable")
+        secret_refs = {
+            node["parameters"].get("webhook_secret_ref")
+            for node in persisted_plan["plan"]["nodes"]
+            if node["operation"] == "video.webhook.deliver"
+            and node["parameters"].get("enabled") is True
+        }
+        secret_refs.discard(None)
+        if len(secret_refs) != 1:
+            raise RuntimeError("persisted callback secret reference is missing or ambiguous")
+        webhook_url = resolve_job_webhook_secret(
+            request_id, secret_refs.pop(), repository=repository
+        )
     except Exception as exc:
         # Never log exception strings: KMS/HTTP libraries may include secrets.
         self.logger.error(
