@@ -8,7 +8,8 @@ for publishing artifact records after a successful lease-fenced node commit.
 import hashlib
 import os
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
+import tempfile
 
 from video_streaming.workflows.artifacts import attempt_scoped_object_key
 
@@ -31,7 +32,7 @@ def artifact_uri(bucket, key):
         raise ValueError("invalid artifact object key")
     if any(part in ("", ".", "..") for part in key.split("/")):
         raise ValueError("artifact object key contains unsafe segments")
-    return "s3://{}/{}".format(bucket, key)
+    return "s3://{}/{}".format(bucket, quote(key, safe="/-._~"))
 
 
 def parse_artifact_uri(uri):
@@ -40,7 +41,7 @@ def parse_artifact_uri(uri):
     parsed = urlparse(uri)
     if parsed.scheme != "s3" or not parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError("artifact URI must be an unqualified s3:// URI")
-    key = parsed.path.lstrip("/")
+    key = unquote(parsed.path.lstrip("/"))
     canonical = artifact_uri(parsed.netloc, key)
     if canonical != uri:
         raise ValueError("artifact URI is not canonical")
@@ -62,35 +63,64 @@ class S3ArtifactStore:
         if not isinstance(local_path, str) or not os.path.isfile(local_path):
             raise ValueError("local_path must identify an existing regular file")
         key = attempt_scoped_object_key(logical_key, attempt_id)
-        digest = hashlib.sha256()
-        size = 0
-        with open(local_path, "rb") as source:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-                size += len(chunk)
-        checksum = digest.hexdigest()
-        metadata = {"sha256": checksum, "attempt_id": attempt_id}
-        extra = {"Metadata": metadata}
-        if media_type:
-            extra["ContentType"] = media_type
-        # S3 put_object is one object commit; callers publish its DB Artifact
-        # only after this call returns successfully and their lease is valid.
-        with open(local_path, "rb") as source:
-            self._client.put_object(
-                Bucket=self._default_bucket,
-                Key=key,
-                Body=source,
-                **extra
-            )
-        return {
-            "uri": artifact_uri(self._default_bucket, key),
-            "size_bytes": size,
-            "checksum_sha256": checksum,
-            "media_type": media_type,
-        }
+        # Hash and upload one private snapshot. Reading the source twice would
+        # allow a producer to replace or mutate it between digest and upload.
+        descriptor, snapshot_path = tempfile.mkstemp(prefix="workflow-artifact-")
+        try:
+            digest = hashlib.sha256()
+            size = 0
+            with os.fdopen(descriptor, "wb") as snapshot:
+                with open(local_path, "rb") as source:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        snapshot.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+            checksum = digest.hexdigest()
+            metadata = {"sha256": checksum, "attempt_id": attempt_id}
+            extra = {"Metadata": metadata, "IfNoneMatch": "*"}
+            if media_type:
+                extra["ContentType"] = media_type
+            try:
+                with open(snapshot_path, "rb") as source:
+                    self._client.put_object(
+                        Bucket=self._default_bucket,
+                        Key=key,
+                        Body=source,
+                        **extra
+                    )
+            except Exception as exc:
+                response = getattr(exc, "response", {}) or {}
+                status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                code = response.get("Error", {}).get("Code")
+                if status != 412 and code != "PreconditionFailed":
+                    raise
+                # A retry of the same immutable Attempt/key is safe only when
+                # the object already stored is byte-for-byte equivalent.
+                existing = self._client.head_object(
+                    Bucket=self._default_bucket, Key=key
+                )
+                existing_metadata = existing.get("Metadata", {})
+                if (
+                    existing.get("ContentLength") != size
+                    or existing_metadata.get("sha256") != checksum
+                ):
+                    raise ArtifactStoreError(
+                        "immutable artifact key already contains different content"
+                    ) from exc
+            return {
+                "uri": artifact_uri(self._default_bucket, key),
+                "size_bytes": size,
+                "checksum_sha256": checksum,
+                "media_type": media_type,
+            }
+        finally:
+            try:
+                os.unlink(snapshot_path)
+            except OSError:
+                pass
 
     def put_bytes(self, payload, logical_key, attempt_id, media_type=None):
         """Persist a bounded in-memory payload as an immutable S3 Artifact."""
@@ -133,8 +163,18 @@ class S3ArtifactStore:
                     target.write(chunk)
                     digest.update(chunk)
             actual = digest.hexdigest()
-            expected = expected_sha256 or response.get("Metadata", {}).get("sha256")
-            if expected and actual != expected:
+            expected = (
+                expected_sha256
+                if expected_sha256 is not None
+                else response.get("Metadata", {}).get("sha256")
+            )
+            if not isinstance(expected, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", expected
+            ):
+                raise ArtifactStoreError(
+                    "artifact checksum is missing or invalid"
+                )
+            if actual != expected:
                 raise ArtifactStoreError("artifact checksum mismatch")
             os.replace(temporary, destination_path)
             return {
