@@ -43,7 +43,11 @@ class FakeKMSClient:
 
     def generate_data_key(self, **kwargs):
         self.generate_args = kwargs
-        return {"Plaintext": bytes(range(32)), "CiphertextBlob": b"wrapped-key"}
+        return {
+            "Plaintext": bytes(range(32)),
+            "CiphertextBlob": b"wrapped-key",
+            "KeyId": "arn:aws:kms:region:account:key/immutable-key-a",
+        }
 
     def decrypt(self, **kwargs):
         self.decrypt_args = kwargs
@@ -66,9 +70,13 @@ class SecretEnvelopeTests(unittest.TestCase):
         provider = AwsKMSKeyProvider(client, "arn:aws:kms:region:account:key/current")
         context = {"job_id": "job-123", "purpose": "webhook.callback"}
 
-        plaintext, wrapped = provider.generate_data_key(context)
+        plaintext, wrapped, resolved_key_id = provider.generate_data_key(context)
         self.assertEqual(len(plaintext), 32)
         self.assertEqual(wrapped, b"wrapped-key")
+        self.assertEqual(
+            resolved_key_id,
+            "arn:aws:kms:region:account:key/immutable-key-a",
+        )
         self.assertEqual(
             client.generate_args["KeyId"],
             "arn:aws:kms:region:account:key/current",
@@ -85,6 +93,18 @@ class SecretEnvelopeTests(unittest.TestCase):
             "arn:aws:kms:region:account:key/previous",
         )
         self.assertEqual(client.decrypt_args["EncryptionContext"], context)
+
+    def test_envelope_persists_resolved_key_arn_not_mutable_alias(self):
+        client = FakeKMSClient()
+        provider = AwsKMSKeyProvider(client, "alias/workflow-secrets")
+        envelope = prepare_secret("sensitive", self.context, provider)
+        immutable_arn = "arn:aws:kms:region:account:key/immutable-key-a"
+        self.assertEqual(envelope.kms_key_id, immutable_arn)
+
+        # The alias may later point elsewhere; the envelope remains bound to
+        # the immutable key that actually wrapped its data-encryption key.
+        resolve_secret(envelope, self.context, provider)
+        self.assertEqual(client.decrypt_args["KeyId"], immutable_arn)
 
     def test_round_trip_binds_secret_to_full_context(self):
         envelope = prepare_secret(
