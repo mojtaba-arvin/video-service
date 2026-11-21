@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, event
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
 from video_streaming.workflows.domain import InvalidStateTransition
 from video_streaming.workflows.executor import WorkflowNodeExecutor
+from video_streaming.workflows.errors import PermanentOperationError
 from video_streaming.workflows.repository import WorkflowRepository
 
 
@@ -214,6 +215,36 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertEqual(len(set(attempts)), 1)
         self.assertEqual(len(logical_effects), 1)
+
+    def test_operation_retry_contract_and_typed_permanent_failure_are_enforced(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [node("funnel", "video.inputs.funnel")],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="never-retry-" + job_id,
+            request_hash="e" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        never_retry = self.executor(
+            lambda _node, _context: (_ for _ in ()).throw(
+                RuntimeError("deterministic funnel validation failure")
+            )
+        ).execute(job_id, "funnel")
+        self.assertEqual(never_retry["status"], "failed")
+
+        permanent = self.executor(
+            lambda _node, _context: (_ for _ in ()).throw(
+                PermanentOperationError("invalid media input")
+            )
+        ).execute(self.job_id, "check")
+        self.assertEqual(permanent["status"], "failed")
 
     def test_retryable_failure_returns_bounded_exponential_delay(self):
         executor = self.executor(
