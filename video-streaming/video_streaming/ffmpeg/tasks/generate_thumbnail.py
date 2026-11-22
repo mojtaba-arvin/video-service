@@ -117,6 +117,10 @@ def generate_thumbnail(
         lease_token,
         lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
+    # Keep the caller's explicit location for resolution. The actual file
+    # written by this Attempt is tracked separately below so cleanup never
+    # removes a caller-owned path from an earlier or concurrent execution.
+    requested_output_path = output_path
     output_path = None
     usage_metrics = {}
 
@@ -171,7 +175,7 @@ def generate_thumbnail(
         output_path, directory = self.ensure_set_output_location(
             request_id,
             output_id,
-            output_path=output_path,
+            output_path=requested_output_path,
             s3_output_key=s3_output_key,
         )
         directory = os.path.join(directory, ".attempts", attempt_id)
