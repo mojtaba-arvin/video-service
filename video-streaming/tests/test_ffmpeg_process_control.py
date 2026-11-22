@@ -7,7 +7,10 @@ import unittest
 
 import psutil
 
-from video_streaming.execution.process_control import terminate_process_tree
+from video_streaming.execution.process_control import (
+    ProcessUsageAccumulator,
+    terminate_process_tree,
+)
 
 
 class ProcessTreeTerminationTests(unittest.TestCase):
@@ -314,6 +317,54 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             max(item["peak_memory_bytes"] for item in samples),
             16 * 1024 * 1024,
         )
+
+    def test_usage_accumulator_preserves_known_cumulative_samples(self):
+        usage = ProcessUsageAccumulator()
+        usage.record({
+            "process_id": "ffmpeg",
+            "cpu_seconds": 0.5,
+            "peak_memory_bytes": 512,
+            "memory_duration_ms": 100,
+        })
+        # A later partial sample must not erase earlier valid observations.
+        usage.record({
+            "process_id": "ffmpeg",
+            "cpu_seconds": 0.75,
+            "peak_memory_bytes": None,
+            "memory_duration_ms": None,
+        })
+        usage.record({
+            "process_id": "ffprobe",
+            "cpu_seconds": None,
+            "peak_memory_bytes": 128,
+            "memory_duration_ms": 40,
+        })
+
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": 0.75,
+            "peak_memory_bytes": 512,
+            "memory_duration_ms": 140,
+        })
+
+    def test_usage_accumulator_distinguishes_unknown_from_measured_zero(self):
+        usage = ProcessUsageAccumulator()
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": None,
+            "peak_memory_bytes": None,
+            "memory_duration_ms": None,
+        })
+
+        usage.record({
+            "process_id": "zero-usage",
+            "cpu_seconds": 0.0,
+            "peak_memory_bytes": 0,
+            "memory_duration_ms": 0,
+        })
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": 0.0,
+            "peak_memory_bytes": 0,
+            "memory_duration_ms": 0,
+        })
 
     @staticmethod
     def _is_running(pid):
