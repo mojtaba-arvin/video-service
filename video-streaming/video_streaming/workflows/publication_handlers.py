@@ -125,7 +125,7 @@ def _upload_file(
             if (
                 int(existing.get("ContentLength", -1)) == size
                 and stored_metadata.get("sha256") == checksum
-                and stored_metadata.get("attempt_id") == attempt_id
+                and stored_metadata.get("idempotency_key") == idempotency_key
             ):
                 _check_active(context)
                 return {
