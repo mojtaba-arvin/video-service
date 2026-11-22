@@ -49,7 +49,17 @@ class AuthenticatedStub:
         rpc = getattr(self._stub, name)
 
         def authenticated_call(request, *args, **kwargs):
+            # The wrapper owns the test credential. Call sites may supply
+            # unrelated metadata, but must never override or duplicate the
+            # Authorization header configured here.
             metadata = tuple(kwargs.pop("metadata", ()) or ())
+            metadata = tuple(
+                item for item in metadata
+                if (
+                    (item.key if hasattr(item, "key") else item[0]).lower()
+                    != "authorization"
+                )
+            )
             kwargs["metadata"] = metadata + self._metadata
             return rpc(request, *args, **kwargs)
 
