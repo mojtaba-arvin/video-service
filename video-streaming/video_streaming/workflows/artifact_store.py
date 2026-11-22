@@ -76,6 +76,11 @@ class S3ArtifactStore:
         self._client = s3_client
         self._default_bucket = default_bucket
 
+    @property
+    def client(self):
+        """Expose the configured S3 client to sibling storage adapters."""
+        return self._client
+
     def put_file(
             self, local_path, logical_key, attempt_id, media_type=None,
             on_chunk=None):
