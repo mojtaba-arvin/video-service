@@ -270,7 +270,16 @@ def build_media_handlers(
                     artifact_store, context, manifest, "video", directory
                 )
             output_key = _required_text(params.get("key"), "key")
-            output_path = os.path.join(directory, os.path.basename(output_key))
+            manifest_name = os.path.basename(output_key)
+            expected_extension = ".m3u8" if protocol_name == "hls" else ".mpd"
+            if (
+                manifest_name in ("", ".", "..")
+                or not manifest_name.lower().endswith(expected_extension)
+            ):
+                raise PermanentOperationError(
+                    "output key must end with {}".format(expected_extension)
+                )
+            output_path = os.path.join(directory, manifest_name)
 
             def on_usage(sample):
                 usage.record(sample)
