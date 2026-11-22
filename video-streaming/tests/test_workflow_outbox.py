@@ -268,6 +268,11 @@ class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
         database_url = os.environ["WORKFLOW_DATABASE_URL"]
         repository = WorkflowRepository(database_url)
         competing_repository = WorkflowRepository(database_url)
+        # This integration database is shared with the preceding repository
+        # acceptance step. Remove its prior fixtures so the global relay claim
+        # can only see the row whose lock this test deliberately holds.
+        with repository._session.begin() as session:
+            session.execute(text("DELETE FROM workflow_jobs"))
         job_id = str(uuid4())
         plan = WorkflowOutboxRepositoryTests.plan(job_id)
         repository.create_job(
