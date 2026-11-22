@@ -234,6 +234,7 @@ def build_input_handlers(
                 "inputs/{}/source.bin".format(name),
                 context.attempt_id,
                 media_type=reference.get("content_type") or "application/octet-stream",
+                on_chunk=lambda _size: _check_active(context),
             )
         finally:
             if descriptor is not None:
