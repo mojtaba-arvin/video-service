@@ -267,7 +267,7 @@ def request_webhook(
             not isinstance(name, str)
             or not isinstance(value, str)
             or not name
-            or any(character in name + value for character in "\\r\\n")
+            or any(character in name + value for character in "\r\n")
             or name.lower() in ("host", "content-type", "content-length", "transfer-encoding")
         ):
             raise WebhookDestinationError("Webhook request headers are not allowed")
