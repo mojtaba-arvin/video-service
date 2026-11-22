@@ -92,7 +92,7 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
         if hasattr(self, "repository"):
             self.repository.close()
 
-    def _create_job(self):
+    def _create_job(self, retry_delay=0.2):
         job_id = str(uuid.uuid4())
         plan = {
             "schema_version": 1,
@@ -108,7 +108,7 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
                 "retry_policy": {
                     "max_attempts": 3,
                     "backoff": "exponential",
-                    "initial_delay_seconds": 0.2,
+                    "initial_delay_seconds": retry_delay,
                     "max_delay_seconds": 1,
                 },
                 "resource_profile": "control",
@@ -219,7 +219,7 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
         self.handlers = {
             operation: handler for operation in PLAN_OPERATIONS
         }
-        job_id, snapshot = self._create_job()
+        job_id, snapshot = self._create_job(retry_delay=0)
         # Model abrupt worker loss after the database claim committed but
         # before the handler could begin. The original broker delivery is
         # assumed lost; a later delivery must recover the expired lease.
