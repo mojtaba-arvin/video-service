@@ -191,7 +191,8 @@ def reconcile_expired_workflow_attempts():
                 snapshot["workflow_id"],
                 snapshot["workflow_version"],
                 snapshot["fingerprint"],
-            )
+            ),
+            expires=45,
         )
         dispatched += 1
     return {
