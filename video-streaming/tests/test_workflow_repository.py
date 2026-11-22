@@ -897,6 +897,99 @@ class WorkflowRepositoryTests(unittest.TestCase):
                     self.assertEqual(stage.status, StageState.CANCELLED.value)
                     self.assertEqual(retry_count, 0)
 
+    def test_expired_processing_attempt_invalidates_its_validation_report(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, _, expiry = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-validation-interrupted"
+        )
+        self.repository.mark_validated(
+            job_id,
+            "p0",
+            processing_id,
+            {"valid": True, "errors": []},
+            complete_attempt=False,
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            replacement = self.repository.claim_attempt(
+                job_id, "p0", lease_owner="worker-reprocessing"
+            )
+
+        with self.repository._session() as session:
+            report = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == session.execute(
+                        select(StageRecord.id).join(
+                            WorkflowRecord,
+                            StageRecord.workflow_id == WorkflowRecord.id,
+                        ).where(
+                            WorkflowRecord.job_id == job_id,
+                            StageRecord.stage_key == "p0",
+                        )
+                    ).scalar_one(),
+                    ArtifactRecord.attempt_id == processing_id,
+                    ArtifactRecord.logical_name == "validation-report",
+                )
+            ).scalar_one()
+            old_attempt = session.get(AttemptRecord, processing_id)
+            self.assertEqual(report.status, "INVALIDATED")
+            self.assertEqual(old_attempt.state, AttemptState.RETRYABLE.value)
+        self.assertNotEqual(replacement[0], processing_id)
+
+    def test_expired_publication_attempt_preserves_successful_processing_report(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing-complete"
+        )
+        self.repository.complete_processing_attempt(
+            job_id,
+            "p0",
+            processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-publication-interrupted",
+                processing_attempt_id=processing_id,
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            replacement = self.repository.claim_publication_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-publication-retry",
+                processing_attempt_id=processing_id,
+            )
+
+        with self.repository._session() as session:
+            report = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.attempt_id == processing_id,
+                    ArtifactRecord.logical_name == "validation-report",
+                )
+            ).scalar_one()
+            expired_publication = session.get(AttemptRecord, publication_id)
+            self.assertEqual(report.status, "AVAILABLE")
+            self.assertEqual(
+                expired_publication.state, AttemptState.RETRYABLE.value
+            )
+        self.assertNotEqual(replacement[0], publication_id)
+
     def test_age_based_recovery_never_expires_a_live_leased_attempt(self):
         job_id = self.create_job("p0")
         attempt_id, _, token, _ = self.repository.claim_attempt(
