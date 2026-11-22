@@ -50,11 +50,18 @@ class OperationContractTests(unittest.TestCase):
     def test_funnel_requires_video_and_allows_optional_watermark_metadata(self):
         contract = OPERATION_CONTRACTS["video.inputs.funnel"]
         self.assertEqual(
-            contract.required_artifacts, frozenset({"input.video.probe_metadata"})
+            contract.required_artifacts,
+            frozenset({
+                "input.video.file_artifact",
+                "input.video.probe_metadata",
+            })
         )
         self.assertEqual(
             contract.optional_artifacts,
-            frozenset({"input.watermark.probe_metadata"}),
+            frozenset({
+                "input.watermark.file_artifact",
+                "input.watermark.probe_metadata",
+            }),
         )
 
     def test_analyze_passes_through_source_artifact_for_funnel(self):
