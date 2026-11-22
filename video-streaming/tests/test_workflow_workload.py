@@ -29,6 +29,30 @@ class WorkloadClassificationTests(unittest.TestCase):
             with self.subTest(operation=operation.value):
                 self.assertIs(classify_operation(operation), workload_class)
 
+    def test_all_thirteen_durable_vod_operations_are_classified(self):
+        from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
+
+        expected = {
+            "video.input.check": WorkloadClass.METADATA,
+            "video.input.download": WorkloadClass.STORAGE_IO,
+            "video.input.analyze": WorkloadClass.METADATA,
+            "video.inputs.funnel": WorkloadClass.METADATA,
+            "video.output.bucket.check": WorkloadClass.METADATA,
+            "video.output.key.check": WorkloadClass.METADATA,
+            "video.hls.package": WorkloadClass.PACKAGING,
+            "video.dash.package": WorkloadClass.PACKAGING,
+            "video.thumbnail.generate": WorkloadClass.MEDIA_TRANSFORM,
+            "video.watermark.apply": WorkloadClass.MEDIA_TRANSFORM,
+            "video.output.upload_file": WorkloadClass.STORAGE_IO,
+            "video.output.upload_directory": WorkloadClass.STORAGE_IO,
+            "video.webhook.deliver": WorkloadClass.STORAGE_IO,
+        }
+
+        self.assertEqual(set(expected), set(PLAN_OPERATIONS))
+        for operation, workload_class in expected.items():
+            with self.subTest(operation=operation):
+                self.assertIs(classify_operation(operation), workload_class)
+
     def test_exact_wire_value_is_accepted(self):
         self.assertIs(
             classify_operation("video.probe"),
