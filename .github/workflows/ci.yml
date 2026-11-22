@@ -368,16 +368,62 @@ jobs:
             -p 'test_workflow_tasks.py' \
             -v
 
-      - name: Run real Redis/Celery durable duplicate and retry acceptance tests
+      - name: Run required real Redis/Celery durable recovery acceptance tests
         env:
           PYTHONPATH: video-streaming
           WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
           WORKFLOW_TEST_BROKER_URL: redis://127.0.0.1:6379/5
           WORKFLOW_TEST_RESULT_BACKEND: redis://127.0.0.1:6379/6
         run: |
+          python - <<'PY'
+          import unittest
+
+          loader = unittest.TestLoader()
+          suite = loader.discover(
+              "video-streaming/tests",
+              pattern="test_workflow_redis_celery.py",
+          )
+          if loader.errors:
+              raise SystemExit(
+                  "Redis/Celery acceptance discovery failed:\\n"
+                  + "\\n".join(loader.errors)
+              )
+          discovered = suite.countTestCases()
+          if discovered < 5:
+              raise SystemExit(
+                  "Expected at least five broker-backed recovery tests; got {}".format(
+                      discovered
+                  )
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          skipped = len(result.skipped)
+          print(
+              "Redis/Celery tests: discovered={}, executed={}, skipped={}, "
+              "failures={}, errors={}".format(
+                  discovered, result.testsRun, skipped,
+                  len(result.failures), len(result.errors)
+              )
+          )
+          if (
+              result.testsRun != discovered
+              or skipped
+              or result.failures
+              or result.errors
+          ):
+              raise SystemExit("Required Redis/Celery recovery acceptance failed")
+          PY
+
+      - name: Run durable S3 publication and webhook retry contract tests
+        env:
+          PYTHONPATH: video-streaming
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
           python -m unittest discover \
             -s video-streaming/tests \
-            -p 'test_workflow_redis_celery.py' \
+            -p 'test_workflow_publication_handlers.py' \
             -v
 
   durable-workflow-state:
