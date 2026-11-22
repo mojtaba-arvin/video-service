@@ -245,6 +245,32 @@ class DurableInputHandlerTests(unittest.TestCase):
             )
         self.assertEqual(self.s3.head_calls, [])
 
+    def test_watermark_analysis_defers_format_validation_to_ffmpeg(self):
+        stored = self.store.put_bytes(
+            b"<svg></svg>", "inputs/watermark/source.svg", "download-attempt",
+            media_type="image/svg+xml",
+        )
+        context = _Context("watermark-analyze", {
+            "input-watermark-download": [{
+                "logical_name": "input.watermark.file_artifact",
+                "artifact_type": "media_file",
+                **stored,
+            }]
+        })
+        result = self.handlers["video.input.analyze"](
+            self._node("watermark-analyze", {"input_name": "watermark"}),
+            context,
+        )
+        self.assertEqual(self.probe_calls, [])
+        metadata_artifact = next(
+            item for item in result["artifacts"]
+            if item["logical_name"] == "input.watermark.probe_metadata"
+        )
+        metadata = json.loads(
+            self.store.objects[metadata_artifact["uri"]].decode("utf-8")
+        )
+        self.assertEqual(metadata["inspection"], "deferred_to_ffmpeg")
+
     def test_primary_input_must_contain_a_video_stream(self):
         def audio_only(*_args, **_kwargs):
             return {"streams": [{"codec_type": "audio"}], "format": {}}
