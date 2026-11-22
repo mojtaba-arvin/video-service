@@ -167,6 +167,46 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             usage_samples[-1]["memory_duration_ms"], 200
         )
 
+    def test_each_subprocess_has_a_stable_unique_usage_identity(self):
+        from video_streaming.execution.process_control import (
+            run_cancellable_process,
+            run_streaming_process,
+        )
+
+        identities = []
+        for runner in (
+                run_cancellable_process,
+                run_streaming_process,
+                run_cancellable_process):
+            samples = []
+            if runner is run_streaming_process:
+                runner(
+                    [sys.executable, "-c", "import time; time.sleep(0.12)"],
+                    timeout_seconds=2,
+                    poll_interval=0.02,
+                    on_line=lambda line, process: None,
+                    on_usage=samples.append,
+                )
+            else:
+                runner(
+                    [sys.executable, "-c", "import time; time.sleep(0.12)"],
+                    timeout_seconds=2,
+                    poll_interval=0.02,
+                    on_usage=samples.append,
+                )
+
+            self.assertTrue(samples)
+            process_ids = {sample["process_id"] for sample in samples}
+            self.assertEqual(len(process_ids), 1)
+            self.assertTrue(all(
+                sample["process_pid"] > 0 for sample in samples
+            ))
+            identities.append(process_ids.pop())
+
+        # Models FFmpeg followed by multiple FFprobe invocations: even if the
+        # operating system reuses a PID, process accounting must not merge them.
+        self.assertEqual(len(set(identities)), 3)
+
     def test_streaming_runner_delivers_lines_as_they_arrive(self):
         from video_streaming.execution.process_control import run_streaming_process
 
