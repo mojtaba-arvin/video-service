@@ -194,6 +194,17 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         )
         self.assertEqual(recovered, ["check"])
 
+    def _make_retry_due(self, job_id):
+        from video_streaming.workflows.repository import OutboxRecord, utcnow
+
+        with self.repository._session.begin() as session:
+            row = session.query(OutboxRecord).filter_by(
+                job_id=job_id,
+                event_type="WORKFLOW_PLAN_DISPATCH",
+            ).order_by(OutboxRecord.created_at.desc()).first()
+            self.assertIsNotNone(row)
+            row.available_at = utcnow() - timedelta(seconds=1)
+
     def test_crash_after_side_effect_reuses_stable_idempotency_key(self):
         seen_keys = set()
         logical_effects = []
@@ -210,6 +221,7 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         executor = self.executor(handler)
         first = executor.execute(self.job_id, "check")
         self.assertEqual(first["status"], "retryable_failure")
+        self._make_retry_due(self.job_id)
         second = executor.execute(self.job_id, "check")
         self.assertEqual(second["status"], "completed")
         self.assertEqual(len(attempts), 2)
