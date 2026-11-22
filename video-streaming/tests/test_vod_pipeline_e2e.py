@@ -289,6 +289,22 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "video-workflow-worker/"
             ),
         )
+        original_key_provider = secret_runtime.get_workflow_secret_key_provider
+        original_worker_identity = (
+            secret_runtime.get_verified_workflow_worker_identity
+        )
+        cls.addClassCleanup(
+            setattr,
+            secret_runtime,
+            "get_workflow_secret_key_provider",
+            original_key_provider,
+        )
+        cls.addClassCleanup(
+            setattr,
+            secret_runtime,
+            "get_verified_workflow_worker_identity",
+            original_worker_identity,
+        )
         secret_runtime.get_workflow_secret_key_provider = (
             lambda: e2e_key_provider
         )
