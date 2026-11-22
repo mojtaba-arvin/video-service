@@ -1,4 +1,6 @@
 # Shared dependencies required by the regression test suite.
+celery==5.6.3
+python-ffmpeg-video-streaming==0.1.14
 ffmpeg-python==0.2.0
 # Process-tree termination regression tests
 psutil==5.9.8
