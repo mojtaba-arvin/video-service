@@ -212,5 +212,58 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
             build_vod_execution_plan("job-invalid-time", normalized)
 
 
+    def test_rejects_incomplete_thumbnail_when_playlist_is_valid(self):
+        from video_streaming.grpc import exceptions
+
+        request = self.make_request()
+        request.thumbnails[0].upload_to.key = ""
+        with self.assertRaises(exceptions.S3KeyCanNotBeEmptyException):
+            self.adapter._build_durable_vod_request(request)
+
+    def test_rejects_incomplete_playlist_when_thumbnail_is_valid(self):
+        from video_streaming.grpc import exceptions
+
+        request = self.make_request()
+        request.playlists[0].upload_to.key = "   "
+        with self.assertRaises(exceptions.S3KeyCanNotBeEmptyException):
+            self.adapter._build_durable_vod_request(request)
+
+    def test_rejects_omitted_output_between_valid_outputs_without_reindexing(self):
+        from video_streaming.grpc import exceptions
+
+        request = self.make_request()
+        middle = request.playlists.add()
+        middle.protocol = streaming_pb2.Protocol.HLS
+        middle.upload_to.bucket = "deliverables"
+        middle.upload_to.key = ""
+        last = request.playlists.add()
+        last.protocol = streaming_pb2.Protocol.HLS
+        last.upload_to.bucket = "deliverables"
+        last.upload_to.key = "hls/third.m3u8"
+        with self.assertRaises(exceptions.S3KeyCanNotBeEmptyException):
+            self.adapter._build_durable_vod_request(request)
+
+    def test_rejects_watermarked_output_without_watermark_input(self):
+        request = self.make_request()
+        request.watermark.s3_input.key = ""
+        with self.assertRaisesRegex(ValueError, "watermark input"):
+            self.adapter._build_durable_vod_plan("job-missing-watermark", request)
+
+    def test_rejects_duplicate_output_destinations(self):
+        request = self.make_request()
+        request.thumbnails[0].upload_to.bucket = request.playlists[0].upload_to.bucket
+        request.thumbnails[0].upload_to.key = request.playlists[0].upload_to.key
+        with self.assertRaisesRegex(ValueError, "duplicate output locations"):
+            self.adapter._build_durable_vod_plan("job-duplicate-destination", request)
+
+    def test_rejects_empty_output_collection(self):
+        request = self.make_request()
+        del request.playlists[:]
+        del request.thumbnails[:]
+        request.watermark.upload_to.key = ""
+        with self.assertRaisesRegex(ValueError, "at least one output"):
+            self.adapter._build_durable_vod_plan("job-no-outputs", request)
+
+
 if __name__ == "__main__":
     unittest.main()
