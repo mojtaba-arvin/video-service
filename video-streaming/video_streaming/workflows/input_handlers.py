@@ -185,6 +185,7 @@ def build_input_handlers(
         descriptor, local_path = tempfile.mkstemp(prefix="workflow-source-")
         try:
             digest_size = 0
+            body = None
             try:
                 response = s3_client.get_object(Bucket=bucket, Key=key)
                 body = response["Body"]
@@ -197,13 +198,14 @@ def build_input_handlers(
                             break
                         target.write(chunk)
                         digest_size += len(chunk)
-                close = getattr(body, "close", None)
-                if close:
-                    close()
             except AttemptLeaseLost:
                 raise
             except Exception as exc:
                 _provider_error(exc)
+            finally:
+                close = getattr(body, "close", None)
+                if close:
+                    close()
             if digest_size != reference["size_bytes"]:
                 raise RetryableOperationError("downloaded input size changed during transfer")
             _check_active(context)
@@ -288,6 +290,7 @@ def build_input_handlers(
 
     def inputs_funnel(node, context):
         del node
+        _check_active(context)
         inputs = {}
         for artifacts in (context.input_artifacts or {}).values():
             for artifact in artifacts:
@@ -314,6 +317,7 @@ def build_input_handlers(
             "job_id": context.job_id,
             "inputs": inputs,
         }
+        _check_active(context)
         stored = _put_json(
             artifact_store, manifest, "inputs/manifest.json", context.attempt_id
         )
