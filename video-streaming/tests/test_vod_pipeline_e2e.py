@@ -373,7 +373,9 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.channel = cls.grpc.insecure_channel(
             "127.0.0.1:{}".format(cls.grpc_port)
         )
-        cls.stub = AuthenticatedStub(cls.pb2_grpc.StreamingStub(cls.channel))
+        cls.stub = AuthenticatedStub(
+            cls.pb2_grpc.StreamingStub(cls.channel), cls.rpc_metadata
+        )
 
     @classmethod
     def tearDownClass(cls):
