@@ -29,7 +29,7 @@ circus==0.17.1
 python-decouple==3.8
 
 # clouds 
-boto3==1.17.14
+boto3==1.35.99
 
 # authenticated secret envelope encryption
 cryptography==50.0.2
