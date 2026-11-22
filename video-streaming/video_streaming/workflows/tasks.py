@@ -160,3 +160,42 @@ def relay_workflow_outbox():
         batch_size=25,
     )
     return relay.run_once()
+
+@celery_app.task(
+    name="video_streaming.workflows.reconcile_expired_attempts",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def reconcile_expired_workflow_attempts():
+    """Re-dispatch durable Jobs with expired worker leases.
+
+    The scan is bounded and read-only. Node ownership is still decided by the
+    PostgreSQL Attempt claim, so concurrent schedulers and duplicate messages
+    cannot authorize duplicate side effects.
+    """
+    if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+        return {"status": "disabled", "jobs": 0, "dispatched": 0}
+    repository = get_workflow_repository()
+    job_ids = repository.list_jobs_with_expired_attempts(limit=100)
+    dispatched = 0
+    for job_id in job_ids:
+        snapshot = repository.get_execution_plan(job_id)
+        if snapshot is None:
+            continue
+        ready_node_ids = repository.get_ready_node_ids(job_id)
+        if not ready_node_ids:
+            continue
+        dispatch_plan.apply_async(
+            args=(
+                job_id,
+                snapshot["workflow_id"],
+                snapshot["workflow_version"],
+                snapshot["fingerprint"],
+            )
+        )
+        dispatched += 1
+    return {
+        "status": "reconciled",
+        "jobs": len(job_ids),
+        "dispatched": dispatched,
+    }
