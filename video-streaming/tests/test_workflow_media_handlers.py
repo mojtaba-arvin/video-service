@@ -230,14 +230,14 @@ class DurableMediaHandlerTests(unittest.TestCase):
 
         handlers = build_media_handlers(store)
         for protocol in ("hls", "dash"):
-            with self.subTest(protocol=protocol), \\
+            with self.subTest(protocol=protocol), \
                  patch("video_streaming.workflows.media_handlers.ffmpeg_streaming.input",
-                       return_value=_Video()), \\
+                       return_value=_Video()), \
                  patch("video_streaming.workflows.media_handlers.VideoEncodingFormats",
-                       return_value=_FormatFactory()), \\
+                       return_value=_FormatFactory()), \
                  patch("video_streaming.workflows.media_handlers.command_builder",
-                       return_value="ffmpeg -i input output"), \\
-                 patch("video_streaming.workflows.media_handlers.run_streaming_process"), \\
+                       return_value="ffmpeg -i input output"), \
+                 patch("video_streaming.workflows.media_handlers.run_streaming_process"), \
                  patch("video_streaming.workflows.media_handlers.validate_package",
                        return_value=_Validation()):
                 result = handlers["video.{}.package".format(protocol)](
