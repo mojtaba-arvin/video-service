@@ -117,7 +117,7 @@ def _upload_file(
             _multipart_upload(
                 s3_client, path, extra, size, dont_replace, progress
             )
-    except AttemptLeaseLost:
+    except (AttemptLeaseLost, PermanentOperationError, RetryableOperationError):
         raise
     except Exception as exc:
         if _is_precondition_failure(exc):
