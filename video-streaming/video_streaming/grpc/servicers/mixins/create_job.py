@@ -3,6 +3,8 @@ import json
 import logging
 import uuid
 
+from video_streaming import settings
+
 
 logger = logging.getLogger(__name__)
 from celery import result as celery_result, chain, group, signature, \
@@ -667,7 +669,16 @@ class CreateJobMixin(object):
                 reference_id=request.reference_id,
                 workflow_name="video.vod",
                 execution_plan=execution_plan,
-                execution_backend="legacy_celery",
+                execution_backend=(
+                    "durable_vod_v1" if
+                    settings.WORKFLOW_DURABLE_DISPATCH_ENABLED
+                    else "legacy_celery"
+                ),
+                enqueue_dispatch=settings.WORKFLOW_DURABLE_DISPATCH_ENABLED,
+                outbox_dedupe_key=(
+                    "workflow.dispatch:{}".format(request_id)
+                    if settings.WORKFLOW_DURABLE_DISPATCH_ENABLED else None
+                ),
                 owner_principal=principal,
                 secret_envelopes=webhook_envelopes,
                 metadata={
@@ -735,5 +746,10 @@ class CreateJobMixin(object):
             fifth_level  # outputs
         ]
 
-        self._apply_job(request_id, ordered_levels)
+        # With the durable feature gate enabled, CreateJob and its initial
+        # plan-dispatch intent were committed atomically above. The scheduled
+        # outbox relay owns broker publication; never also enqueue the legacy
+        # Celery graph for the same Job.
+        if not settings.WORKFLOW_DURABLE_DISPATCH_ENABLED:
+            self._apply_job(request_id, ordered_levels)
         return self._job_response(request_id)
