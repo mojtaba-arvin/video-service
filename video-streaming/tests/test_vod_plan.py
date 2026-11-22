@@ -185,8 +185,8 @@ class VODPlanBuilderTests(unittest.TestCase):
                 "key": "master.m3u8",
                 "protocol": "hls",
                 "custom_qualities": [
-                    {"size": [1280, 720], "bitrate": None},
-                    {"size": None, "bitrate": [900000, None, 1000000]},
+                    {"size": [1280, 720], "bitrate": [900000, 128000, 1000000]},
+                    {"size": [640, 360], "bitrate": [500000, 96000, 600000]},
                 ],
             }],
         }
@@ -196,8 +196,8 @@ class VODPlanBuilderTests(unittest.TestCase):
             if node["operation"] == "video.hls.package"
         )
         self.assertEqual(package["parameters"]["custom_qualities"], [
-            {"size": [1280, 720], "bitrate": None},
-            {"size": None, "bitrate": [900000, None, 1000000]},
+            {"size": [1280, 720], "bitrate": [900000, 128000, 1000000]},
+            {"size": [640, 360], "bitrate": [500000, 96000, 600000]},
         ])
 
     def test_rejects_malformed_custom_quality_payloads(self):
@@ -209,6 +209,8 @@ class VODPlanBuilderTests(unittest.TestCase):
             [{"size": None, "bitrate": [0, None, None]}],
             [{"size": None, "bitrate": [1, 2]}],
             [{"size": None, "bitrate": None}],
+            [{"size": [640, 360], "bitrate": None}],
+            [{"size": None, "bitrate": [500000, 96000, 600000]}],
         ]
         for custom_qualities in invalid_values:
             with self.subTest(custom_qualities=custom_qualities):
