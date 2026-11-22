@@ -425,9 +425,11 @@ jobs:
           CELERY_BROKER_URL: redis://127.0.0.1:6379/5
           CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/6
         run: |
-          python - <<'PY'
+          # Validate discovery separately; the test itself must run from a real
+          # Python module so multiprocessing's spawn context can re-import
+          # __main__ (running the test runner from stdin breaks child startup).
+          python -c '
           import unittest
-
           loader = unittest.TestLoader()
           suite = loader.discover(
               "video-streaming/tests",
@@ -445,23 +447,12 @@ jobs:
                       discovered
                   )
               )
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          skipped = len(result.skipped)
-          print(
-              "Worker process tests: discovered={}, executed={}, skipped={}, "
-              "failures={}, errors={}".format(
-                  discovered, result.testsRun, skipped,
-                  len(result.failures), len(result.errors)
-              )
-          )
-          if (
-              result.testsRun != discovered
-              or skipped
-              or result.failures
-              or result.errors
-          ):
-              raise SystemExit("OS-process worker recovery acceptance failed")
-          PY
+          '
+
+          python -m unittest discover \\
+            -s video-streaming/tests \\
+            -p 'test_workflow_worker_process_recovery.py' \\
+            -v
 
       - name: Run durable S3 publication and webhook retry contract tests
         env:
