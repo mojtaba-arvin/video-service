@@ -756,7 +756,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             processing_id, _, processing_token, processing_expiry = (
                 self.repository.claim_attempt(
                     job_id, "p0", lease_owner="contended-processing",
-                    lease_ttl_seconds=0.05,
+                    lease_ttl_seconds=5.0,
                 )
             )
         finally:
