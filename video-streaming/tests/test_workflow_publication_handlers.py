@@ -175,8 +175,8 @@ class DurablePublicationHandlerTests(unittest.TestCase):
     def test_directory_upload_publishes_versioned_files_before_manifest(self):
         files = []
         for path, payload in (
-            ("master.m3u8", b"#EXTM3U\\n720p.m3u8\\n"),
-            ("720p.m3u8", b"#EXTM3U\\n#EXTINF:2,\\nsegment.ts\\n"),
+            ("master.m3u8", b"#EXTM3U\n720p.m3u8\n"),
+            ("720p.m3u8", b"#EXTM3U\n#EXTINF:2,\nsegment.ts\n"),
             ("segment.ts", b"transport-stream"),
         ):
             artifact = self.store.add("s3://package/" + path, payload)
@@ -207,8 +207,8 @@ class DurablePublicationHandlerTests(unittest.TestCase):
     def test_directory_retry_reuses_versioned_package_and_entrypoint(self):
         files = []
         for path, payload in (
-            ("master.m3u8", b"#EXTM3U\\n720p.m3u8\\n"),
-            ("720p.m3u8", b"#EXTM3U\\n#EXTINF:2,\\nsegment.ts\\n"),
+            ("master.m3u8", b"#EXTM3U\n720p.m3u8\n"),
+            ("720p.m3u8", b"#EXTM3U\n#EXTINF:2,\nsegment.ts\n"),
             ("segment.ts", b"transport-stream"),
         ):
             artifact = self.store.add("s3://retry-package/" + path, payload)
