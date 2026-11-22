@@ -249,58 +249,72 @@ def build_input_handlers(
         source = _find_dependency_artifact(
             context, "input.{}.file_artifact".format(name)
         )
-        descriptor, local_path = tempfile.mkstemp(prefix="workflow-probe-")
-        os.close(descriptor)
         usage = ProcessUsageAccumulator()
+        if name == "video":
+            descriptor, local_path = tempfile.mkstemp(prefix="workflow-probe-")
+            os.close(descriptor)
 
-        def on_usage(sample):
-            usage.record(sample)
-            _check_active(context)
+            def on_usage(sample):
+                usage.record(sample)
+                _check_active(context)
 
-        try:
-            artifact_store.download_file(
-                source["uri"], local_path,
-                expected_sha256=source.get("checksum_sha256"),
-                on_chunk=lambda _size: _check_active(context),
-            )
-            _check_active(context)
-            metadata = probe(
-                local_path,
-                ffprobe_bin_path,
-                probe_timeout_seconds,
-                should_cancel=context.is_cancelled,
-                on_usage=on_usage,
-            )
-            streams = metadata.get("streams", [])
-            if name == "video" and not any(
-                stream.get("codec_type") == "video" for stream in streams
-            ):
-                raise PermanentOperationError("primary input contains no video stream")
-            stored = _put_json(
-                artifact_store, metadata,
-                "inputs/{}/probe.json".format(name),
-                context.attempt_id,
-            )
-            metrics = usage.aggregate()
-            metrics["input_bytes"] = source["size_bytes"]
-            artifacts = [
-                dict(source),
-                _artifact_record(
-                    "input.{}.probe_metadata".format(name),
-                    "probe_metadata",
-                    stored,
-                ),
-            ]
-            return {
-                "validation_report": dict(_VALIDATION),
-                "artifacts": artifacts,
-                "metrics": metrics,
-            }
-        finally:
             try:
-                os.unlink(local_path)
-            except OSError:
-                pass
+                artifact_store.download_file(
+                    source["uri"], local_path,
+                    expected_sha256=source.get("checksum_sha256"),
+                    on_chunk=lambda _size: _check_active(context),
+                )
+                _check_active(context)
+                metadata = probe(
+                    local_path,
+                    ffprobe_bin_path,
+                    probe_timeout_seconds,
+                    should_cancel=context.is_cancelled,
+                    on_usage=on_usage,
+                )
+                streams = metadata.get("streams", [])
+                if not any(
+                    stream.get("codec_type") == "video" for stream in streams
+                ):
+                    raise PermanentOperationError(
+                        "primary input contains no video stream"
+                    )
+            finally:
+                try:
+                    os.unlink(local_path)
+                except OSError:
+                    pass
+        elif name == "watermark":
+            # The legacy pipeline intentionally defers watermark validation
+            # (including SVG handling) to the FFmpeg watermark operation.
+            # Do not introduce an FFprobe-only format restriction here.
+            _check_active(context)
+            metadata = {
+                "input_name": "watermark",
+                "inspection": "deferred_to_ffmpeg",
+            }
+        else:
+            raise PermanentOperationError("unsupported input name")
+        stored = _put_json(
+            artifact_store, metadata,
+            "inputs/{}/probe.json".format(name),
+            context.attempt_id,
+        )
+        metrics = usage.aggregate()
+        metrics["input_bytes"] = source["size_bytes"]
+        artifacts = [
+            dict(source),
+            _artifact_record(
+                "input.{}.probe_metadata".format(name),
+                "probe_metadata",
+                stored,
+            ),
+        ]
+        return {
+            "validation_report": dict(_VALIDATION),
+            "artifacts": artifacts,
+            "metrics": metrics,
+        }
 
     def inputs_funnel(node, context):
         del node
