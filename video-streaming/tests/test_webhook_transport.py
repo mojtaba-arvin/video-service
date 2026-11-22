@@ -215,6 +215,28 @@ class WebhookDestinationTests(unittest.TestCase):
                     headers={"Host": "attacker.example"},
                 )
 
+    def test_request_rejects_unencodable_header_before_connecting(self):
+        target = WebhookTarget(
+            scheme="https", hostname="callback.example.test", port=443,
+            request_target="/callback", host_header="callback.example.test",
+            addresses=("93.184.216.34",),
+        )
+        with patch(
+                "video_streaming.ffmpeg.webhook_transport.resolve_webhook_target",
+                return_value=target):
+            with patch(
+                    "video_streaming.ffmpeg.webhook_transport._PinnedHTTPSConnection"
+                    ) as connection:
+                with self.assertRaises(WebhookDestinationError):
+                    request_webhook(
+                        "https://callback.example.test/callback",
+                        body="{}",
+                        connect_timeout=2.0,
+                        read_timeout=4.0,
+                        headers={"X-Test": "✓"},
+                    )
+        connection.assert_not_called()
+
     def test_http_response_is_returned_without_following_redirects(self):
         target = WebhookTarget(
             scheme="https",
