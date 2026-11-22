@@ -335,13 +335,15 @@ class ProcessTreeTerminationTests(unittest.TestCase):
         })
         usage.record({
             "process_id": "ffprobe",
-            "cpu_seconds": None,
+            "cpu_seconds": 0.25,
             "peak_memory_bytes": 128,
             "memory_duration_ms": 40,
         })
 
+        # CPU sums across distinct subprocesses; RSS remains a peak, while
+        # per-process lifetimes are additive.
         self.assertEqual(usage.aggregate(), {
-            "cpu_seconds": 0.75,
+            "cpu_seconds": 1.0,
             "peak_memory_bytes": 512,
             "memory_duration_ms": 140,
         })
