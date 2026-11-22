@@ -32,7 +32,7 @@ def _parameters(node):
 def _required_text(value, name):
     if not isinstance(value, str) or not value.strip():
         raise PermanentOperationError("{} is required".format(name))
-    return value.strip()
+    return value
 
 
 def _input_name(value):
