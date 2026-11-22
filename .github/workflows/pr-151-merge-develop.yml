@@ -82,19 +82,26 @@ jobs:
               if import_line not in text:
                   raise SystemExit("GetResults repository import anchor not found")
               text = text.replace(import_line, import_line + auth_import, 1)
-          signature = "    def _get_results(self, request, context):\\n"
-          loop = "        for request_id in request.tracking_ids:"
-          if signature not in text or loop not in text:
+          lines = text.splitlines()
+          try:
+              method_index = lines.index("    def _get_results(self, request, context):")
+          except ValueError:
               raise SystemExit("GetResults method insertion anchor not found")
-          guard = (
-              signature
-              + "        # Authorize the complete batch before reading any Redis projection.\\n"
-              + "        request_ids = tuple(request.tracking_ids)\\n"
-              + "        for request_id in request_ids:\\n"
-              + "            require_job_access(request_id, \\"video.jobs:read\\", context)\\n"
-          )
-          text = text.replace(signature, guard, 1)
-          path.write_text(text.replace(loop, "        for request_id in request_ids:", 1), encoding="utf-8")
+          guard_lines = [
+              "        # Authorize the complete batch before reading any Redis projection.",
+              "        request_ids = tuple(request.tracking_ids)",
+              "        for request_id in request_ids:",
+              '            require_job_access(request_id, "video.jobs:read", context)',
+          ]
+          if "        request_ids = tuple(request.tracking_ids)" not in lines:
+              lines[method_index + 1:method_index + 1] = guard_lines
+          try:
+              loop_index = lines.index("        for request_id in request.tracking_ids:", method_index + 1)
+          except ValueError:
+              loop_index = -1
+          if loop_index >= 0:
+              lines[loop_index] = "        for request_id in request_ids:"
+          path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
           PY
             git add -- "${conflicts[@]}"               video-streaming/tests/test_vod_pipeline_e2e.py               video-streaming/video_streaming/grpc/servicers/mixins/get_results.py
             if git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- '*.py'; then
