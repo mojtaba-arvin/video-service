@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine, event
 
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
-from video_streaming.workflows.domain import InvalidStateTransition
+from video_streaming.workflows.domain import AttemptLeaseLost, InvalidStateTransition
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.errors import PermanentOperationError
 from video_streaming.workflows.repository import WorkflowRepository
@@ -408,9 +408,7 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
             ))
             self.assertTrue(context.is_terminal())
             context.cancel(reason="sibling failed the workflow")
-            raise __import__(
-                "video_streaming.workflows.domain", fromlist=["AttemptLeaseLost"]
-            ).AttemptLeaseLost("workflow is terminal")
+            raise AttemptLeaseLost("workflow is terminal")
 
         result = self.executor(handler).execute(job_id, "active")
         self.assertEqual(result["status"], "terminal")
