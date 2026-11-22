@@ -255,5 +255,76 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+    def test_concurrent_redeliveries_recover_expired_attempt_once(self):
+        """Concurrent deliveries must serialize recovery and create one retry."""
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def handler(_node, _context):
+            calls.append(1)
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError("test handler release timed out")
+            return {"validation_report": {"valid": True, "errors": []}}
+
+        self.handlers = {
+            operation: handler for operation in PLAN_OPERATIONS
+        }
+        job_id, snapshot = self._create_job(retry_delay=0)
+        self.repository.claim_node_attempt(
+            job_id,
+            "root",
+            lease_owner="worker-that-was-lost",
+            lease_ttl_seconds=30,
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.query(AttemptRecord).filter(
+                AttemptRecord.stage_id == snapshot["stages"][0]["id"],
+                AttemptRecord.state == "RUNNING",
+            ).one()
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        args = (
+            job_id,
+            "root",
+            snapshot["workflow_id"],
+            snapshot["workflow_version"],
+            snapshot["fingerprint"],
+        )
+        deliveries = [
+            tasks.execute_node.apply_async(args=args, queue=self.queue)
+            for _ in range(2)
+        ]
+
+        try:
+            self.assertTrue(
+                entered.wait(10),
+                "no redelivered worker entered the recovered Attempt",
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not any(
+                    delivery.ready() for delivery in deliveries):
+                time.sleep(0.02)
+            ready = [delivery for delivery in deliveries if delivery.ready()]
+            self.assertEqual(
+                len(ready), 1,
+                "the competing delivery should finish while the sole handler is blocked",
+            )
+            self.assertEqual(ready[0].get(timeout=1)["status"], "already_running")
+        finally:
+            release.set()
+
+        outcomes = [delivery.get(timeout=15)["status"] for delivery in deliveries]
+        self.assertIn("completed", outcomes)
+        self.assertIn("already_running", outcomes)
+        finished = self._wait_for_finished(job_id)
+        attempts = finished["stages"][0]["attempts"]
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["status"], "RETRYABLE")
+        self.assertEqual(attempts[1]["status"], "SUCCEEDED")
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
