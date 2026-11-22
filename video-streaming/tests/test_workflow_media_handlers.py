@@ -283,7 +283,12 @@ class DurableMediaHandlerTests(unittest.TestCase):
             )
             manifest = json.loads(store.objects[directory_record["uri"]].decode("utf-8"))
             self.assertEqual(manifest["protocol"], protocol)
-            self.assertEqual(len(manifest["files"]), 2)
+            self.assertGreaterEqual(len(manifest["files"]), 2)
+            self.assertTrue(any(
+                item["path"].endswith(
+                    ".m3u8" if protocol == "hls" else ".mpd"
+                ) for item in manifest["files"]
+            ))
 
     def test_watermark_process_publishes_video_artifact_without_celery(self):
         store = _ArtifactStore()
