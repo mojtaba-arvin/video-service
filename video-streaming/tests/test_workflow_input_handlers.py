@@ -1,8 +1,6 @@
 """Contract tests for durable input handlers and cross-worker artifact handoff."""
 import hashlib
 import json
-import os
-import tempfile
 import unittest
 
 from video_streaming.workflows.domain import AttemptLeaseLost
@@ -200,6 +198,7 @@ class DurableInputHandlerTests(unittest.TestCase):
         )
         self.assertEqual(len(self.s3.head_calls), 1)
         self.assertEqual(len(self.s3.get_calls), 1)
+        self.assertEqual(self.s3.get_calls[0]["VersionId"], "version-1")
         self.assertEqual(check_context.heartbeat_calls, 1)
         self.assertGreaterEqual(download_context.heartbeat_calls, 2)
         self.assertGreaterEqual(analyze_context.heartbeat_calls, 2)
@@ -256,10 +255,6 @@ class DurableInputHandlerTests(unittest.TestCase):
             b"video-bytes", "inputs/video/source.bin", "prior-attempt",
             media_type="video/mp4",
         )
-        with tempfile.NamedTemporaryFile(delete=False) as source:
-            source.write(b"video-bytes")
-            source_path = source.name
-        os.unlink(source_path)
         context = _Context("analyze", {
             "input-video-download": [{
                 "logical_name": "input.video.file_artifact",
