@@ -1321,7 +1321,7 @@ def _probe_package_metadata(
                         item.setdefault(
                             "mimeType", adaptation.attrib.get("mimeType")
                         )
-                        if _is_video_representation(item, adaptation):
+                        if _is_video_representation(representation, adaptation):
                             representations.append(item)
 
             if streams and len(streams) != len(representations):
