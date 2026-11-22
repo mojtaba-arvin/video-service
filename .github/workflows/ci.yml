@@ -437,8 +437,8 @@ jobs:
           )
           if loader.errors:
               raise SystemExit(
-                  "Worker process recovery discovery failed:\\n"
-                  + "\\n".join(loader.errors)
+                  "Worker process recovery discovery failed:\n"
+                  + "\n".join(loader.errors)
               )
           discovered = suite.countTestCases()
           if discovered != 1:
@@ -449,9 +449,9 @@ jobs:
               )
           '
 
-          python -m unittest discover \\
-            -s video-streaming/tests \\
-            -p 'test_workflow_worker_process_recovery.py' \\
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_worker_process_recovery.py' \
             -v
 
       - name: Run durable S3 publication and webhook retry contract tests
