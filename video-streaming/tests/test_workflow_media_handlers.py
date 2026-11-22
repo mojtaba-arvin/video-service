@@ -327,6 +327,9 @@ class DurableMediaHandlerTests(unittest.TestCase):
         )
 
         class _Stream:
+            def __init__(self, path=None):
+                self.path = path
+
             def output(self, path):
                 self.path = path
                 return self
@@ -354,7 +357,7 @@ class DurableMediaHandlerTests(unittest.TestCase):
             return_value=_Stream(),
         ), patch(
             "video_streaming.workflows.media_handlers.ffmpeg.output",
-            return_value=_Stream(),
+            side_effect=lambda *_streams: _Stream(_streams[-1]),
         ) as output, patch(
             "video_streaming.workflows.media_handlers.ffmpeg.compile",
             side_effect=lambda stream, **_kwargs: ["ffmpeg", stream.path],
