@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from video_streaming.ffmpeg.tasks.generate_thumbnail import generate_thumbnail
+import importlib
+
+thumbnail_task = importlib.import_module(
+    "video_streaming.ffmpeg.tasks.generate_thumbnail"
+)
+generate_thumbnail = thumbnail_task.generate_thumbnail
 
 
 class _Repository:
@@ -44,7 +49,12 @@ class GenerateThumbnailTaskTests(unittest.TestCase):
                     return_value=repository,
                 ), patch(
                     "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "AttemptLeaseHeartbeat"
+                    "AttemptLeaseHeartbeat",
+                    return_value=type(
+                        "HeartbeatStub", (),
+                        {"assert_owned": lambda self: None,
+                         "on_usage": lambda self, _metrics: None}
+                    )(),
                 ), patch(
                     "video_streaming.ffmpeg.tasks.generate_thumbnail."
                     "render_thumbnail",
