@@ -148,7 +148,7 @@ def _upload_file(
     if (
         int(head.get("ContentLength", -1)) != size
         or head.get("Metadata", {}).get("sha256") != checksum
-        or head.get("Metadata", {}).get("attempt_id") != attempt_id
+        or head.get("Metadata", {}).get("idempotency_key") != idempotency_key
     ):
         raise RetryableOperationError("published output read-back did not match")
     return {
@@ -512,7 +512,9 @@ def build_publication_handlers(
                 else:
                     raise RetryableOperationError("package manifest publication failed") from exc
             _check_active(context)
-            head = s3_client.head_object(Bucket=bucket, Key=manifest_key)
+            head = s3_client.head_object(
+                Bucket=bucket, Key=publication_manifest_key
+            )
             digest = hashlib.sha256(published_manifest).hexdigest()
             if (
                 int(head.get("ContentLength", -1)) != len(published_manifest)
