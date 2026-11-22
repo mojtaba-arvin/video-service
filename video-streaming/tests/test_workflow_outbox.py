@@ -268,11 +268,6 @@ class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
         database_url = os.environ["WORKFLOW_DATABASE_URL"]
         repository = WorkflowRepository(database_url)
         competing_repository = WorkflowRepository(database_url)
-        # This integration database is shared with the preceding repository
-        # acceptance step. Remove its prior fixtures so the global relay claim
-        # can only see the row whose lock this test deliberately holds.
-        with repository._session.begin() as session:
-            session.execute(text("DELETE FROM workflow_jobs"))
         job_id = str(uuid4())
         plan = WorkflowOutboxRepositoryTests.plan(job_id)
         repository.create_job(
@@ -296,14 +291,22 @@ class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
             # transaction and skip the locked row.
             with repository.engine.connect() as lock_connection:
                 with lock_connection.begin():
-                    locked_id = lock_connection.execute(
+                    # claim_outbox_batch is intentionally global. Lock
+                    # every row that can become eligible during this short
+                    # test, including fixtures left by earlier test classes,
+                    # so the competing relay cannot claim an unrelated row.
+                    locked_ids = set(lock_connection.execute(
                         text(
                             "SELECT id FROM workflow_outbox "
-                            "WHERE id = :outbox_id FOR UPDATE"
-                        ),
-                        {"outbox_id": outbox_id},
-                    ).scalar_one()
-                    self.assertEqual(locked_id, outbox_id)
+                            "WHERE available_at <= "
+                            "CURRENT_TIMESTAMP + INTERVAL '1 minute' "
+                            "AND (state = 'PENDING' OR "
+                            "(state = 'PROCESSING' AND lease_expires_at <= "
+                            "CURRENT_TIMESTAMP + INTERVAL '1 minute')) "
+                            "FOR UPDATE"
+                        )
+                    ).scalars().all())
+                    self.assertIn(outbox_id, locked_ids)
                     with ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(
                             competing_repository.claim_outbox_batch,
