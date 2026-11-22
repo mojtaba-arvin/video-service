@@ -98,7 +98,10 @@ class CreateJobMixin(object):
         playlists = []
         for number, output in enumerate(request.playlists):
             if not output.upload_to.key or output.upload_to.key.isspace():
-                continue
+                # A partially configured output must reject the whole request.
+                # Silently omitting it here would make the durable DAG smaller
+                # than the legacy Celery graph built from the protobuf request.
+                raise exceptions.S3KeyCanNotBeEmptyException
             encode_format, video_codec, audio_codec = self._get_format(output)
             if output.protocol == self.pb2.Protocol.HLS:
                 protocol = "hls"
@@ -135,7 +138,8 @@ class CreateJobMixin(object):
         thumbnails = []
         for number, output in enumerate(request.thumbnails):
             if not output.upload_to.key or output.upload_to.key.isspace():
-                continue
+                # Keep durable and legacy representations all-or-nothing.
+                raise exceptions.S3KeyCanNotBeEmptyException
             thumbnails.append({
                 "bucket": output.upload_to.bucket,
                 "key": output.upload_to.key,
