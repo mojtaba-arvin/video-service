@@ -391,7 +391,7 @@ def build_media_handlers(
                         else "application/octet-stream"
                     )
                     logical_name = (
-                        "package.{}.manifest".format(protocol_name)
+                        "package.{}_manifest".format(protocol_name)
                         if relative == os.path.basename(output_path)
                         else "package.file.{}".format(relative)
                     )
