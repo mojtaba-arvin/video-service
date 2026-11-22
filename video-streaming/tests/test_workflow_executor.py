@@ -279,6 +279,7 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         first = executor.execute(self.job_id, "check")
         self.assertEqual(first["status"], "retryable_failure")
         self.assertEqual(first["retry_after_seconds"], 1.0)
+        self._make_retry_due(self.job_id)
         second = executor.execute(self.job_id, "check")
         self.assertEqual(second["status"], "retryable_failure")
         self.assertEqual(second["retry_after_seconds"], 2.0)
