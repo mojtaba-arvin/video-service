@@ -51,8 +51,9 @@ _OPERATION_CLASSES = {
 def classify_operation(operation):
     """Return the explicit workload family for a typed operation.
 
-    Strings are accepted only when they exactly match a known OperationKind.
-    Unknown operations fail closed so new operations cannot silently inherit
+    Strings are accepted only when they exactly match a typed application or
+    durable VOD operation. Unknown operations fail closed so new operations
+    cannot silently inherit
     an inappropriate scheduling policy.
     """
     operation_value = (
@@ -66,6 +67,8 @@ def classify_operation(operation):
     try:
         return _OPERATION_CLASSES[operation_value]
     except KeyError:
-        raise ValueError("operation has no workload classification: {}".format(
-            operation.value
-        ))
+        raise ValueError(
+            "operation has no workload classification: {}".format(
+                operation_value
+            )
+        )
