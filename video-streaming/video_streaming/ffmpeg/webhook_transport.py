@@ -9,6 +9,7 @@ while HTTP Host and TLS SNI/certificate verification retain the original host.
 from dataclasses import dataclass
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 from urllib.parse import urlsplit
@@ -266,11 +267,18 @@ def request_webhook(
         if (
             not isinstance(name, str)
             or not isinstance(value, str)
-            or not name
+            or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
             or any(character in name + value for character in "\r\n")
             or name.lower() in ("host", "content-type", "content-length", "transfer-encoding")
         ):
             raise WebhookDestinationError("Webhook request headers are not allowed")
+        try:
+            name.encode("ascii")
+            value.encode("latin-1")
+        except UnicodeEncodeError as exc:
+            raise WebhookDestinationError(
+                "Webhook request headers contain unsupported characters"
+            ) from exc
         request_headers[name] = value
     last_connect_error = None
 
