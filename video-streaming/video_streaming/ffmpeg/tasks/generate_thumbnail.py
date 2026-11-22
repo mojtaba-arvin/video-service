@@ -14,6 +14,7 @@ from video_streaming.ffmpeg.thumbnail import (
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.lease import AttemptLeaseHeartbeat
+from video_streaming.execution.process_control import ProcessUsageAccumulator
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
@@ -122,44 +123,21 @@ def generate_thumbnail(
     # removes a caller-owned path from an earlier or concurrent execution.
     requested_output_path = output_path
     output_path = None
-    usage_metrics = {}
+    usage_metrics = ProcessUsageAccumulator()
 
     def capture_usage(metrics):
-        process_id = str(metrics.get("process_id") or "legacy")
-        previous = usage_metrics.get(process_id, {})
-        current = dict(previous)
-        current.update({
-            key: value for key, value in metrics.items()
-            if value is not None
-        })
-        # Samples are cumulative for one subprocess. Preserve the greatest
-        # valid observation so a later partial/None sample cannot erase it.
-        for key in ("cpu_seconds", "peak_memory_bytes", "memory_duration_ms"):
-            value = metrics.get(key)
-            if value is not None:
-                prior = previous.get(key)
-                current[key] = max(value, prior) if prior is not None else value
-        usage_metrics[process_id] = current
+        usage_metrics.record(metrics)
         lease_heartbeat.on_usage(metrics)
 
     def aggregate_process_usage():
-        samples = list(usage_metrics.values())
-        return {
-            "cpu_seconds": sum(
-                float(item["cpu_seconds"])
-                for item in samples if item.get("cpu_seconds") is not None
-            ),
-            "peak_memory_bytes": max(
-                (int(item["peak_memory_bytes"]) for item in samples
-                 if item.get("peak_memory_bytes") is not None),
-                default=0,
-            ) or None,
-            "memory_duration_ms": sum(
-                int(item["memory_duration_ms"])
-                for item in samples
-                if item.get("memory_duration_ms") is not None
-            ) or None,
-        }
+        return usage_metrics.aggregate()
+
+    def measured_cpu_seconds():
+        sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
+        return max(
+            child_cpu_seconds_since(cpu_started),
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
+        )
 
     try:
         # Redis status is a projection; the PostgreSQL lease remains authoritative.
@@ -232,10 +210,7 @@ def generate_thumbnail(
                 "input_bytes": input_bytes,
                 # The publisher owns the storage charge for the final object.
                 "output_bytes": 0,
-                "cpu_seconds": max(
-                    child_cpu_seconds_since(cpu_started),
-                    aggregate_process_usage()["cpu_seconds"],
-                ),
+                "cpu_seconds": measured_cpu_seconds(),
                 "peak_memory_bytes": aggregate_process_usage()[
                     "peak_memory_bytes"
                 ],
@@ -262,10 +237,7 @@ def generate_thumbnail(
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
                 metrics={
                     "input_bytes": input_bytes,
-                    "cpu_seconds": max(
-                        child_cpu_seconds_since(cpu_started),
-                        aggregate_process_usage()["cpu_seconds"],
-                    ),
+                    "cpu_seconds": measured_cpu_seconds(),
                     "peak_memory_bytes": aggregate_process_usage()[
                         "peak_memory_bytes"
                     ],
@@ -292,10 +264,7 @@ def generate_thumbnail(
             error_message=str(exc),
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": max(
-                    child_cpu_seconds_since(cpu_started),
-                    aggregate_process_usage()["cpu_seconds"],
-                ),
+                "cpu_seconds": measured_cpu_seconds(),
                 "peak_memory_bytes": aggregate_process_usage()[
                     "peak_memory_bytes"
                 ],
@@ -318,10 +287,7 @@ def generate_thumbnail(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=max(
-            child_cpu_seconds_since(cpu_started),
-            aggregate_process_usage()["cpu_seconds"],
-        ),
+        cpu_seconds=measured_cpu_seconds(),
         peak_memory_bytes=aggregate_process_usage()["peak_memory_bytes"],
         memory_duration_ms=aggregate_process_usage()["memory_duration_ms"],
         validation_report=validation_report,
