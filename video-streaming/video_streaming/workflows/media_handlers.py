@@ -132,6 +132,7 @@ def _store_output(artifact_store, path, logical_name, media_type, context):
         "media/{}".format(logical_name.replace(".", "/")),
         context.attempt_id,
         media_type=media_type,
+        on_chunk=lambda _size: _check_active(context),
     )
     _check_active(context)
     return {
@@ -418,6 +419,7 @@ def build_media_handlers(
                 "media/{}/directory-manifest.json".format(protocol_name),
                 context.attempt_id,
                 media_type="application/json",
+                on_chunk=lambda _size: _check_active(context),
             )
             directory_artifact = {
                 "logical_name": "package.directory_manifest",
