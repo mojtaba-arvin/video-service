@@ -269,14 +269,46 @@ jobs:
       - name: Prepare safe environment for runtime logging tests
         run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 
-      - name: Run durable VOD request adapter tests
+      - name: Run required durable VOD request adapter tests
         env:
           PYTHONPATH: video-streaming
+          VIDEO_STREAMING_REQUIRE_GRPC_TESTS: "1"
         run: |
-          python -m unittest discover \
-            -s video-streaming/tests \
-            -p 'test_durable_vod_request_adapter.py' \
-            -v
+          python - <<'PY'
+          import sys
+          import unittest
+
+          loader = unittest.TestLoader()
+          suite = loader.discover(
+              "video-streaming/tests",
+              pattern="test_durable_vod_request_adapter.py",
+          )
+          if loader.errors:
+              raise SystemExit(
+                  "Required gRPC adapter test discovery failed:\\n"
+                  + "\\n".join(loader.errors)
+              )
+          discovered = suite.countTestCases()
+          if discovered < 1:
+              raise SystemExit("Required gRPC adapter lane discovered zero tests")
+
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          skipped = len(result.skipped)
+          print(
+              "adapter tests: discovered={}, executed={}, skipped={}, "
+              "failures={}, errors={}".format(
+                  discovered, result.testsRun, skipped,
+                  len(result.failures), len(result.errors)
+              )
+          )
+          if (
+              result.testsRun != discovered
+              or skipped != 0
+              or result.failures
+              or result.errors
+          ):
+              raise SystemExit("Required gRPC adapter acceptance failed")
+          PY
 
       - name: Run sensitive logging regression tests
         env:
