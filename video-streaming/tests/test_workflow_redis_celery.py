@@ -137,6 +137,13 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
 
     def test_outbox_republishes_when_broker_accepts_but_db_ack_fails(self):
         """A real Redis publish followed by a lost DB ack must replay safely."""
+        # The integration suite reuses one ephemeral PostgreSQL database.
+        # The relay claims all due rows, not only rows for this test Job, so
+        # remove prior test deliveries to make the injected first-ack failure
+        # apply to the one row whose state this test asserts.
+        with self.repository._session.begin() as session:
+            session.query(OutboxRecord).delete(synchronize_session=False)
+
         job_id = str(uuid.uuid4())
         plan = {
             "schema_version": 1,
@@ -203,6 +210,7 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
                 "mark_outbox_published",
                 side_effect=fail_first_database_ack):
             first = relay.run_once()
+            self.assertEqual(first["claimed"], 1)
             self.assertEqual(first["retried"], 1)
             self.assertEqual(
                 self.repository.get_outbox_snapshot(outbox_id)["state"],
