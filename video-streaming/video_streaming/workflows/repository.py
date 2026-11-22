@@ -1742,6 +1742,52 @@ class WorkflowRepository:
             return False
 
         workflow = session.get(WorkflowRecord, stage.workflow_id)
+        job = session.execute(
+            select(JobRecord).where(
+                JobRecord.id == workflow.job_id
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if job is None or job.state in (
+                JobState.CANCELLED.value,
+                JobState.FAILED.value,
+                JobState.FINISHED.value):
+            previous_status = stage.status
+            self._transition(stage, StageState.CANCELLED)
+            attempt.state = AttemptState.CANCELLED.value
+            attempt.finished_at = now
+            started = attempt.started_at
+            if started.tzinfo is None or started.utcoffset() is None:
+                started = started.replace(tzinfo=timezone.utc)
+            attempt.duration_ms = max(
+                0, int((now - started).total_seconds() * 1000)
+            )
+            self._apply_attempt_accounting(
+                attempt,
+                {
+                    "duration_ms": attempt.duration_ms,
+                    "usage_capture": "incomplete_worker_lost",
+                },
+                pricing,
+            )
+            self._clear_attempt_lease(attempt)
+            attempt.error_code = "JOB_TERMINAL"
+            attempt.error_message = (
+                "Expired worker lease recovered after terminal Job state"
+            )
+            if job is not None:
+                _record_event(
+                    session,
+                    workflow.job_id,
+                    workflow.id,
+                    "ATTEMPT_LEASE_EXPIRED_TERMINAL_JOB",
+                    from_state=previous_status,
+                    to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt.id,
+                    payload={"job_state": job.state},
+                )
+            return True
+
         retry_limit = None
         if (
                 workflow is not None
@@ -1783,8 +1829,8 @@ class WorkflowRepository:
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
         if not exhausted:
-            retry_delay = _durable_retry_delay(
-                workflow, stage.stage_key, attempt.attempt_number
+            retry_not_before = _durable_retry_not_before(
+                workflow, stage.stage_key, attempt
             )
             _enqueue_durable_dispatch(
                 session,
@@ -1792,7 +1838,7 @@ class WorkflowRepository:
                 workflow.job_id,
                 attempt.id,
                 stage.id,
-                now + timedelta(seconds=retry_delay),
+                retry_not_before or now,
                 reason="retry",
                 event_type="WORKFLOW_RETRY_ENQUEUED",
             )
@@ -1840,6 +1886,31 @@ class WorkflowRepository:
         )
         return True
 
+    def _recover_expired_attempt_for_stage(
+            self, job_id, stage_key, pricing=None):
+        """Commit recovery independently of a later claim's eligibility checks.
+
+        A claim can legitimately be rejected after recovery (for example while
+        a retry delay or dependency is pending). Keeping recovery in that claim
+        transaction would roll it back with the rejection.
+        """
+        with self._session.begin() as session:
+            stage = self._find_stage(
+                session, job_id, stage_key, lock=True
+            )
+            attempt = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).order_by(AttemptRecord.attempt_number.desc())
+                .limit(1).with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None:
+                return False
+            return self._recover_expired_attempt_in_session(
+                session, stage, attempt, utcnow(), pricing
+            )
+
     def claim_attempt(
             self,
             job_id,
@@ -1861,6 +1932,9 @@ class WorkflowRepository:
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        self._recover_expired_attempt_for_stage(
+            job_id, stage_key, pricing=pricing
+        )
         lease_token = secrets.token_urlsafe(32)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
@@ -1922,11 +1996,13 @@ class WorkflowRepository:
                         "Stage {} has an active state without a claimable attempt"
                         .format(stage_key)
                     )
-                if not self._recover_expired_attempt_in_session(
-                        session, stage, running, now, pricing):
-                    raise StageAlreadyRunning(
-                        "Stage {} already has a live attempt lease".format(stage_key)
-                    )
+                # Expired leases were recovered and committed in a
+                # separate transaction before this claim. If a lease expires
+                # while this transaction waits, reject now; the next delivery
+                # will recover it without rolling back unrelated state.
+                raise StageAlreadyRunning(
+                    "Stage {} already has an active attempt lease".format(stage_key)
+                )
 
             if (
                     stage.status == StageState.RETRY_WAIT.value
@@ -1976,6 +2052,19 @@ class WorkflowRepository:
                     )
                 )
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal or missing Job cannot claim an Attempt"
+                )
+
             previous_status = stage.status
             next_number = session.execute(
                 select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
@@ -2001,7 +2090,6 @@ class WorkflowRepository:
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
@@ -2436,6 +2524,9 @@ class WorkflowRepository:
             attempt_scoped_object_key(package_output_key, "validation-id")
 
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
+        self._recover_expired_attempt_for_stage(
+            job_id, stage_key, pricing=pricing
+        )
         lease_token = secrets.token_urlsafe(32)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
@@ -2462,12 +2553,10 @@ class WorkflowRepository:
                     .with_for_update()
                 ).scalar_one_or_none()
                 if running is not None:
-                    if not self._recover_expired_attempt_in_session(
-                            session, stage, running, now, pricing):
-                        raise StageAlreadyRunning(
-                            "Stage {} already has a live publication attempt"
-                            .format(stage_key)
-                        )
+                    raise StageAlreadyRunning(
+                        "Stage {} already has an active publication attempt"
+                        .format(stage_key)
+                    )
                 elif stage.status == StageState.PUBLISHING.value:
                     raise StageAlreadyRunning(
                         "Stage {} is publishing without an active Attempt".format(
@@ -2531,6 +2620,19 @@ class WorkflowRepository:
                     "Stage {} already has an active attempt".format(stage_key)
                 )
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal or missing Job cannot claim publication"
+                )
+
             previous_status = stage.status
             if stage.status == StageState.RETRY_WAIT.value:
                 self._transition(stage, StageState.VALIDATED)
@@ -2582,7 +2684,6 @@ class WorkflowRepository:
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
@@ -3300,20 +3401,34 @@ class WorkflowRepository:
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             if retryable and workflow.execution_backend == "durable_vod_v1":
-                delay = (
-                    float(retry_after_seconds)
-                    if retry_after_seconds is not None
-                    else _durable_retry_delay(
-                        workflow, stage.stage_key, attempt.attempt_number
-                    )
+                plan_delay = _durable_retry_delay(
+                    workflow, stage.stage_key, attempt.attempt_number
                 )
+                if (
+                        retry_after_seconds is not None
+                        and not math.isclose(
+                            float(retry_after_seconds),
+                            plan_delay,
+                            rel_tol=0.0,
+                            abs_tol=1e-9,
+                        )):
+                    raise ValueError(
+                        "retry_after_seconds must match the immutable plan policy"
+                    )
+                retry_not_before = _durable_retry_not_before(
+                    workflow, stage.stage_key, attempt
+                )
+                if retry_not_before is None:
+                    raise InvalidStateTransition(
+                        "Durable retry requires a persisted attempt completion time"
+                    )
                 _enqueue_durable_dispatch(
                     session,
                     workflow,
                     job_id,
                     attempt_id,
                     stage.id,
-                    attempt.finished_at + timedelta(seconds=delay),
+                    retry_not_before,
                     reason="retry",
                     event_type="WORKFLOW_RETRY_ENQUEUED",
                 )
