@@ -52,8 +52,8 @@ def _required_text(value, name):
 
 
 def _check_active(context):
-    if context.is_cancelled():
-        context.cancel(reason="JOB_CANCELLED_DURING_MEDIA_OPERATION")
+    if context.is_terminal():
+        context.cancel(reason="JOB_TERMINAL_DURING_MEDIA_OPERATION")
         raise AttemptLeaseLost("workflow job was cancelled")
     if context.heartbeat() is False:
         raise AttemptLeaseLost("workflow attempt lease was lost")
