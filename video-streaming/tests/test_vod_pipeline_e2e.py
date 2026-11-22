@@ -20,6 +20,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from video_streaming.core.constants.cache_keys import CacheKeysTemplates
+
 
 _REQUIRED_MODULES = (
     "boto3",
