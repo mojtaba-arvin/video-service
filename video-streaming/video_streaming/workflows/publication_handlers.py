@@ -115,7 +115,7 @@ def _upload_file(
                 s3_client.put_object(Body=body, **extra)
         else:
             _multipart_upload(
-                s3_client, path, extra, size, dont_replace, progress
+                s3_client, path, extra, size, progress
             )
     except (AttemptLeaseLost, PermanentOperationError, RetryableOperationError):
         raise
@@ -173,7 +173,7 @@ class _ProgressReader:
         return getattr(self._source, name)
 
 
-def _multipart_upload(s3_client, path, params, size, dont_replace, progress):
+def _multipart_upload(s3_client, path, params, size, progress):
     created = s3_client.create_multipart_upload(
         Bucket=params["Bucket"],
         Key=params["Key"],
@@ -431,6 +431,7 @@ def build_publication_handlers(
         )
         uploaded = []
         total_bytes = 0
+        input_bytes = 0
         with tempfile.TemporaryDirectory(prefix="workflow-upload-directory-") as directory:
             for item in package_manifest["files"]:
                 if not isinstance(item, dict):
@@ -445,6 +446,7 @@ def build_publication_handlers(
                     on_chunk=lambda _size: _check_active(context),
                 )
                 _check_active(context)
+                input_bytes += os.path.getsize(local_path)
                 output_key = posixpath.join(version_prefix, relative)
                 published = _upload_file(
                     s3_client, bucket, output_key, local_path, context.attempt_id,
@@ -560,7 +562,7 @@ def build_publication_handlers(
             },
             "artifacts": [manifest_record],
             "metrics": {
-                "input_bytes": directory_record.get("size_bytes"),
+                "input_bytes": input_bytes,
                 "output_bytes": total_bytes + len(published_manifest),
                 "artifact_count": len(uploaded) + 1,
             },
