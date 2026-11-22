@@ -14,6 +14,67 @@ class ProcessTreeTerminationError(RuntimeError):
     """Raised when one or more descendants survive forced termination."""
 
 
+class ProcessUsageAccumulator:
+    """Aggregate cumulative usage samples without treating unknown as zero.
+
+    Each supervisor emits cumulative samples for one opaque subprocess ID.
+    Keep the greatest known value per process; a later partial sample must not
+    erase an earlier observation. Across processes, CPU and lifetime are
+    additive while peak process-tree RSS is the maximum observed value.
+    """
+
+    _FIELDS = (
+        "cpu_seconds",
+        "peak_memory_bytes",
+        "memory_duration_ms",
+    )
+
+    def __init__(self):
+        self._samples = {}
+
+    def record(self, metrics):
+        if not isinstance(metrics, dict):
+            raise TypeError("process usage metrics must be a mapping")
+        process_id = str(metrics.get("process_id") or "legacy")
+        sample = dict(self._samples.get(process_id, {}))
+        for field in self._FIELDS:
+            value = metrics.get(field)
+            if value is None:
+                continue
+            previous = sample.get(field)
+            sample[field] = (
+                max(previous, value) if previous is not None else value
+            )
+        process_pid = metrics.get("process_pid")
+        if process_pid is not None:
+            sample["process_pid"] = process_pid
+        self._samples[process_id] = sample
+
+    def aggregate(self):
+        values = {
+            field: [
+                sample[field]
+                for sample in self._samples.values()
+                if sample.get(field) is not None
+            ]
+            for field in self._FIELDS
+        }
+        return {
+            "cpu_seconds": (
+                sum(float(value) for value in values["cpu_seconds"])
+                if values["cpu_seconds"] else None
+            ),
+            "peak_memory_bytes": (
+                max(int(value) for value in values["peak_memory_bytes"])
+                if values["peak_memory_bytes"] else None
+            ),
+            "memory_duration_ms": (
+                sum(int(value) for value in values["memory_duration_ms"])
+                if values["memory_duration_ms"] else None
+            ),
+        }
+
+
 def _active_process_group_members(process_group_id):
     """Return non-zombie PIDs currently owned by a process group."""
     active = []
