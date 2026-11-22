@@ -30,13 +30,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge current develop
+      - name: Merge current develop and expose conflict hunks
         shell: bash
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = "work/durable-vod-integration"
           git fetch --no-tags origin develop
-          git merge --no-edit --no-ff origin/develop
+          if ! git merge --no-edit --no-ff origin/develop; then
+            echo "::group::Unmerged paths"
+            git status --short
+            echo "::endgroup::"
+            while IFS= read -r path; do
+              echo "::group::Conflict diff: $path"
+              git diff --cc -- "$path" || true
+              echo "::endgroup::"
+            done < <(git diff --name-only --diff-filter=U)
+            exit 1
+          fi
 
       - name: Push merge commit without force
         run: git push origin HEAD:refs/heads/work/durable-vod-integration
