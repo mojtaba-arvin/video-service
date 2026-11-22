@@ -236,6 +236,15 @@ class DurableMediaHandlerTests(unittest.TestCase):
             def dash(self, _format):
                 return _Protocol()
 
+        def ordered_files(directory, manifest_name, protocol):
+            entries = []
+            for root, _directories, filenames in os.walk(directory):
+                for filename in filenames:
+                    path = os.path.join(root, filename)
+                    relative = os.path.relpath(path, directory).replace(os.sep, "/")
+                    entries.append((path, relative, os.path.getsize(path)))
+            return sorted(entries, key=lambda item: item[1] == manifest_name)
+
         class _FormatFactory:
             def get_format_class(self, *_args, **_kwargs):
                 return object()
@@ -258,7 +267,9 @@ class DurableMediaHandlerTests(unittest.TestCase):
                        return_value="ffmpeg -i input output"), \
                  patch("video_streaming.workflows.media_handlers.run_streaming_process"), \
                  patch("video_streaming.workflows.media_handlers.validate_package",
-                       return_value=_Validation()):
+                       return_value=_Validation()), \
+                 patch("video_streaming.workflows.media_handlers.ordered_package_files",
+                       side_effect=ordered_files):
                 result = handlers["video.{}.package".format(protocol)](
                     {"parameters": {
                         "protocol": protocol,
@@ -284,6 +295,13 @@ class DurableMediaHandlerTests(unittest.TestCase):
             manifest = json.loads(store.objects[directory_record["uri"]].decode("utf-8"))
             self.assertEqual(manifest["protocol"], protocol)
             self.assertGreaterEqual(len(manifest["files"]), 2)
+            self.assertNotIn("video-source", [item["path"] for item in manifest["files"]])
+            self.assertEqual(
+                manifest["files"][-1]["path"],
+                os.path.basename("exports/master.{}".format(
+                    "m3u8" if protocol == "hls" else "mpd"
+                )),
+            )
             self.assertTrue(any(
                 item["path"].endswith(
                     ".m3u8" if protocol == "hls" else ".mpd"
