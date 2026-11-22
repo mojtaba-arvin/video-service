@@ -30,7 +30,7 @@ from video_streaming.security.secret_store import SecretContextMismatch, SecretD
 
 
 _VALIDATION = {"valid": True, "errors": []}
-_CHUNK_SIZE = 8 * 1024 * 1024
+_CHUNK_SIZE = 64 * 1024 * 1024
 _MULTIPART_THRESHOLD = 64 * 1024 * 1024
 _MAX_PARTS = 10000
 
@@ -174,6 +174,10 @@ class _ProgressReader:
 
 
 def _multipart_upload(s3_client, path, params, size, progress):
+    if size > _CHUNK_SIZE * _MAX_PARTS:
+        raise PermanentOperationError(
+            "output exceeds the configured S3 multipart size limit"
+        )
     created = s3_client.create_multipart_upload(
         Bucket=params["Bucket"],
         Key=params["Key"],
