@@ -272,17 +272,16 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
             operation: handler for operation in PLAN_OPERATIONS
         }
         job_id, snapshot = self._create_job(retry_delay=0)
-        self.repository.claim_node_attempt(
-            job_id,
-            "root",
-            lease_owner="worker-that-was-lost",
-            lease_ttl_seconds=30,
+        attempt_id, _number, _token, _expiry = (
+            self.repository.claim_node_attempt(
+                job_id,
+                "root",
+                lease_owner="worker-that-was-lost",
+                lease_ttl_seconds=30,
+            )
         )
         with self.repository._session.begin() as session:
-            attempt = session.query(AttemptRecord).filter(
-                AttemptRecord.stage_id == snapshot["stages"][0]["id"],
-                AttemptRecord.state == "RUNNING",
-            ).one()
+            attempt = session.get(AttemptRecord, attempt_id)
             attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
 
         args = (
