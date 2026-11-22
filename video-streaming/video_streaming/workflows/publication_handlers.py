@@ -26,6 +26,7 @@ from video_streaming.workflows.errors import (
     RetryableOperationError,
 )
 from video_streaming.workflows.artifact_store import artifact_uri
+from video_streaming.security.secret_store import SecretContextMismatch, SecretDecryptionError
 
 
 _VALIDATION = {"valid": True, "errors": []}
@@ -569,9 +570,17 @@ def build_publication_handlers(
             _check_active(context)
             try:
                 destination = resolver(context.job_id, secret_ref)
-            except Exception as exc:
+            except SecretDecryptionError as exc:
+                raise RetryableOperationError(
+                    "encrypted webhook destination resolution failed"
+                ) from exc
+            except (SecretContextMismatch, ValueError) as exc:
                 raise PermanentOperationError(
-                    "encrypted webhook destination could not be resolved"
+                    "encrypted webhook destination is not valid for this Job"
+                ) from exc
+            except Exception as exc:
+                raise RetryableOperationError(
+                    "encrypted webhook destination resolution failed"
                 ) from exc
             job = repository.get_job_snapshot(context.job_id)
             if job is None:
@@ -584,6 +593,7 @@ def build_publication_handlers(
                 sort_keys=True,
                 separators=(",", ":"),
             )
+            _check_active(context)
             try:
                 response = webhook_requester(
                     destination,
