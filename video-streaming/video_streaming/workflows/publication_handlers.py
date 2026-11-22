@@ -191,6 +191,7 @@ def _multipart_upload(s3_client, path, params, size, dont_replace, progress):
                     break
                 if part_number > _MAX_PARTS:
                     raise PermanentOperationError("output exceeds S3 multipart limits")
+                progress(0)
                 response = s3_client.upload_part(
                     Bucket=params["Bucket"],
                     Key=params["Key"],
