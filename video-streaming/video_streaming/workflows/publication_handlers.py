@@ -439,6 +439,14 @@ def build_publication_handlers(
             )
             if root_item is None:
                 raise PermanentOperationError("package entrypoint is not in file inventory")
+            root_artifact = _artifact_metadata(root_item.get("artifact"))
+            if (
+                root_artifact["uri"] != entrypoint["uri"]
+                or root_artifact["checksum_sha256"] != entrypoint["checksum_sha256"]
+            ):
+                raise PermanentOperationError(
+                    "package entrypoint does not match its inventory record"
+                )
             root_local = os.path.join(directory, *entrypoint_path.split("/"))
             with open(root_local, "rb") as source:
                 root_payload = source.read()
