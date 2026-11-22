@@ -306,6 +306,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                     tenant_id="tenant-vod-e2e",
                     scopes=frozenset({
                         "video.jobs:create",
+                        "video.jobs:read",
                         "video.playback:write",
                         "video.qoe:read",
                     }),
