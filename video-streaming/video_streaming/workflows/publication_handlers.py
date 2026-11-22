@@ -101,8 +101,9 @@ def _upload_file(
         "Metadata": metadata,
         "ContentType": media_type or "application/octet-stream",
     }
-    if dont_replace:
-        extra["IfNoneMatch"] = "*"
+    # Every publication key is either the explicitly requested no-replace
+    # key or a stable idempotency-scoped key. Never overwrite either one.
+    extra["IfNoneMatch"] = "*"
 
     def progress(_amount):
         _check_active(context)
@@ -119,7 +120,7 @@ def _upload_file(
     except AttemptLeaseLost:
         raise
     except Exception as exc:
-        if dont_replace and _is_precondition_failure(exc):
+        if _is_precondition_failure(exc):
             existing = s3_client.head_object(Bucket=bucket, Key=key)
             stored_metadata = existing.get("Metadata", {})
             if (
@@ -488,10 +489,10 @@ def build_publication_handlers(
                         "sha256": hashlib.sha256(published_manifest).hexdigest(),
                         "package_version_prefix": version_prefix,
                     },
-                    **({"IfNoneMatch": "*"} if dont_replace else {}),
+                    IfNoneMatch="*",
                 )
             except Exception as exc:
-                if dont_replace and _is_precondition_failure(exc):
+                if _is_precondition_failure(exc):
                     existing = s3_client.head_object(
                         Bucket=bucket, Key=publication_manifest_key
                     )
