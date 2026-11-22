@@ -109,7 +109,7 @@ These are review findings and threat-model requirements, not proof that the serv
 
 ### P2 — dependency and deployment age
 
-The inspected Dockerfile and requirements pin an older runtime stack, including Python 3.9.2, FFmpeg 4.1, Celery 4.4.7, grpcio 1.35.0, protobuf 3.14.0, and boto3 1.17.14.
+The inspected Dockerfile and requirements pin an older runtime stack, including Python 3.9.2, FFmpeg 4.1, Celery 4.4.7, grpcio 1.35.0, protobuf 3.14.0, and boto3 1.35.99.
 
 Upgrade deliberately with compatibility tests and a reproducible image. Do not combine an untested dependency refresh with a large architecture rewrite.
 
