@@ -201,13 +201,13 @@ def build_media_handlers(
                     ffprobe_bin_path=ffprobe_bin_path,
                     timeout_seconds=settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS,
                     ffprobe_timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     usage_callback=on_usage,
                 )
             except AttemptLeaseLost:
                 raise
             except Exception as exc:
-                if context.is_cancelled():
+                if context.is_terminal():
                     context.cancel(reason="JOB_CANCELLED_DURING_THUMBNAIL")
                     raise AttemptLeaseLost("workflow job was cancelled") from exc
                 raise RetryableOperationError("thumbnail rendering failed") from exc
@@ -216,7 +216,7 @@ def build_media_handlers(
                 output_path,
                 ffprobe_bin_path=ffprobe_bin_path,
                 timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-                should_cancel=context.is_cancelled,
+                should_cancel=context.is_terminal,
                 on_usage=on_usage,
             )
             stream = next(
@@ -352,7 +352,7 @@ def build_media_handlers(
                     command,
                     timeout_seconds=settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS,
                     on_line=lambda _line, _process: None,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
                 _check_active(context)
@@ -365,7 +365,7 @@ def build_media_handlers(
                     metadata_probe_timeout_seconds=(
                         settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
                     ),
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
                 validation.require_valid()
@@ -373,7 +373,7 @@ def build_media_handlers(
             except AttemptLeaseLost:
                 raise
             except Exception as exc:
-                if context.is_cancelled():
+                if context.is_terminal():
                     context.cancel(reason="JOB_CANCELLED_DURING_PACKAGE")
                     raise AttemptLeaseLost("workflow job was cancelled") from exc
                 if isinstance(exc, (PermanentOperationError, RetryableOperationError)):
@@ -483,7 +483,7 @@ def build_media_handlers(
                     video_path,
                     ffprobe_bin_path=ffprobe_bin_path,
                     timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
                 has_audio = any(
@@ -504,7 +504,7 @@ def build_media_handlers(
                 run_cancellable_process(
                     command,
                     timeout_seconds=settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
                 _check_active(context)
@@ -512,13 +512,13 @@ def build_media_handlers(
                     output_path,
                     ffprobe_bin_path=ffprobe_bin_path,
                     timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
             except AttemptLeaseLost:
                 raise
             except Exception as exc:
-                if context.is_cancelled():
+                if context.is_terminal():
                     context.cancel(reason="JOB_CANCELLED_DURING_WATERMARK")
                     raise AttemptLeaseLost("workflow job was cancelled") from exc
                 raise RetryableOperationError("watermark processing failed") from exc
