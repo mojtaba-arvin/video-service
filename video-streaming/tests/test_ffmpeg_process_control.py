@@ -77,9 +77,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -111,9 +113,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -234,9 +238,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "orphan.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys; "
                 "subprocess.Popen([sys.executable, '-c', {!r}])"
@@ -267,9 +273,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -389,9 +397,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "lease-lost-child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
