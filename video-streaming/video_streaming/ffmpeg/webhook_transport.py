@@ -251,16 +251,27 @@ def request_webhook(
         body,
         connect_timeout,
         read_timeout,
-        allow_loopback=False):
+        allow_loopback=False,
+        headers=None):
     """POST one callback without redirects, proxy use, or a second DNS lookup."""
     target = resolve_webhook_target(
         url,
         allow_loopback=allow_loopback,
     )
-    headers = {
+    request_headers = {
         "Content-Type": "application/json",
         "Host": target.host_header,
     }
+    for name, value in (headers or {}).items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(value, str)
+            or not name
+            or any(character in name + value for character in "\\r\\n")
+            or name.lower() in ("host", "content-type", "content-length", "transfer-encoding")
+        ):
+            raise WebhookDestinationError("Webhook request headers are not allowed")
+        request_headers[name] = value
     last_connect_error = None
 
     for address in target.addresses:
@@ -290,7 +301,7 @@ def request_webhook(
                 "POST",
                 target.request_target,
                 body=body,
-                headers=headers,
+                headers=request_headers,
             )
             return WebhookResponse(connection.getresponse(), connection)
         except Exception as exc:
