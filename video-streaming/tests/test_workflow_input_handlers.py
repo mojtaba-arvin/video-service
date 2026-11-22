@@ -65,9 +65,14 @@ class _ArtifactStore:
     def put_bytes(self, payload, logical_key, attempt_id, media_type=None):
         return self._store(payload, logical_key, attempt_id, media_type)
 
-    def put_file(self, local_path, logical_key, attempt_id, media_type=None):
+    def put_file(
+            self, local_path, logical_key, attempt_id, media_type=None,
+            on_chunk=None):
         with open(local_path, "rb") as source:
-            return self._store(source.read(), logical_key, attempt_id, media_type)
+            payload = source.read()
+        if on_chunk is not None and payload:
+            on_chunk(len(payload))
+        return self._store(payload, logical_key, attempt_id, media_type)
 
     def download_file(
             self, uri, destination_path, expected_sha256=None, on_chunk=None):
@@ -203,7 +208,9 @@ class DurableInputHandlerTests(unittest.TestCase):
         self.assertEqual(len(self.s3.get_calls), 1)
         self.assertEqual(self.s3.get_calls[0]["VersionId"], "version-1")
         self.assertEqual(check_context.heartbeat_calls, 1)
-        self.assertGreaterEqual(download_context.heartbeat_calls, 2)
+        # Heartbeats cover source S3 reads and the subsequent Artifact Store
+        # snapshot/upload, not only the initial source download.
+        self.assertGreaterEqual(download_context.heartbeat_calls, 3)
         self.assertGreaterEqual(analyze_context.heartbeat_calls, 3)
 
     def test_missing_parent_artifact_fails_closed(self):
