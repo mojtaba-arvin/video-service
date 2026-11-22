@@ -72,8 +72,14 @@ _CONTRACTS = (
     OperationContract(
         "video.inputs.funnel",
         frozenset(), frozenset(),
-        frozenset({"input.video.probe_metadata"}),
-        frozenset({"input.watermark.probe_metadata"}),
+        frozenset({
+            "input.video.file_artifact",
+            "input.video.probe_metadata",
+        }),
+        frozenset({
+            "input.watermark.file_artifact",
+            "input.watermark.probe_metadata",
+        }),
         frozenset(),
         frozenset({"inputs.manifest"}),
         "never", "before_commit", "deterministic_manifest",
