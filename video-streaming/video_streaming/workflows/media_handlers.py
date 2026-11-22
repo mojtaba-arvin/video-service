@@ -22,7 +22,11 @@ from video_streaming.execution.process_control import (
     run_streaming_process,
 )
 from video_streaming.ffmpeg.constants import Resolutions, VideoEncodingFormats
-from video_streaming.ffmpeg.package_validation import validate_package
+from video_streaming.ffmpeg.package_validation import (
+    StreamingPackageValidationError,
+    ordered_package_files,
+    validate_package,
+)
 from video_streaming.ffmpeg.thumbnail import render_thumbnail
 from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.errors import (
@@ -259,6 +263,8 @@ def build_media_handlers(
             raise PermanentOperationError("package quality configuration is invalid")
         usage = ProcessUsageAccumulator()
         with tempfile.TemporaryDirectory(prefix="workflow-package-") as directory:
+            package_directory = os.path.join(directory, "package")
+            os.makedirs(package_directory)
             if params.get("use_watermark"):
                 source = _find_artifact(context, "watermark.video")
                 video_path, source_artifact = _download_dependency_artifact(
@@ -279,7 +285,7 @@ def build_media_handlers(
                 raise PermanentOperationError(
                     "output key must end with {}".format(expected_extension)
                 )
-            output_path = os.path.join(directory, manifest_name)
+            output_path = os.path.join(package_directory, manifest_name)
 
             def on_usage(sample):
                 usage.record(sample)
@@ -351,7 +357,7 @@ def build_media_handlers(
                 )
                 _check_active(context)
                 validation = validate_package(
-                    directory=directory,
+                    directory=package_directory,
                     manifest_path=output_path,
                     package_type=protocol_name,
                     expected_renditions=expected_renditions,
@@ -378,38 +384,36 @@ def build_media_handlers(
 
             uploaded = []
             main_manifest_artifact = None
-            for root, directories, filenames in os.walk(directory, followlinks=False):
-                directories[:] = sorted(
-                    name for name in directories
-                    if not os.path.islink(os.path.join(root, name))
+            try:
+                ordered_files = ordered_package_files(
+                    package_directory,
+                    os.path.basename(output_path),
+                    protocol_name,
                 )
-                for filename in sorted(filenames):
-                    local_path = os.path.join(root, filename)
-                    if os.path.islink(local_path) or not os.path.isfile(local_path):
-                        raise PermanentOperationError(
-                            "package contains an unsupported filesystem entry"
-                        )
-                    relative = os.path.relpath(local_path, directory).replace(
-                        os.sep, "/"
-                    )
-                    media_type = (
-                        "application/vnd.apple.mpegurl"
-                        if filename.endswith(".m3u8")
-                        else "application/dash+xml"
-                        if filename.endswith(".mpd")
-                        else "application/octet-stream"
-                    )
-                    logical_name = (
-                        "package.{}_manifest".format(protocol_name)
-                        if relative == os.path.basename(output_path)
-                        else "package.file.{}".format(relative)
-                    )
-                    artifact = _store_output(
-                        artifact_store, local_path, logical_name, media_type, context
-                    )
-                    uploaded.append({"path": relative, "artifact": artifact})
-                    if relative == os.path.basename(output_path):
-                        main_manifest_artifact = artifact
+            except StreamingPackageValidationError as exc:
+                raise PermanentOperationError(
+                    "validated package inventory is invalid"
+                ) from exc
+            for local_path, relative, _size in ordered_files:
+                filename = os.path.basename(relative)
+                media_type = (
+                    "application/vnd.apple.mpegurl"
+                    if filename.endswith(".m3u8")
+                    else "application/dash+xml"
+                    if filename.endswith(".mpd")
+                    else "application/octet-stream"
+                )
+                logical_name = (
+                    "package.{}_manifest".format(protocol_name)
+                    if relative == os.path.basename(output_path)
+                    else "package.file.{}".format(relative)
+                )
+                artifact = _store_output(
+                    artifact_store, local_path, logical_name, media_type, context
+                )
+                uploaded.append({"path": relative, "artifact": artifact})
+                if relative == os.path.basename(output_path):
+                    main_manifest_artifact = artifact
 
             if not uploaded or main_manifest_artifact is None:
                 raise RetryableOperationError("validated package artifacts are missing")
