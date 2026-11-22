@@ -2094,7 +2094,7 @@ class WorkflowRepository:
             job = session.execute(
                 select(JobRecord).where(
                     JobRecord.id == job_id
-                ).with_for_update()
+                ).with_for_update().execution_options(populate_existing=True)
             ).scalar_one_or_none()
             if job is None or job.state in (
                     JobState.CANCELLED.value,
@@ -4461,6 +4461,13 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal Job cannot recover a lost local package"
+                )
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
