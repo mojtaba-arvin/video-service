@@ -25,6 +25,7 @@ from video_streaming.workflows.errors import (
     PermanentOperationError,
     RetryableOperationError,
 )
+from video_streaming.workflows.artifact_store import artifact_uri
 
 
 _VALIDATION = {"valid": True, "errors": []}
@@ -330,7 +331,7 @@ def build_publication_handlers(
         record = {
             "logical_name": "output.published_object",
             "artifact_type": "published_object",
-            "uri": "s3://{}/{}".format(bucket, published["key"]),
+            "uri": artifact_uri(bucket, published["key"]),
             "media_type": published["media_type"],
             "size_bytes": published["size_bytes"],
             "checksum_sha256": published["checksum_sha256"],
@@ -521,7 +522,7 @@ def build_publication_handlers(
         manifest_record = {
             "logical_name": "output.published_manifest",
             "artifact_type": "published_manifest",
-            "uri": "s3://{}/{}".format(bucket, publication_manifest_key),
+            "uri": artifact_uri(bucket, publication_manifest_key),
             "media_type": media_type,
             "size_bytes": len(published_manifest),
             "checksum_sha256": digest,
