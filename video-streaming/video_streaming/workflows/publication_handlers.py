@@ -210,8 +210,8 @@ def _multipart_upload(s3_client, path, params, size, dont_replace, progress):
             "UploadId": upload_id,
             "MultipartUpload": {"Parts": parts},
         }
-        if dont_replace:
-            complete_args["IfNoneMatch"] = "*"
+        # The target key is immutable for this workflow idempotency key.
+        complete_args["IfNoneMatch"] = "*"
         s3_client.complete_multipart_upload(**complete_args)
     except Exception:
         try:
