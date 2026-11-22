@@ -720,7 +720,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertGreater(renewed_expiry, expires_at)
 
     def test_claim_leases_start_after_contended_job_lock_for_processing_and_publication(self):
-        def hold_job_lock(job_id):
+        def hold_job_lock(job_id, release_delay=0.15):
             locked = threading.Event()
             release = threading.Event()
             errors = []
@@ -743,7 +743,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.assertTrue(locked.wait(timeout=2), "Job lock was not acquired")
 
             def release_after_ttl():
-                threading.Event().wait(0.15)
+                threading.Event().wait(release_delay)
                 release.set()
 
             releaser = threading.Thread(target=release_after_ttl)
@@ -776,12 +776,14 @@ class WorkflowRepositoryTests(unittest.TestCase):
             lease_token=processing_token,
         )
 
-        holder, releaser, release, errors = hold_job_lock(job_id)
+        holder, releaser, release, errors = hold_job_lock(
+            job_id, release_delay=0.75
+        )
         try:
             publication_id, _, publication_token, publication_expiry = (
                 self.repository.claim_publication_attempt(
                     job_id, "p0", lease_owner="contended-publication",
-                    lease_ttl_seconds=0.05,
+                    lease_ttl_seconds=0.5,
                     processing_attempt_id=processing_id,
                 )
             )
