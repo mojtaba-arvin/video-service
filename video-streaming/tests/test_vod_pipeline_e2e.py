@@ -663,7 +663,6 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 tracking_ids=[accepted.tracking_id]
             ),
             timeout=30,
-            metadata=self.rpc_metadata,
         )
         self.assertEqual(len(results.results), 1)
         result = results.results[0]
