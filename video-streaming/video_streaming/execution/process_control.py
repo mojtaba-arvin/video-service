@@ -172,8 +172,14 @@ def run_cancellable_process(
     Both stdout and stderr are drained while polling. Dedicated process groups
     ensure that descendants are terminated even if the root process has exited
     but a child still holds an inherited pipe open. When requested, usage
-    callbacks receive sampled process-tree CPU, peak RSS and elapsed execution
-    time; elapsed time is distinct from the enclosing durable attempt duration.
+    callbacks receive cumulative per-process CPU, peak RSS and elapsed time.
+    Each callback sample supersedes the prior sample with the same process_id.
+    memory_duration_ms is the subprocess wall-clock lifetime (not an RSS
+    integral); attempt aggregators sum each process's latest duration, while
+    peak_memory_bytes is the maximum observed process-tree RSS. Cost accounting
+    therefore uses peak RSS multiplied by cumulative subprocess wall time as
+    an explicitly approximate memory-duration measure, not as measured
+    byte-milliseconds. This is distinct from the enclosing Attempt duration.
 
     Raises:
         ProcessExecutionCancelled: when should_cancel returns True.
@@ -306,7 +312,8 @@ def run_streaming_process(
     deadlines and cancellation are checked even when FFmpeg stops emitting
     output. Both CR and LF delimit progress records, matching FFmpeg console
     output. The process runs in a dedicated session so orphaned descendants are
-    still covered by timeout/cancellation.
+    still covered by timeout/cancellation. Usage callbacks follow the same
+    per-process cumulative-sample contract as run_cancellable_process().
 
     Raises:
         ProcessExecutionCancelled: when should_cancel returns True.
