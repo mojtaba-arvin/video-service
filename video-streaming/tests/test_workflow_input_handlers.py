@@ -218,6 +218,18 @@ class DurableInputHandlerTests(unittest.TestCase):
             )
         self.assertEqual(self.s3.get_calls, [])
 
+    def test_unplanned_input_role_is_rejected(self):
+        with self.assertRaises(PermanentOperationError):
+            self.handlers["video.input.check"](
+                self._node("check", {
+                    "input_name": "../unexpected",
+                    "bucket": "source-bucket",
+                    "key": "uploads/source.mp4",
+                }),
+                _Context("invalid-input-role"),
+            )
+        self.assertEqual(self.s3.head_calls, [])
+
     def test_empty_source_object_is_a_permanent_input_error(self):
         handlers = build_input_handlers(
             _S3(payload=b""), self.store,
