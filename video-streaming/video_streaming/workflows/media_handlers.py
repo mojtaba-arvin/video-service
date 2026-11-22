@@ -103,6 +103,19 @@ def _download_input(artifact_store, context, manifest, name, directory):
     return filename, artifact
 
 
+def _download_dependency_artifact(artifact_store, context, artifact, name, directory):
+    if not isinstance(artifact, dict) or not artifact.get("uri"):
+        raise PermanentOperationError("media dependency artifact is invalid")
+    filename = os.path.join(directory, "{}-source".format(name))
+    artifact_store.download_file(
+        artifact["uri"], filename,
+        expected_sha256=artifact.get("checksum_sha256"),
+        on_chunk=lambda _size: _check_active(context),
+    )
+    _check_active(context)
+    return filename, artifact
+
+
 def _store_output(artifact_store, path, logical_name, media_type, context):
     if not os.path.isfile(path) or os.path.getsize(path) <= 0:
         raise RetryableOperationError("media operation produced no output")
