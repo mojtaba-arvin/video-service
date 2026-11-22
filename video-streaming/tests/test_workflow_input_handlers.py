@@ -213,6 +213,41 @@ class DurableInputHandlerTests(unittest.TestCase):
         self.assertGreaterEqual(download_context.heartbeat_calls, 3)
         self.assertGreaterEqual(analyze_context.heartbeat_calls, 3)
 
+    def test_null_version_download_is_pinned_by_etag(self):
+        class NullVersionS3(_S3):
+            def head_object(self, **kwargs):
+                result = super().head_object(**kwargs)
+                result["VersionId"] = "null"
+                return result
+
+        s3 = NullVersionS3()
+        handlers = build_input_handlers(
+            s3, self.store,
+            ffprobe_bin_path="/usr/bin/ffprobe",
+            probe_timeout_seconds=15,
+        )
+        checked = handlers["video.input.check"](
+            self._node("check", {
+                "input_name": "video", "bucket": "source-bucket",
+                "key": "uploads/source.mp4",
+            }),
+            _Context("check-null-version"),
+        )
+        downloaded = handlers["video.input.download"](
+            self._node("download", {
+                "input_name": "video", "bucket": "source-bucket",
+                "key": "uploads/source.mp4",
+            }),
+            _Context("download-null-version", {
+                "check": checked["artifacts"],
+            }),
+        )
+        self.assertEqual(len(downloaded["artifacts"]), 1)
+        self.assertEqual(
+            s3.get_calls[0]["IfMatch"], '"source-etag"'
+        )
+        self.assertNotIn("VersionId", s3.get_calls[0])
+
     def test_missing_parent_artifact_fails_closed(self):
         context = _Context("input-video-download")
         with self.assertRaises(PermanentOperationError):
