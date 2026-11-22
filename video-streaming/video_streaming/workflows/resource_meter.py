@@ -24,7 +24,7 @@ class ProcessResourceMeter:
         self._thread = None
         self._started_at = None
         self._cpu_started = None
-        self._peak_memory_bytes = 0
+        self._peak_memory_bytes = None
         self._result = None
 
     def _sample_memory(self):
@@ -33,7 +33,10 @@ class ProcessResourceMeter:
         except psutil.Error:
             return
         with self._lock:
-            self._peak_memory_bytes = max(self._peak_memory_bytes, value)
+            if (
+                    self._peak_memory_bytes is None
+                    or value > self._peak_memory_bytes):
+                self._peak_memory_bytes = value
 
     def _sample_loop(self):
         while not self._stop_event.wait(self.sample_interval_seconds):
