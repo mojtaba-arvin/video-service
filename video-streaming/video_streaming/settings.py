@@ -446,3 +446,8 @@ if WORKFLOW_DURABLE_DISPATCH_ENABLED:
         "schedule": 5.0,
         "options": {"expires": 4},
     }
+    CELERY_BEAT_SCHEDULE["reconcile-expired-durable-workflows"] = {
+        "task": "video_streaming.workflows.reconcile_expired_attempts",
+        "schedule": 15.0,
+        "options": {"expires": 14},
+    }
