@@ -1,0 +1,42 @@
+name: Temporary develop merge for PR 151
+
+on:
+  push:
+    branches:
+      - work/durable-vod-integration
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-151-develop-merge
+  cancel-in-progress: false
+
+jobs:
+  merge-develop:
+    name: Merge develop into PR branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: work/durable-vod-integration
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure merge identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge current develop
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "work/durable-vod-integration"
+          git fetch --no-tags origin develop
+          git merge --no-edit --no-ff origin/develop
+
+      - name: Push merge commit without force
+        run: git push origin HEAD:refs/heads/work/durable-vod-integration
