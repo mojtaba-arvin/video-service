@@ -2688,6 +2688,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
         limited = self.repository.list_reclaimable_package_attempts(
             minimum_age_seconds=86400,
             limit=1,
+            # This test shares its PostgreSQL database with the full suite.
+            # Scope the limit assertion to its two own candidates so older
+            # eligible fixtures from previous tests cannot starve the query.
+            attempt_ids=[publication_id, next_publication_id],
         )
         self.assertEqual(
             [item["attempt_id"] for item in limited],

@@ -4125,7 +4125,8 @@ class WorkflowRepository:
 
 
     def list_reclaimable_package_attempts(
-            self, minimum_age_seconds=86400, limit=100, now=None):
+            self, minimum_age_seconds=86400, limit=100, now=None,
+            attempt_ids=None):
         """Return old package Attempts whose exact namespaces pass DB guards."""
         if (
                 isinstance(limit, bool)
@@ -4142,10 +4143,15 @@ class WorkflowRepository:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         cutoff = now - timedelta(seconds=float(minimum_age_seconds))
+        if attempt_ids is not None:
+            attempt_ids = tuple(attempt_ids)
+            if any(not isinstance(item, str) or not item for item in attempt_ids):
+                raise ValueError("attempt_ids must contain non-empty strings")
+            if not attempt_ids:
+                return []
 
         with self._session() as session:
-            candidates = session.execute(
-                select(AttemptRecord).where(
+            query = select(AttemptRecord).where(
                     AttemptRecord.state.in_([
                         AttemptState.FAILED.value,
                         AttemptState.CANCELLED.value,
@@ -4158,8 +4164,11 @@ class WorkflowRepository:
                     AttemptRecord.metrics_json["package_publication"][
                         "cleanup_completed_at"
                     ].as_string().is_(None),
-                ).order_by(AttemptRecord.finished_at.asc())
-                .limit(limit)
+                )
+            if attempt_ids is not None:
+                query = query.where(AttemptRecord.id.in_(attempt_ids))
+            candidates = session.execute(
+                query.order_by(AttemptRecord.finished_at.asc()).limit(limit)
             ).scalars().all()
             metadata = []
             for attempt in candidates:
