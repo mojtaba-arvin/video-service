@@ -184,6 +184,88 @@ class DurableMediaHandlerTests(unittest.TestCase):
         )
         self.assertEqual(consumed, [b"watermarked-video"])
 
+    def test_hls_and_dash_package_handlers_publish_directory_manifests(self):
+        store = _ArtifactStore()
+        context = _context_with_manifest(store)
+
+        class _Representation:
+            class _Size:
+                height = 720
+            size = _Size()
+
+        class _Protocol:
+            def __init__(self):
+                self.reps = [_Representation()]
+
+            def fragmented_mp4(self):
+                return None
+
+            def auto_generate_representations(self, **_kwargs):
+                return None
+
+            def output(self, output_path, run_command=False):
+                with open(output_path, "wb") as target:
+                    target.write(b"master-manifest")
+                with open(os.path.join(os.path.dirname(output_path), "segment-1"), "wb") as target:
+                    target.write(b"segment")
+                return self
+
+        class _Video:
+            def hls(self, _format):
+                return _Protocol()
+
+            def dash(self, _format):
+                return _Protocol()
+
+        class _FormatFactory:
+            def get_format_class(self, *_args, **_kwargs):
+                return object()
+
+        class _Validation:
+            def require_valid(self):
+                return None
+
+            def as_dict(self):
+                return {"valid": True, "errors": []}
+
+        handlers = build_media_handlers(store)
+        for protocol in ("hls", "dash"):
+            with self.subTest(protocol=protocol), \\
+                 patch("video_streaming.workflows.media_handlers.ffmpeg_streaming.input",
+                       return_value=_Video()), \\
+                 patch("video_streaming.workflows.media_handlers.VideoEncodingFormats",
+                       return_value=_FormatFactory()), \\
+                 patch("video_streaming.workflows.media_handlers.command_builder",
+                       return_value="ffmpeg -i input output"), \\
+                 patch("video_streaming.workflows.media_handlers.run_streaming_process"), \\
+                 patch("video_streaming.workflows.media_handlers.validate_package",
+                       return_value=_Validation()):
+                result = handlers["video.{}.package".format(protocol)](
+                    {"parameters": {
+                        "protocol": protocol,
+                        "key": "exports/master.{}".format(
+                            "m3u8" if protocol == "hls" else "mpd"
+                        ),
+                        "quality_names": [],
+                        "custom_qualities": [],
+                        "use_watermark": False,
+                        "fragmented": protocol == "hls",
+                    }},
+                    context,
+                )
+            logical_names = {
+                artifact["logical_name"] for artifact in result["artifacts"]
+            }
+            self.assertIn("package.{}.manifest".format(protocol), logical_names)
+            self.assertIn("package.directory_manifest", logical_names)
+            directory_record = next(
+                item for item in result["artifacts"]
+                if item["logical_name"] == "package.directory_manifest"
+            )
+            manifest = json.loads(store.objects[directory_record["uri"]].decode("utf-8"))
+            self.assertEqual(manifest["protocol"], protocol)
+            self.assertEqual(len(manifest["files"]), 2)
+
     def test_watermark_process_publishes_video_artifact_without_celery(self):
         store = _ArtifactStore()
         context = _context_with_manifest(store, include_watermark=True)
