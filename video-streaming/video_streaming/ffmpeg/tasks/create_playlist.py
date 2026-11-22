@@ -8,7 +8,10 @@ from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.utils import FfmpegCallback
 from ffmpeg_streaming._command_builder import command_builder
-from video_streaming.execution.process_control import run_streaming_process
+from video_streaming.execution.process_control import (
+    ProcessUsageAccumulator,
+    run_streaming_process,
+)
 from video_streaming.ffmpeg.package_validation import validate_package
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
 from video_streaming.workflows.service import get_workflow_repository
@@ -206,27 +209,14 @@ def create_playlist(
     expected_renditions = []
     validation_report = None
     validation_payload = None
-    process_usage = {}
+    process_usage = ProcessUsageAccumulator()
 
     def record_process_usage(metrics):
-        process_id = str(metrics.get("process_id") or "legacy")
-        process_usage[process_id] = dict(metrics)
+        process_usage.record(metrics)
         lease_heartbeat.on_usage(metrics)
 
     def aggregate_process_usage():
-        samples = list(process_usage.values())
-        return {
-            "cpu_seconds": sum(
-                float(item.get("cpu_seconds") or 0.0) for item in samples
-            ),
-            "peak_memory_bytes": max(
-                (int(item.get("peak_memory_bytes") or 0) for item in samples),
-                default=0,
-            ) or None,
-            "memory_duration_ms": sum(
-                int(item.get("memory_duration_ms") or 0) for item in samples
-            ),
-        }
+        return process_usage.aggregate()
 
     def process_resource_metrics():
         aggregate = aggregate_process_usage()
@@ -234,6 +224,13 @@ def create_playlist(
             "peak_memory_bytes": aggregate["peak_memory_bytes"],
             "memory_duration_ms": aggregate["memory_duration_ms"],
         }
+
+    def measured_cpu_seconds():
+        sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
+        return max(
+            child_cpu_seconds_since(cpu_started),
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
+        )
 
 
     try:
@@ -375,10 +372,7 @@ def create_playlist(
                 "input_bytes": input_bytes,
                 # Storage is charged to the separate publication Attempt.
                 "output_bytes": 0,
-                "cpu_seconds": max(
-                    child_cpu_seconds_since(cpu_started),
-                    aggregate_process_usage()["cpu_seconds"],
-                ),
+                "cpu_seconds": measured_cpu_seconds(),
                 **process_resource_metrics(),
                 "local_package": {
                     "directory": directory,
@@ -403,7 +397,7 @@ def create_playlist(
                 reason="CANCELLED_DURING_PACKAGE_CREATION_OR_VALIDATION",
                 metrics={
                     "input_bytes": input_bytes,
-                    "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                    "cpu_seconds": measured_cpu_seconds(),
                     **process_resource_metrics(),
                 },
                 pricing=configured_pricing(settings),
@@ -425,7 +419,7 @@ def create_playlist(
             error_message=str(exc),
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "cpu_seconds": measured_cpu_seconds(),
                 **process_resource_metrics(),
             },
             pricing=configured_pricing(settings),
@@ -464,7 +458,7 @@ def create_playlist(
             reason="CANCELLED_AFTER_PACKAGE_VALIDATION",
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": child_cpu_seconds_since(cpu_started),
+                "cpu_seconds": measured_cpu_seconds(),
                 **process_resource_metrics(),
             },
             pricing=configured_pricing(settings),
@@ -481,7 +475,7 @@ def create_playlist(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        cpu_seconds=measured_cpu_seconds(),
         **process_resource_metrics(),
         validation_report=validation_payload,
     )
