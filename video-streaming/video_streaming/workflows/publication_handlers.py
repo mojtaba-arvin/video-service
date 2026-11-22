@@ -25,6 +25,7 @@ from video_streaming.workflows.errors import (
     PermanentOperationError,
     RetryableOperationError,
 )
+from video_streaming.workflows.artifacts import attempt_scoped_object_key
 
 
 _VALIDATION = {"valid": True, "errors": []}
@@ -309,14 +310,18 @@ def build_publication_handlers(
             )
             _check_active(context)
             media_type = source.get("media_type") or mimetypes.guess_type(key)[0]
+            publication_key = (
+                key if dont_replace
+                else attempt_scoped_object_key(key, context.attempt_id)
+            )
             published = _upload_file(
-                s3_client, bucket, key, path, context.attempt_id,
+                s3_client, bucket, publication_key, path, context.attempt_id,
                 source["checksum_sha256"], media_type, dont_replace, context,
             )
         record = {
             "logical_name": "output.published_object",
             "artifact_type": "published_object",
-            "uri": "s3://{}/{}".format(bucket, key),
+            "uri": "s3://{}/{}".format(bucket, published["key"]),
             "media_type": published["media_type"],
             "size_bytes": published["size_bytes"],
             "checksum_sha256": published["checksum_sha256"],
@@ -386,7 +391,13 @@ def build_publication_handlers(
         entrypoint_path = _safe_relative_path(
             posixpath.basename(manifest_key)
         )
-        version_prefix = manifest_key + ".workflow-versions/" + context.attempt_id
+        publication_manifest_key = (
+            manifest_key if dont_replace
+            else attempt_scoped_object_key(manifest_key, context.attempt_id)
+        )
+        version_prefix = (
+            publication_manifest_key + ".workflow-versions/" + context.attempt_id
+        )
         relative_prefix = posixpath.relpath(
             version_prefix, posixpath.dirname(manifest_key) or "."
         )
@@ -445,7 +456,7 @@ def build_publication_handlers(
             try:
                 response = s3_client.put_object(
                     Bucket=bucket,
-                    Key=manifest_key,
+                    Key=publication_manifest_key,
                     Body=_ProgressReader(
                         __import__("io").BytesIO(published_manifest),
                         lambda _size: _check_active(context),
@@ -478,7 +489,7 @@ def build_publication_handlers(
         manifest_record = {
             "logical_name": "output.published_manifest",
             "artifact_type": "published_manifest",
-            "uri": "s3://{}/{}".format(bucket, manifest_key),
+            "uri": "s3://{}/{}".format(bucket, publication_manifest_key),
             "media_type": media_type,
             "size_bytes": len(published_manifest),
             "checksum_sha256": digest,
@@ -493,7 +504,7 @@ def build_publication_handlers(
         return {
             "validation_report": {
                 "valid": True, "protocol": protocol, "file_count": len(uploaded),
-                "manifest_key": manifest_key, "errors": [],
+                "manifest_key": publication_manifest_key, "errors": [],
             },
             "artifacts": [manifest_record],
             "metrics": {
