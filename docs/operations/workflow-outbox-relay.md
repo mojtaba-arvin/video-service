@@ -11,9 +11,9 @@ URLs, secret envelopes, or task paths through the broker.
 Delivery is **at least once**. A relay crash after broker acceptance but before
 `PUBLISHED` is committed causes a repeat publish with the same deterministic
 Celery task ID. That ID is correlation metadata, not a deduplication guarantee.
-The eventual plan consumer must re-check durable Job state and claim each node
-under a database lease before any side effect. Every side-effect adapter must
-honor the deterministic node idempotency key.
+The plan consumer must re-check durable Job state and claim each node under a
+database lease before any side effect. Every side-effect adapter must honor
+the deterministic node idempotency key.
 
 ## Operator commands
 
@@ -55,12 +55,42 @@ and failure before replay; do not blindly replay poison messages.
   atomic with the Job database transaction. A plan consumer must re-read the
   Job's authoritative state and refuse to claim any node for a cancelled Job.
 
+## Verified CI evidence and production boundary
+
+On 2026-11-22, commit
+`e1469bf13280650cd552b78a5bae3d7e07d849d3` passed the final-head Push CI,
+Pull Request CI, and Dependency Review:
+
+- [Push CI](https://github.com/mojtaba-arvin/video-service/actions/runs/45015170071)
+- [Pull Request CI](https://github.com/mojtaba-arvin/video-service/actions/runs/45015175951)
+- [Dependency Review](https://github.com/mojtaba-arvin/video-service/actions/runs/45015175953)
+
+The Redis-broker/PostgreSQL outbox acceptance case verifies retry after broker
+acceptance and a simulated lost database acknowledgement, including reuse of
+the same task ID and immutable plan reference. The OS-process recovery test
+kills a worker with SIGKILL and verifies lease-expiry recovery after explicit
+redelivery. It does **not** prove automatic broker redelivery after process
+death.
+
+These tests use ephemeral PostgreSQL/Redis and S3/KMS test doubles. They do not
+establish live AWS KMS/STS/IAM permissions, production bucket behavior, or
+broker redelivery semantics in the deployed topology.
+
 ## Rollout gate
 
-The relay command and fake-publisher contract tests are implemented. CI also includes a Redis-broker/PostgreSQL acceptance case that publishes to a real isolated Redis queue, simulates loss of the database acknowledgement after broker acceptance, and verifies a second publish reuses the same task ID and immutable plan reference. This test is pending execution on the latest branch head. Do not
-start a production relay or set `enqueue_dispatch=True` until a registered
-`video_streaming.workflows.dispatch_plan` consumer is deployed, the complete
-operation-handler registry is wired to real adapters, Job cancellation is
-checked by that consumer, and real PostgreSQL + broker crash/duplicate tests
-pass. The current CreateJob path still uses `legacy_celery`; this is an
-intentional safety gate, not a completed durable-executor rollout.
+The relay, plan dispatcher, node consumer, complete 13-operation handler
+registry, and test coverage are implemented in the branch. They are **not
+active in production**. The durable feature gate defaults to false, Beat only
+schedules the relay when the gate is enabled, and gRPC CreateJob remains on
+`legacy_celery` without inserting a durable dispatch intent.
+
+Do not start a production relay, schedule its Beat task, set
+`enqueue_dispatch=True`, or enable the feature gate until all gates in the
+[Durable VOD release and rollback runbook](durable-vod-release-runbook.md) have
+been evidenced and explicitly approved. In particular, live AWS identity and
+policy validation, accepted legacy Job/callback reconciliation, deployed
+broker recovery, monitoring/alerting, and rollback rehearsal remain
+environment-dependent release gates.
+
+Green CI is necessary evidence for the tested commit; it is not production
+activation approval.
