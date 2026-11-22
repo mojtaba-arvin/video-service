@@ -43,37 +43,31 @@ class GenerateThumbnailTaskTests(unittest.TestCase):
                 id="celery-task-1", hostname="worker-1", retries=0
             )
             try:
-                with patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
+                with patch.object(
+                    thumbnail_task,
                     "get_workflow_repository",
                     return_value=repository,
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
+                ), patch.object(
+                    thumbnail_task,
                     "AttemptLeaseHeartbeat",
                     return_value=type(
                         "HeartbeatStub", (),
                         {"assert_owned": lambda self: None,
                          "on_usage": lambda self, _metrics: None}
                     )(),
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "render_thumbnail",
-                    side_effect=render,
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "validate_thumbnail_output",
+                ), patch.object(
+                    thumbnail_task, "render_thumbnail", side_effect=render,
+                ), patch.object(
+                    thumbnail_task, "validate_thumbnail_output",
                     return_value={"width": 320, "height": 180},
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "capture_child_cpu_seconds",
+                ), patch.object(
+                    thumbnail_task, "capture_child_cpu_seconds",
                     return_value=0.0,
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "child_cpu_seconds_since",
+                ), patch.object(
+                    thumbnail_task, "child_cpu_seconds_since",
                     return_value=0.0,
-                ), patch(
-                    "video_streaming.ffmpeg.tasks.generate_thumbnail."
-                    "configured_pricing",
+                ), patch.object(
+                    thumbnail_task, "configured_pricing",
                     return_value=None,
                 ), patch.object(
                     generate_thumbnail, "is_forced_to_stop",
