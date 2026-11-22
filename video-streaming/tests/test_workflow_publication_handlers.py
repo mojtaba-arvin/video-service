@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 
+from video_streaming.workflows.errors import PermanentOperationError
 from video_streaming.workflows.publication_handlers import (
     build_publication_handlers,
 )
@@ -203,6 +204,37 @@ class DurablePublicationHandlerTests(unittest.TestCase):
         root = self.s3.objects[(bucket, key)]["body"].decode("utf-8")
         self.assertIn(".workflow-versions/", root)
         self.assertEqual(result["metrics"]["artifact_count"], 4)
+
+    def test_directory_upload_rejects_derived_s3_keys_before_any_write(self):
+        files = []
+        for path, payload in (
+            ("master.m3u8", b"#EXTM3U\\n720p.m3u8\\n"),
+            ("720p.m3u8", b"#EXTM3U\\n#EXTINF:2,\\nsegment.ts\\n"),
+            ("segment.ts", b"transport-stream"),
+        ):
+            artifact = self.store.add("s3://long-package/" + path, payload)
+            files.append({"path": path, "artifact": artifact})
+        manifest_payload = json.dumps({
+            "schema_version": 1,
+            "protocol": "hls",
+            "entrypoint": files[0]["artifact"],
+            "files": files,
+        }).encode("utf-8")
+        manifest = self.store.add(
+            "s3://long-package/directory.json", manifest_payload
+        )
+        context = _Context({"package-node": [{
+            **manifest, "logical_name": "package.directory_manifest",
+        }]})
+        handler = self.build()["video.output.upload_directory"]
+        with self.assertRaises(PermanentOperationError):
+            handler({"parameters": {
+                "bucket": "media-output",
+                "key": "v" * 940 + "/master.m3u8",
+                "protocol": "hls",
+                "dont_replace": False,
+            }}, context)
+        self.assertEqual(self.s3.objects, {})
 
     def test_directory_retry_reuses_versioned_package_and_entrypoint(self):
         files = []
