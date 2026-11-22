@@ -24,7 +24,7 @@ class _Context:
         self.heartbeats += 1
         return True
 
-    def is_cancelled(self):
+    def is_terminal(self):
         return False
 
     def cancel(self, reason=None):
