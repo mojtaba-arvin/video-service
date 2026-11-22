@@ -4,7 +4,7 @@ import os
 import threading
 import unittest
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -766,6 +766,136 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.repository.finish_stage(
             job_id, "p0", new_id, lease_token=new_token
         )
+
+    def test_expired_recovery_commits_when_retry_claim_is_rejected(self):
+        from unittest.mock import patch
+
+        job_id = str(uuid4())
+        plan = build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": "source", "key": "input.mp4"},
+                "playlists": [{
+                    "bucket": "output",
+                    "key": "master.m3u8",
+                    "protocol": "hls",
+                }],
+            },
+        )
+        first_node = plan["nodes"][0]
+        first_node["retry_policy"] = {
+            "max_attempts": 3,
+            "backoff": "fixed",
+            "initial_delay_seconds": 60,
+            "max_delay_seconds": 60,
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-recovery-{}".format(uuid4()),
+            request_hash="c" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        stage_key = first_node["stage_key"]
+        attempt_id, _, _, expiry = self.repository.claim_node_attempt(
+            job_id, stage_key, lease_owner="worker-before-crash"
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            with self.assertRaisesRegex(
+                    InvalidStateTransition, "retry delay has not elapsed"):
+                self.repository.claim_node_attempt(
+                    job_id, stage_key, lease_owner="worker-retry-too-early"
+                )
+
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            stage = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == session.execute(
+                        select(WorkflowRecord.id).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one(),
+                    StageRecord.stage_key == stage_key,
+                )
+            ).scalar_one()
+            outbox = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.job_id == job_id,
+                    OutboxRecord.event_type == "WORKFLOW_PLAN_DISPATCH",
+                )
+            ).scalar_one()
+            self.assertEqual(attempt.state, AttemptState.RETRYABLE.value)
+            self.assertEqual(stage.status, StageState.RETRY_WAIT.value)
+            self.assertEqual(
+                outbox.available_at,
+                attempt.finished_at + timedelta(seconds=60),
+            )
+            retry_not_before = outbox.available_at
+
+        # Eligibility and the durable wake-up use the exact same timestamp.
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=retry_not_before + timedelta(seconds=1)):
+            next_attempt = self.repository.claim_node_attempt(
+                job_id, stage_key, lease_owner="worker-retry-after-delay"
+            )
+        self.assertEqual(next_attempt[1], 2)
+
+    def test_expired_recovery_never_retries_or_rewrites_terminal_jobs(self):
+        from unittest.mock import patch
+
+        for terminal_state in (
+                JobState.CANCELLED,
+                JobState.FAILED,
+                JobState.FINISHED):
+            with self.subTest(job_state=terminal_state.value):
+                job_id = self.create_job("p0")
+                attempt_id, _, _, expiry = self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="worker-terminal-recovery"
+                )
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    job.state = terminal_state.value
+                    job.version += 1
+
+                recovery_time = expiry + timedelta(seconds=1)
+                with patch(
+                        "video_streaming.workflows.repository.utcnow",
+                        return_value=recovery_time):
+                    with self.assertRaises(InvalidStateTransition):
+                        self.repository.claim_attempt(
+                            job_id, "p0", lease_owner="claim-after-terminal"
+                        )
+
+                with self.repository._session() as session:
+                    job = session.get(JobRecord, job_id)
+                    attempt = session.get(AttemptRecord, attempt_id)
+                    workflow = session.execute(
+                        select(WorkflowRecord).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one()
+                    stage = session.execute(
+                        select(StageRecord).where(
+                            StageRecord.workflow_id == workflow.id
+                        )
+                    ).scalar_one()
+                    retry_count = session.execute(
+                        select(func.count()).select_from(OutboxRecord).where(
+                            OutboxRecord.job_id == job_id,
+                            OutboxRecord.event_type == "WORKFLOW_PLAN_DISPATCH",
+                        )
+                    ).scalar_one()
+                    self.assertEqual(job.state, terminal_state.value)
+                    self.assertEqual(attempt.state, AttemptState.CANCELLED.value)
+                    self.assertEqual(stage.status, StageState.CANCELLED.value)
+                    self.assertEqual(retry_count, 0)
 
     def test_age_based_recovery_never_expires_a_live_leased_attempt(self):
         job_id = self.create_job("p0")
