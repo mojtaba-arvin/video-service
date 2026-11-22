@@ -9,6 +9,7 @@ import os
 import threading
 import time
 import unittest
+from datetime import timedelta
 import uuid
 from unittest.mock import patch
 
@@ -18,7 +19,11 @@ if importlib.util.find_spec("celery") and importlib.util.find_spec("redis"):
     from video_streaming.celery import celery_app
     from video_streaming.workflows import tasks
     from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
-    from video_streaming.workflows.repository import WorkflowRepository
+    from video_streaming.workflows.repository import (
+        AttemptRecord,
+        WorkflowRepository,
+        utcnow,
+    )
 else:
     start_worker = None
     settings = None
@@ -201,6 +206,53 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
         self.assertEqual(len(handler_keys), 2)
         self.assertEqual(len(set(handler_keys)), 1)
         self.assertEqual(len(accepted_effects), 1)
+
+
+    def test_redelivery_recovers_an_expired_attempt_after_worker_loss(self):
+        """A redelivered node task must fence an abandoned lease and retry."""
+        calls = []
+
+        def handler(_node, _context):
+            calls.append(1)
+            return {"validation_report": {"valid": True, "errors": []}}
+
+        self.handlers = {
+            operation: handler for operation in PLAN_OPERATIONS
+        }
+        job_id, snapshot = self._create_job()
+        # Model abrupt worker loss after the database claim committed but
+        # before the handler could begin. The original broker delivery is
+        # assumed lost; a later delivery must recover the expired lease.
+        attempt_id, _number, _token, _expiry = (
+            self.repository.claim_node_attempt(
+                job_id,
+                "root",
+                lease_owner="worker-that-was-killed",
+                lease_ttl_seconds=30,
+            )
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        result = tasks.execute_node.apply_async(
+            args=(
+                job_id,
+                "root",
+                snapshot["workflow_id"],
+                snapshot["workflow_version"],
+                snapshot["fingerprint"],
+            ),
+            queue=self.queue,
+        ).get(timeout=15)
+
+        self.assertEqual(result["status"], "completed")
+        finished = self._wait_for_finished(job_id)
+        attempts = finished["stages"][0]["attempts"]
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["status"], "RETRYABLE")
+        self.assertEqual(attempts[1]["status"], "SUCCEEDED")
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":
