@@ -515,6 +515,49 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 job_id, "check-input", lease_owner="replacement"
             )
 
+    def test_expired_durable_attempts_are_discovered_for_scheduler_recovery(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "exponential",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 30,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="expired-scheduler-" + job_id,
+            request_hash="8" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="crashed-worker"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        self.assertEqual(
+            self.repository.list_jobs_with_expired_attempts(limit=10),
+            [job_id],
+        )
+        with self.assertRaisesRegex(ValueError, "limit must be between"):
+            self.repository.list_jobs_with_expired_attempts(limit=0)
+
     def test_durable_retry_delay_is_enforced_and_has_due_outbox(self):
         job_id = str(uuid4())
         plan = {
