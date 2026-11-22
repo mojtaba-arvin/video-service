@@ -30,7 +30,7 @@ class NodeExecutionContext:
     idempotency_key: str
     heartbeat: object
     cancel: object
-    is_cancelled: object
+    is_terminal: object
     input_artifacts: dict = None
 
 
@@ -123,9 +123,11 @@ class WorkflowNodeExecutor:
                 lease_ttl_seconds=self.lease_ttl_seconds,
             )
 
-        def is_cancelled():
+        def is_terminal():
             current = self.repository.get_job_snapshot(job_id)
-            return current is None or current["status"] == "CANCELLED"
+            return current is None or current["status"] in (
+                "CANCELLED", "FAILED", "FINISHED",
+            )
 
         def cancel(reason="WORKER_CANCELLED"):
             return self.repository.cancel_attempt(
@@ -147,11 +149,11 @@ class WorkflowNodeExecutor:
             idempotency_key=idempotency_key,
             heartbeat=heartbeat,
             cancel=cancel,
-            is_cancelled=is_cancelled,
+            is_terminal=is_terminal,
             input_artifacts=input_artifacts,
         )
         try:
-            if is_cancelled():
+            if is_terminal():
                 self.repository.cancel_attempt(
                     job_id, stage_key, attempt_id,
                     reason="JOB_CANCELLED_BEFORE_NODE_START",
@@ -186,6 +188,12 @@ class WorkflowNodeExecutor:
             current = self.repository.get_job_snapshot(job_id)
             if current and current["status"] == "CANCELLED":
                 return {"status": "cancelled", "node_id": node_id}
+            if current and current["status"] in ("FAILED", "FINISHED"):
+                return {
+                    "status": "terminal",
+                    "node_id": node_id,
+                    "job_status": current["status"],
+                }
             return {"status": "lease_lost", "node_id": node_id}
         except Exception as exc:
             contract = OPERATION_CONTRACTS[operation]
