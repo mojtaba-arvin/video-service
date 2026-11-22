@@ -320,14 +320,13 @@ def build_media_handlers(
                             )
                         size = quality.get("size")
                         bitrate = quality.get("bitrate")
-                        if size is None and bitrate is None:
+                        if size is None or bitrate is None:
                             raise PermanentOperationError(
-                                "custom quality requires a size or bitrate"
+                                "custom quality requires both size and bitrate"
                             )
-                        representations.append(Representation(
-                            Size(*size) if size is not None else None,
-                            Bitrate(*bitrate) if bitrate is not None else None,
-                        ))
+                        representations.append(
+                            Representation(Size(*size), Bitrate(*bitrate))
+                        )
                     if not representations:
                         raise PermanentOperationError(
                             "package requires at least one representation"
