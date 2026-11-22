@@ -186,6 +186,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "FFPROBE_BIN_PATH={}".format(shutil.which("ffprobe")),
                 "FFMPEG_BIN_PATH={}".format(shutil.which("ffmpeg")),
                 "REDIS_TIMEOUT_SECOND=3600",
+                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
                 "REDIS_URL=redis://127.0.0.1:6379/0",
                 # The callback server is bound to loopback in this isolated E2E.
                 "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
@@ -354,7 +355,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.channel = cls.grpc.insecure_channel(
             "127.0.0.1:{}".format(cls.grpc_port)
         )
-        cls.stub = cls.pb2_grpc.StreamingStub(cls.channel)
+        cls.stub = AuthenticatedStub(cls.pb2_grpc.StreamingStub(cls.channel))
 
     @classmethod
     def tearDownClass(cls):

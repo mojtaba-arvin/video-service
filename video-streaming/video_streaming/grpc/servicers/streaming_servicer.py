@@ -40,11 +40,9 @@ class Streaming(
         # Request and exception values may contain secrets or signed URLs.
         # Keep stack context without interpolating untrusted values.
         logger.error(
-            "Unhandled gRPC service failure",
-            extra={
-                "error_type": type(exc).__name__,
-                "traceback": traceback.format_tb(exc.__traceback__),
-            },
+            "Unhandled gRPC service failure (%s)\n%s",
+            type(exc).__name__,
+            "".join(traceback.format_tb(exc.__traceback__)),
         )
         raise exceptions.GrpcBaseException(
             ErrorMessages.INTERNAL_ERROR)

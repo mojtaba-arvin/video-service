@@ -2058,6 +2058,28 @@ class WorkflowRepository:
                         "claim_publication_attempt"
                     )
 
+            if stage.status == StageState.RETRY_WAIT.value:
+                validated_artifact = session.execute(
+                    select(ArtifactRecord).where(
+                        ArtifactRecord.stage_id == stage.id,
+                        ArtifactRecord.artifact_type == "validation_report",
+                        ArtifactRecord.logical_name == "validation-report",
+                        ArtifactRecord.status == "AVAILABLE",
+                    ).order_by(ArtifactRecord.created_at.desc())
+                ).scalars().first()
+                validated_report = (
+                    validated_artifact.metadata_json
+                    if validated_artifact is not None else None
+                )
+                if (
+                        isinstance(validated_report, dict)
+                        and validated_report.get("valid") is True
+                        and validated_report.get("errors") == []):
+                    raise InvalidStateTransition(
+                        "A validated output must be retried through "
+                        "claim_publication_attempt"
+                    )
+
             current = StageState(stage.status)
             if StageState.PROCESSING not in ALLOWED_STAGE_TRANSITIONS[current]:
                 raise InvalidStateTransition(
