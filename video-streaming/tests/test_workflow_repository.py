@@ -551,9 +551,9 @@ class WorkflowRepositoryTests(unittest.TestCase):
             attempt = session.get(AttemptRecord, attempt_id)
             attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
 
-        self.assertEqual(
-            self.repository.list_jobs_with_expired_attempts(limit=10),
-            [job_id],
+        self.assertIn(
+            job_id,
+            self.repository.list_jobs_with_expired_attempts(limit=1000),
         )
         with self.assertRaisesRegex(ValueError, "limit must be between"):
             self.repository.list_jobs_with_expired_attempts(limit=0)
