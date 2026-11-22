@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 if importlib.util.find_spec("celery"):
-    import video_streaming.ffmpeg.tasks.cleanup_package_attempt as cleanup_task
+    cleanup_task = importlib.import_module(
+        "video_streaming.ffmpeg.tasks.cleanup_package_attempt"
+    )
 else:
     cleanup_task = None
 
