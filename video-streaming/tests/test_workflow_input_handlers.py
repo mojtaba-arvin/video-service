@@ -204,7 +204,7 @@ class DurableInputHandlerTests(unittest.TestCase):
         self.assertEqual(self.s3.get_calls[0]["VersionId"], "version-1")
         self.assertEqual(check_context.heartbeat_calls, 1)
         self.assertGreaterEqual(download_context.heartbeat_calls, 2)
-        self.assertGreaterEqual(analyze_context.heartbeat_calls, 2)
+        self.assertGreaterEqual(analyze_context.heartbeat_calls, 3)
 
     def test_missing_parent_artifact_fails_closed(self):
         context = _Context("input-video-download")
