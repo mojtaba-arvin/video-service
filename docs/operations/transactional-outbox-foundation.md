@@ -1,6 +1,6 @@
 # Transactional outbox foundation — operational boundary
 
-- **Status:** Persistence foundation only; not enabled for production dispatch
+- **Status:** Persistence and relay/consumer implementation present; production dispatch remains disabled
 - **Migration:** `0009_transactional_outbox`
 - **Depends on:** durable workflow plan and Attempt lease stack
 
@@ -21,9 +21,9 @@ A dispatch intent can only be inserted through `create_job(..., execution_plan=.
 
 ## Explicitly not enabled
 
-This foundation does **not** yet dispatch work. There is no production relay/plan-to-Celery adapter in this change, and no Beat schedule is enabled for outbox publishing.
+The repository, bounded relay, Celery relay task, plan dispatcher, and node consumer are implemented. They are **not active in production**: the durable feature gate defaults to false, the relay has no active Beat schedule while that gate is false, and the current gRPC CreateJob path still selects `legacy_celery` without inserting an outbox dispatch intent. This is an implemented but deliberately inactive dispatch path—not a production rollout.
 
-The current accepted VOD request still builds its legacy graph in the gRPC adapter. Its durable Stage rows do not yet represent every preflight, input, fan-in, watermark, publication, and notification node. Enabling replay against that graph would violate ADR 0004 and could repeat non-idempotent effects.
+The accepted VOD request still executes through its legacy Celery graph. A versioned plan and corresponding durable Stage records are persisted for inspection and future migration, but the API does not dispatch that plan to the durable executor. Do not infer that the durable executor is serving accepted production Jobs merely because those records exist.
 
 Do not:
 - enable a relay or publish outbox rows manually;
