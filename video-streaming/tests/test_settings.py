@@ -197,7 +197,10 @@ class SettingsEnvironmentTests(unittest.TestCase):
         settings = load_settings({})
         self.assertIn("video_streaming.workflows", settings.AUTO_DISCOVER_TASKS)
         self.assertFalse(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
-        self.assertEqual(settings.WORKFLOW_HANDLER_FACTORY, "")
+        self.assertEqual(
+            settings.WORKFLOW_HANDLER_FACTORY,
+            "video_streaming.workflows.handler_factory:build_workflow_handlers",
+        )
 
     def test_outbox_relay_is_not_scheduled_when_durable_dispatch_is_disabled(self):
         settings = load_settings({})
