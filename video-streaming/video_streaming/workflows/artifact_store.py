@@ -146,7 +146,7 @@ class S3ArtifactStore:
             except OSError:
                 pass
 
-    def download_file(self, uri, destination_path, expected_sha256=None):
+    def download_file(self, uri, destination_path, expected_sha256=None, on_chunk=None):
         bucket, key = parse_artifact_uri(uri)
         if not isinstance(destination_path, str) or not destination_path:
             raise ValueError("destination_path is required")
@@ -169,6 +169,8 @@ class S3ArtifactStore:
                         break
                     target.write(chunk)
                     digest.update(chunk)
+                    if on_chunk is not None:
+                        on_chunk(len(chunk))
             actual = digest.hexdigest()
             expected = (
                 expected_sha256
