@@ -149,7 +149,7 @@ def build_input_handlers(
             raise PermanentOperationError("input object is empty or has invalid size")
         etag = details.get("ETag")
         version_id = details.get("VersionId")
-        if not version_id and (not isinstance(etag, str) or not etag):
+        if version_id in (None, "", "null") and (not isinstance(etag, str) or not etag):
             raise PermanentOperationError(
                 "input object has no stable version or ETag validator"
             )
@@ -203,10 +203,16 @@ def build_input_handlers(
             body = None
             try:
                 get_args = {"Bucket": bucket, "Key": key}
-                if reference.get("version_id"):
-                    get_args["VersionId"] = reference["version_id"]
-                elif reference.get("etag"):
-                    get_args["IfMatch"] = reference["etag"]
+                version_id = reference.get("version_id")
+                if version_id not in (None, "", "null"):
+                    get_args["VersionId"] = version_id
+                else:
+                    etag = reference.get("etag")
+                    if not isinstance(etag, str) or not etag:
+                        raise PermanentOperationError(
+                            "input object reference has no stable download validator"
+                        )
+                    get_args["IfMatch"] = etag
                 response = s3_client.get_object(**get_args)
                 body = response["Body"]
                 with os.fdopen(descriptor, "wb") as target:
