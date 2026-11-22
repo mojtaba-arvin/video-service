@@ -1,6 +1,7 @@
 """Tests for the gRPC-to-canonical VOD request adapter."""
 
 import unittest
+from unittest.mock import Mock, patch
 
 from video_streaming.workflows.vod_plan import build_vod_execution_plan
 
@@ -264,6 +265,96 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one output"):
             self.adapter._build_durable_vod_plan("job-no-outputs", request)
 
+
+    def test_create_job_uses_durable_outbox_when_feature_gate_is_enabled(self):
+        class Repository:
+            def __init__(self):
+                self.create_kwargs = None
+
+            def find_idempotent_job(self, *args, **kwargs):
+                return None
+
+            def create_job(self, **kwargs):
+                self.create_kwargs = kwargs
+                return kwargs["job_id"], True
+
+        repository = Repository()
+        self.adapter.cache = Mock()
+        principal = Mock(
+            tenant_id="tenant-a", issuer="issuer-a", subject="subject-a"
+        )
+        with patch(
+            "video_streaming.grpc.servicers.mixins.create_job.get_request_principal",
+            return_value=principal,
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.require_scope"
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.get_workflow_repository",
+            return_value=repository,
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.settings.WORKFLOW_DURABLE_DISPATCH_ENABLED",
+            True,
+        ), patch.object(
+            self.adapter, "_apply_job"
+        ) as apply_legacy, patch.object(
+            self.adapter, "_job_response", return_value="job-response"
+        ):
+            response = self.adapter._create_job(self.make_request(), None)
+
+        self.assertEqual(response, "job-response")
+        self.assertEqual(
+            repository.create_kwargs["execution_backend"], "durable_vod_v1"
+        )
+        self.assertTrue(repository.create_kwargs["enqueue_dispatch"])
+        self.assertTrue(
+            repository.create_kwargs["outbox_dedupe_key"].startswith(
+                "workflow.dispatch:"
+            )
+        )
+        apply_legacy.assert_not_called()
+
+    def test_create_job_preserves_legacy_dispatch_when_feature_gate_is_disabled(self):
+        class Repository:
+            def __init__(self):
+                self.create_kwargs = None
+
+            def find_idempotent_job(self, *args, **kwargs):
+                return None
+
+            def create_job(self, **kwargs):
+                self.create_kwargs = kwargs
+                return kwargs["job_id"], True
+
+        repository = Repository()
+        self.adapter.cache = Mock()
+        principal = Mock(
+            tenant_id="tenant-a", issuer="issuer-a", subject="subject-a"
+        )
+        with patch(
+            "video_streaming.grpc.servicers.mixins.create_job.get_request_principal",
+            return_value=principal,
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.require_scope"
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.get_workflow_repository",
+            return_value=repository,
+        ), patch(
+            "video_streaming.grpc.servicers.mixins.create_job.settings.WORKFLOW_DURABLE_DISPATCH_ENABLED",
+            False,
+        ), patch.object(
+            self.adapter, "_apply_job"
+        ) as apply_legacy, patch.object(
+            self.adapter, "_job_response", return_value="job-response"
+        ):
+            response = self.adapter._create_job(self.make_request(), None)
+
+        self.assertEqual(response, "job-response")
+        self.assertEqual(
+            repository.create_kwargs["execution_backend"], "legacy_celery"
+        )
+        self.assertFalse(repository.create_kwargs["enqueue_dispatch"])
+        self.assertIsNone(repository.create_kwargs["outbox_dedupe_key"])
+        apply_legacy.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()
