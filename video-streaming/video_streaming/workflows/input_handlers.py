@@ -283,7 +283,7 @@ def build_input_handlers(
                     local_path,
                     ffprobe_bin_path,
                     probe_timeout_seconds,
-                    should_cancel=context.is_cancelled,
+                    should_cancel=context.is_terminal,
                     on_usage=on_usage,
                 )
                 streams = metadata.get("streams", [])
