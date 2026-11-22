@@ -16,7 +16,7 @@ jobs:
   merge-develop:
     name: Merge develop into PR branch
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -30,22 +30,79 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge current develop and expose conflict hunks
+      - name: Merge develop and resolve only overlapping hunks
         shell: bash
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = "work/durable-vod-integration"
           git fetch --no-tags origin develop
-          if ! git merge --no-edit --no-ff origin/develop; then
-            echo "::group::Unmerged paths"
-            git status --short
-            echo "::endgroup::"
-            while IFS= read -r path; do
-              echo "::group::Conflict diff: $path"
-              git diff --cc -- "$path" || true
-              echo "::endgroup::"
-            done < <(git diff --name-only --diff-filter=U)
-            exit 1
+          if git merge --no-edit --no-ff origin/develop; then
+            echo "Git completed the three-way merge without conflicts."
+          else
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            printf 'Resolving %s conflicted files\n' "${#conflicts[@]}"
+            python3 - "${conflicts[@]}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          paths = [pathlib.Path(item) for item in sys.argv[1:]]
+          marker = re.compile(
+              r"^<<<<<<< HEAD\n(.*?)^=======\n(.*?)^>>>>>>> origin/develop\n?",
+              re.MULTILINE | re.DOTALL,
+          )
+          for path in paths:
+              content = path.read_text(encoding="utf-8")
+              # Keep the PR-side text only inside overlapping conflict hunks.
+              # Git's non-conflicting three-way merge output remains untouched.
+              resolved, count = marker.subn(lambda match: match.group(1), content)
+              if count == 0:
+                  raise SystemExit("Unrecognized conflict markers in {}".format(path))
+              path.write_text(resolved, encoding="utf-8")
+              print("{}: resolved {} overlapping hunk(s)".format(path, count))
+          PY
+            # Keep the authenticated test stub introduced by develop while
+            # retaining the additional durable-workflow assertions from PR 151.
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path("video-streaming/tests/test_vod_pipeline_e2e.py")
+          text = path.read_text(encoding="utf-8")
+          old = "cls.stub = cls.pb2_grpc.StreamingStub(cls.channel)"
+          new = "cls.stub = AuthenticatedStub(cls.pb2_grpc.StreamingStub(cls.channel))"
+          if old not in text:
+              raise SystemExit("Expected E2E stub assignment was not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # Apply develop's batch authorization before any Redis result reads.
+          path = Path("video-streaming/video_streaming/grpc/servicers/mixins/get_results.py")
+          text = path.read_text(encoding="utf-8")
+          import_line = "from video_streaming.workflows.service import get_workflow_repository\n"
+          auth_import = "from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access\n"
+          if auth_import not in text:
+              if import_line not in text:
+                  raise SystemExit("GetResults repository import anchor not found")
+              text = text.replace(import_line, import_line + auth_import, 1)
+          old = "    def _get_results(self, request, context):\n        results: list[streaming_pb2.ResultDetails] = []\n        for request_id in request.tracking_ids:\n"
+          new = (
+              "    def _get_results(self, request, context):\n"
+              "        # Authorize the complete batch before reading any Redis projection.\n"
+              "        request_ids = tuple(request.tracking_ids)\n"
+              "        for request_id in request_ids:\n"
+              "            require_job_access(request_id, \"video.jobs:read\", context)\n"
+              "        results: list[streaming_pb2.ResultDetails] = []\n"
+              "        for request_id in request_ids:\n"
+          )
+          if old not in text:
+              raise SystemExit("GetResults authorization insertion anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+            git add -- "${conflicts[@]}"               video-streaming/tests/test_vod_pipeline_e2e.py               video-streaming/video_streaming/grpc/servicers/mixins/get_results.py
+            if git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- '*.py'; then
+              echo "Unresolved conflict markers remain." >&2
+              exit 1
+            fi
+            git diff --cached --check
+            git commit -m "merge: integrate develop with durable VOD branch"
           fi
 
       - name: Push merge commit without force
