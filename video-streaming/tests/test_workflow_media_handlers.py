@@ -329,7 +329,7 @@ class DurableMediaHandlerTests(unittest.TestCase):
                 return self
 
         class _Input:
-            pass
+            audio = "source-audio-stream"
 
         def fake_run(command, **kwargs):
             output_path = command[-1]
@@ -350,6 +350,9 @@ class DurableMediaHandlerTests(unittest.TestCase):
             "video_streaming.workflows.media_handlers.ffmpeg.filter",
             return_value=_Stream(),
         ), patch(
+            "video_streaming.workflows.media_handlers.ffmpeg.output",
+            return_value=_Stream(),
+        ) as output, patch(
             "video_streaming.workflows.media_handlers.ffmpeg.compile",
             side_effect=lambda stream, **_kwargs: ["ffmpeg", stream.path],
         ), patch(
@@ -360,6 +363,7 @@ class DurableMediaHandlerTests(unittest.TestCase):
                 {"parameters": {}}, context
             )
 
+        self.assertEqual(output.call_args.args[1], "source-audio-stream")
         self.assertEqual(result["artifacts"][0]["logical_name"], "watermark.video")
         self.assertEqual(result["validation_report"]["width"], 1920)
         self.assertEqual(result["metrics"]["output_bytes"], len(b"watermarked-mp4"))
