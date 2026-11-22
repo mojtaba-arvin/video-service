@@ -275,7 +275,7 @@ class DurableMediaHandlerTests(unittest.TestCase):
             logical_names = {
                 artifact["logical_name"] for artifact in result["artifacts"]
             }
-            self.assertIn("package.{}.manifest".format(protocol), logical_names)
+            self.assertIn("package.{}_manifest".format(protocol), logical_names)
             self.assertIn("package.directory_manifest", logical_names)
             directory_record = next(
                 item for item in result["artifacts"]
