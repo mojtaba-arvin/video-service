@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 
 from video_streaming.workflows.repository import (
@@ -285,20 +285,28 @@ class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
             ).scalar_one()
 
         try:
-            with repository._session.begin() as session:
-                session.execute(
-                    select(OutboxRecord).where(
-                        OutboxRecord.id == outbox_id
-                    ).with_for_update()
-                ).scalar_one()
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        competing_repository.claim_outbox_batch,
-                        "relay-concurrent",
-                        30,
-                        1,
-                    )
-                    self.assertEqual(future.result(timeout=10), [])
+            # Hold the row lock on an explicitly checked-out PostgreSQL
+            # connection. Using a Session here obscured the lock lifetime in
+            # this concurrency test; the relay must observe this independent
+            # transaction and skip the locked row.
+            with repository.engine.connect() as lock_connection:
+                with lock_connection.begin():
+                    locked_id = lock_connection.execute(
+                        text(
+                            "SELECT id FROM workflow_outbox "
+                            "WHERE id = :outbox_id FOR UPDATE"
+                        ),
+                        {"outbox_id": outbox_id},
+                    ).scalar_one()
+                    self.assertEqual(locked_id, outbox_id)
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            competing_repository.claim_outbox_batch,
+                            "relay-concurrent",
+                            30,
+                            1,
+                        )
+                        self.assertEqual(future.result(timeout=10), [])
         finally:
             with repository._session.begin() as session:
                 job = session.get(JobRecord, job_id)
