@@ -2374,6 +2374,40 @@ class WorkflowRepository:
                     )
             return True
 
+    def list_jobs_with_expired_attempts(self, limit=100, now=None):
+        """List bounded durable Jobs whose worker lease has expired.
+
+        This is a recovery scan, not a claim. The subsequent node claim remains
+        the concurrency fence; duplicate scheduler deliveries are harmless.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        statement = (
+            select(JobRecord.id)
+            .join(WorkflowRecord, WorkflowRecord.job_id == JobRecord.id)
+            .join(StageRecord, StageRecord.workflow_id == WorkflowRecord.id)
+            .join(AttemptRecord, AttemptRecord.stage_id == StageRecord.id)
+            .where(
+                WorkflowRecord.execution_backend == "durable_vod_v1",
+                WorkflowRecord.execution_plan_json.is_not(None),
+                JobRecord.state.in_(
+                    (JobState.QUEUED.value, JobState.RUNNING.value)
+                ),
+                AttemptRecord.state == AttemptState.RUNNING.value,
+                AttemptRecord.lease_token_hash.is_not(None),
+                AttemptRecord.lease_expires_at.is_not(None),
+                AttemptRecord.lease_expires_at <= now,
+            )
+            .distinct()
+            .order_by(JobRecord.updated_at, JobRecord.id)
+            .limit(limit)
+        )
+        with self._session() as session:
+            return list(session.execute(statement).scalars().all())
+
     def get_ready_node_ids(self, job_id, now=None):
         """Return only nodes whose dependencies are FINISHED and stage is claimable.
 
