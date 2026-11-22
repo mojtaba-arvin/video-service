@@ -419,6 +419,39 @@ def _dash_timeline_points(timeline, timescale, start_number):
     return points
 
 
+def _is_video_representation(representation, adaptation):
+    """Classify a DASH Representation using its inherited media type."""
+    content_type = (
+        representation.attrib.get("contentType")
+        or adaptation.attrib.get("contentType")
+        or ""
+    ).lower()
+    if content_type:
+        return content_type == "video"
+    mime_type = (
+        representation.attrib.get("mimeType")
+        or adaptation.attrib.get("mimeType")
+        or ""
+    ).lower()
+    if mime_type:
+        return mime_type.startswith("video/")
+    codecs = (
+        representation.attrib.get("codecs")
+        or adaptation.attrib.get("codecs")
+        or ""
+    )
+    audio_codecs = {
+        "aac", "mp4a", "ac3", "eac3", "opus", "vorbis", "flac",
+        "alac", "mp3", "dts", "truehd",
+    }
+    families = {
+        _codec_family(value.strip())
+        for value in codecs.split(",")
+        if value.strip()
+    }
+    return not families or not families.issubset(audio_codecs)
+
+
 def _validate_dash_representation(root, representation, inherited,
                                   period_duration):
     elements = inherited + [representation]
@@ -520,6 +553,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
         raise StreamingPackageValidationError("DASH MPD contains no Period")
 
     total_representations = 0
+    total_video_representations = 0
     total_segments = 0
     representation_ids = []
     mpd_duration = mpd.attrib.get("mediaPresentationDuration")
@@ -557,10 +591,12 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
                     root, representation, inherited, period_duration
                 )
                 total_segments += segment_count
-                representation_ids.append(representation_id)
+                if _is_video_representation(representation, adaptation):
+                    representation_ids.append(representation_id)
+                    total_video_representations += 1
                 total_representations += 1
 
-    if total_representations == 0 or total_segments == 0:
+    if total_video_representations == 0 or total_segments == 0:
         raise StreamingPackageValidationError(
             "DASH MPD contains no complete representations"
         )
@@ -568,7 +604,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
     return {
         "protocol": "dash",
         "manifest": manifest.name,
-        "renditions": total_representations,
+        "renditions": total_video_representations,
         "rendition_ids": sorted(representation_ids),
         "segments": total_segments,
     }
@@ -1279,7 +1315,14 @@ def _probe_package_metadata(
                             adaptation, "Representation"):
                         item = dict(representation.attrib)
                         item.setdefault("codecs", inherited_codecs)
-                        representations.append(item)
+                        item.setdefault(
+                            "contentType", adaptation.attrib.get("contentType")
+                        )
+                        item.setdefault(
+                            "mimeType", adaptation.attrib.get("mimeType")
+                        )
+                        if _is_video_representation(item, adaptation):
+                            representations.append(item)
 
             if streams and len(streams) != len(representations):
                 add(
