@@ -38,7 +38,9 @@ def _classify_s3_error(exc, *, missing_is_permanent=True):
     error = response.get("Error", {}) or {}
     status = metadata.get("HTTPStatusCode")
     code = str(error.get("Code", ""))
-    if status == 404 or code in ("404", "NoSuchBucket", "NotFound"):
+    if code == "NoSuchBucket":
+        raise PermanentOperationError("output bucket does not exist") from exc
+    if status == 404 or code in ("404", "NoSuchKey", "NotFound"):
         if missing_is_permanent:
             raise PermanentOperationError("output bucket or object does not exist") from exc
         return "missing"
