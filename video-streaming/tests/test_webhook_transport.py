@@ -204,7 +204,7 @@ class WebhookDestinationTests(unittest.TestCase):
                     body="{}",
                     connect_timeout=2.0,
                     read_timeout=4.0,
-                    headers={"X-Test": "safe\\r\\nInjected: yes"},
+                    headers={"X-Test": "safe\r\nInjected: yes"},
                 )
             with self.assertRaises(WebhookDestinationError):
                 request_webhook(
