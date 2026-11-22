@@ -3,6 +3,9 @@
 import math
 import time
 import unittest
+from unittest.mock import patch
+
+import psutil
 
 from video_streaming.workflows.resource_meter import ProcessResourceMeter
 
@@ -24,6 +27,21 @@ class ProcessResourceMeterTests(unittest.TestCase):
         self.assertGreater(first["memory_duration_ms"], 0)
         self.assertTrue(math.isfinite(first["cpu_seconds"]))
         self.assertEqual(first, second)
+
+    def test_unavailable_rss_remains_unknown_instead_of_zero(self):
+        class DeniedProcess:
+            def memory_info(self):
+                raise psutil.AccessDenied()
+
+        with patch(
+                "video_streaming.workflows.resource_meter.psutil.Process",
+                return_value=DeniedProcess()):
+            meter = ProcessResourceMeter(sample_interval_seconds=0.01).start()
+            result = meter.stop()
+
+        self.assertIsNone(result["peak_memory_bytes"])
+        self.assertGreaterEqual(result["cpu_seconds"], 0.0)
+        self.assertGreaterEqual(result["memory_duration_ms"], 0)
 
     def test_meter_rejects_invalid_sampling_interval(self):
         for value in (0, -1, True, float("inf")):
