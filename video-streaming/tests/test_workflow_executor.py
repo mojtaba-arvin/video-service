@@ -379,6 +379,49 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(stages["canceller"]["status"], "CANCELLED")
         self.assertFalse(stages["active"]["artifacts"])
 
+    def test_terminal_sibling_failure_stops_active_node_without_overwriting_failure(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1, "workflow_name": "video.vod",
+            "workflow_version": "1", "job_id": job_id,
+            "nodes": [
+                node("active", "video.input.check"),
+                node("failing", "video.output.bucket.check"),
+            ],
+        }
+        self.repository.create_job(
+            job_id=job_id, idempotency_key="sibling-failure-" + job_id,
+            request_hash="f" * 64, execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        failed_id, _, failed_token, _ = self.repository.claim_node_attempt(
+            job_id, "failing", lease_owner="worker-failing", lease_ttl_seconds=30,
+        )
+
+        def handler(_node, context):
+            self.assertTrue(self.repository.fail_attempt(
+                job_id, "failing", failed_id,
+                retryable=False,
+                error_code="SIBLING_FAILED",
+                error_message="terminal sibling failure",
+                lease_token=failed_token,
+            ))
+            self.assertTrue(context.is_terminal())
+            context.cancel(reason="sibling failed the workflow")
+            raise __import__(
+                "video_streaming.workflows.domain", fromlist=["AttemptLeaseLost"]
+            ).AttemptLeaseLost("workflow is terminal")
+
+        result = self.executor(handler).execute(job_id, "active")
+        self.assertEqual(result["status"], "terminal")
+        self.assertEqual(result["job_status"], "FAILED")
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "FAILED")
+        self.assertEqual(snapshot["workflow"]["status"], "FAILED")
+        stages = {stage["key"]: stage for stage in snapshot["stages"]}
+        self.assertEqual(stages["active"]["status"], "CANCELLED")
+        self.assertEqual(stages["failing"]["status"], "FAILED")
+
     def test_handler_registry_must_cover_every_plan_operation(self):
         with self.assertRaisesRegex(ValueError, "exactly cover"):
             WorkflowNodeExecutor(
