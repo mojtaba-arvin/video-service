@@ -2402,7 +2402,7 @@ class WorkflowRepository:
                 AttemptRecord.lease_expires_at <= now,
             )
             .distinct()
-            .order_by(JobRecord.updated_at, JobRecord.id)
+            .order_by(JobRecord.id)
             .limit(limit)
         )
         with self._session() as session:
