@@ -432,7 +432,9 @@ WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX = env_config.get(
 WORKFLOW_DURABLE_DISPATCH_ENABLED = env_config.get(
     "WORKFLOW_DURABLE_DISPATCH_ENABLED", default=False, cast=bool)
 WORKFLOW_HANDLER_FACTORY = env_config.get(
-    "WORKFLOW_HANDLER_FACTORY", default="", cast=str)
+    "WORKFLOW_HANDLER_FACTORY",
+    default="video_streaming.workflows.handler_factory:build_workflow_handlers",
+    cast=str)
 
 
 # Start the transactional outbox relay only when the durable backend has been
