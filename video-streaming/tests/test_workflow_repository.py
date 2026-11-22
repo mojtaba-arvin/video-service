@@ -4,7 +4,7 @@ import os
 import threading
 import unittest
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, event, text
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -2930,6 +2930,117 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         self.assertNotEqual(processing_id, replacement_id)
         self.assertTrue(replacement_token)
+
+    def test_claim_refreshes_previously_loaded_job_under_final_lock(self):
+        job_id = self.create_job("p0")
+        updated = {"value": False}
+
+        def mark_job_failed_before_locked_read(
+                connection, cursor, statement, parameters, context, executemany):
+            normalized = statement.upper()
+            if (
+                    not updated["value"]
+                    and "FROM WORKFLOW_JOBS" in normalized
+                    and "FOR UPDATE" in normalized):
+                # require_dependencies has already loaded this Job in the
+                # claiming Session. Commit a concurrent terminal transition
+                # immediately before the final row-locking SELECT.
+                with self.repository.engine.begin() as updater:
+                    updater.execute(
+                        text(
+                            "UPDATE workflow_jobs SET state = 'FAILED' "
+                            "WHERE id = :job_id"
+                        ),
+                        {"job_id": job_id},
+                    )
+                updated["value"] = True
+
+        event.listen(
+            self.repository.engine,
+            "before_cursor_execute",
+            mark_job_failed_before_locked_read,
+        )
+        try:
+            with self.assertRaisesRegex(
+                    InvalidStateTransition, "terminal or missing Job"):
+                self.repository.claim_node_attempt(
+                    job_id, "p0", lease_owner="claim-after-concurrent-failure"
+                )
+        finally:
+            event.remove(
+                self.repository.engine,
+                "before_cursor_execute",
+                mark_job_failed_before_locked_read,
+            )
+
+        self.assertTrue(updated["value"], "final Job lock query was not observed")
+        with self.repository._session() as session:
+            job = session.get(JobRecord, job_id)
+            self.assertEqual(job.state, JobState.FAILED.value)
+            self.assertEqual(
+                session.execute(
+                    select(func.count()).select_from(AttemptRecord).join(
+                        StageRecord, AttemptRecord.stage_id == StageRecord.id
+                    ).where(StageRecord.stage_key == "p0")
+                ).scalar_one(),
+                0,
+            )
+
+    def test_lost_package_recovery_rejects_terminal_jobs_and_rolls_back(self):
+        for terminal_state in (
+                JobState.CANCELLED, JobState.FAILED, JobState.FINISHED):
+            with self.subTest(job_state=terminal_state.value):
+                job_id = self.create_job("p0")
+                processing_id, _, token, _ = self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="terminal-package-worker"
+                )
+                self.repository.complete_processing_attempt(
+                    job_id, "p0", processing_id,
+                    {"valid": True, "errors": []},
+                    lease_token=token,
+                    metrics={
+                        "local_package": {
+                            "directory": "/missing/package",
+                            "manifest_path": "/missing/package/master.m3u8",
+                            "expected_renditions": ["master_144p.m3u8"],
+                            "package_type": "hls",
+                        },
+                    },
+                )
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    workflow = session.execute(
+                        select(WorkflowRecord).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one()
+                    job.state = terminal_state.value
+                    workflow.state = terminal_state.value
+
+                with self.assertRaisesRegex(
+                        InvalidStateTransition, "terminal Job"):
+                    self.repository.requeue_processing_after_local_package_loss(
+                        job_id,
+                        "p0",
+                        processing_id,
+                        reason="terminal-state-recovery-regression",
+                    )
+
+                snapshot = self.repository.get_job_snapshot(job_id)
+                self.assertEqual(snapshot["status"], terminal_state.value)
+                self.assertEqual(
+                    snapshot["workflow"]["status"], terminal_state.value
+                )
+                stage = snapshot["stages"][0]
+                self.assertEqual(stage["status"], "VALIDATED")
+                validation = next(
+                    item for item in stage["artifacts"]
+                    if item["type"] == "validation_report"
+                )
+                self.assertEqual(validation["status"], "AVAILABLE")
+                self.assertNotIn(
+                    "invalidated_reason", validation["metadata"]
+                )
 
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch
