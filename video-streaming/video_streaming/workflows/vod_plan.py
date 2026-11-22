@@ -497,6 +497,7 @@ def build_vod_execution_plan(
                 "key": item["key"],
                 "output_id": prefix,
                 "protocol": item["protocol"],
+                "dont_replace": item["dont_replace"],
             }, "upload", "upload",
             stage_key=item.get("output_id") or upload_id,
         ))
@@ -524,6 +525,7 @@ def build_vod_execution_plan(
                 "bucket": item["bucket"],
                 "key": item["key"],
                 "output_id": prefix,
+                "dont_replace": item["dont_replace"],
             }, "upload", "upload",
             stage_key=item.get("output_id") or upload_id,
         ))
@@ -536,6 +538,7 @@ def build_vod_execution_plan(
                 "bucket": watermark_output_bucket,
                 "key": watermark_output_key,
                 "output_id": "watermarked-video",
+                "dont_replace": watermark.get("dont_replace", False),
             }, "upload", "upload",
             stage_key=watermark.get("output_id") or upload_id,
         ))
