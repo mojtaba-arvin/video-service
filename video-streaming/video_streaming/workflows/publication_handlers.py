@@ -25,7 +25,6 @@ from video_streaming.workflows.errors import (
     PermanentOperationError,
     RetryableOperationError,
 )
-from video_streaming.workflows.artifacts import attempt_scoped_object_key
 
 
 _VALIDATION = {"valid": True, "errors": []}
@@ -80,11 +79,20 @@ def _artifact_metadata(artifact):
     return artifact
 
 
+def _stable_publication_key(key, idempotency_key):
+    token = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    return key + ".workflow-attempts/" + token
+
+
 def _upload_file(
-        s3_client, bucket, key, path, attempt_id, checksum, media_type,
-        dont_replace, context):
+        s3_client, bucket, key, path, attempt_id, idempotency_key,
+        checksum, media_type, dont_replace, context):
     size = os.path.getsize(path)
-    metadata = {"sha256": checksum, "attempt_id": attempt_id}
+    metadata = {
+        "sha256": checksum,
+        "attempt_id": attempt_id,
+        "idempotency_key": idempotency_key,
+    }
     extra = {
         "Bucket": bucket,
         "Key": key,
@@ -312,11 +320,12 @@ def build_publication_handlers(
             media_type = source.get("media_type") or mimetypes.guess_type(key)[0]
             publication_key = (
                 key if dont_replace
-                else attempt_scoped_object_key(key, context.attempt_id)
+                else _stable_publication_key(key, context.idempotency_key)
             )
             published = _upload_file(
                 s3_client, bucket, publication_key, path, context.attempt_id,
-                source["checksum_sha256"], media_type, dont_replace, context,
+                context.idempotency_key, source["checksum_sha256"],
+                media_type, dont_replace, context,
             )
         record = {
             "logical_name": "output.published_object",
@@ -393,10 +402,11 @@ def build_publication_handlers(
         )
         publication_manifest_key = (
             manifest_key if dont_replace
-            else attempt_scoped_object_key(manifest_key, context.attempt_id)
+            else _stable_publication_key(manifest_key, context.idempotency_key)
         )
         version_prefix = (
-            publication_manifest_key + ".workflow-versions/" + context.attempt_id
+            publication_manifest_key + ".workflow-versions/" +
+            hashlib.sha256(context.idempotency_key.encode("utf-8")).hexdigest()
         )
         relative_prefix = posixpath.relpath(
             version_prefix, posixpath.dirname(manifest_key) or "."
@@ -420,7 +430,7 @@ def build_publication_handlers(
                 output_key = posixpath.join(version_prefix, relative)
                 published = _upload_file(
                     s3_client, bucket, output_key, local_path, context.attempt_id,
-                    artifact["checksum_sha256"],
+                    context.idempotency_key, artifact["checksum_sha256"],
                     artifact.get("media_type") or mimetypes.guess_type(relative)[0],
                     True, context,
                 )
@@ -472,6 +482,7 @@ def build_publication_handlers(
                     ContentType=media_type,
                     Metadata={
                         "attempt_id": context.attempt_id,
+                        "idempotency_key": context.idempotency_key,
                         "sha256": hashlib.sha256(published_manifest).hexdigest(),
                         "package_version_prefix": version_prefix,
                     },
@@ -479,19 +490,32 @@ def build_publication_handlers(
                 )
             except Exception as exc:
                 if dont_replace and _is_precondition_failure(exc):
-                    raise PermanentOperationError(
-                        "output key already exists; dont_replace is enforced"
-                    ) from exc
-                if _is_permanent_s3_error(exc):
+                    existing = s3_client.head_object(
+                        Bucket=bucket, Key=publication_manifest_key
+                    )
+                    metadata = existing.get("Metadata", {})
+                    expected_digest = hashlib.sha256(published_manifest).hexdigest()
+                    if (
+                        int(existing.get("ContentLength", -1)) == len(published_manifest)
+                        and metadata.get("sha256") == expected_digest
+                        and metadata.get("idempotency_key") == context.idempotency_key
+                    ):
+                        pass
+                    else:
+                        raise PermanentOperationError(
+                            "output key already exists with different content"
+                        ) from exc
+                elif _is_permanent_s3_error(exc):
                     raise PermanentOperationError("package manifest publication was rejected") from exc
-                raise RetryableOperationError("package manifest publication failed") from exc
+                else:
+                    raise RetryableOperationError("package manifest publication failed") from exc
             _check_active(context)
             head = s3_client.head_object(Bucket=bucket, Key=manifest_key)
             digest = hashlib.sha256(published_manifest).hexdigest()
             if (
                 int(head.get("ContentLength", -1)) != len(published_manifest)
                 or head.get("Metadata", {}).get("sha256") != digest
-                or head.get("Metadata", {}).get("attempt_id") != context.attempt_id
+                or head.get("Metadata", {}).get("idempotency_key") != context.idempotency_key
             ):
                 raise RetryableOperationError("package manifest read-back did not match")
         manifest_record = {
