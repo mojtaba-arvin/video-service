@@ -295,7 +295,7 @@ def build_publication_handlers(
     def upload_file(node, context):
         params = _parameters(node)
         bucket = _required_text(params.get("bucket"), "bucket")
-        key = _required_text(params.get("key"), "key")
+        key = _safe_relative_path(_required_text(params.get("key"), "key"))
         dont_replace = params.get("dont_replace", False)
         if not isinstance(dont_replace, bool):
             raise PermanentOperationError("dont_replace must be a boolean")
@@ -359,7 +359,9 @@ def build_publication_handlers(
     def upload_directory(node, context):
         params = _parameters(node)
         bucket = _required_text(params.get("bucket"), "bucket")
-        manifest_key = _required_text(params.get("key"), "key")
+        manifest_key = _safe_relative_path(
+            _required_text(params.get("key"), "key")
+        )
         protocol = _required_text(params.get("protocol"), "protocol").lower()
         if protocol not in ("hls", "dash"):
             raise PermanentOperationError("package protocol is invalid")
