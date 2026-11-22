@@ -101,7 +101,7 @@ class _Context:
         self.cancelled = False
         self.heartbeat_calls = 0
 
-    def is_cancelled(self):
+    def is_terminal(self):
         return self.cancelled
 
     def heartbeat(self):
