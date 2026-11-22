@@ -160,6 +160,61 @@ class WebhookDestinationTests(unittest.TestCase):
         tls_socket.settimeout.assert_called_once_with(5.0)
         connection.close()
 
+    def test_request_includes_validated_idempotency_header(self):
+        target = WebhookTarget(
+            scheme="https", hostname="callback.example.test", port=443,
+            request_target="/callback", host_header="callback.example.test",
+            addresses=("93.184.216.34",),
+        )
+        response = Mock()
+        response.status = 202
+        connection = Mock()
+        connection.getresponse.return_value = response
+        with patch(
+                "video_streaming.ffmpeg.webhook_transport.resolve_webhook_target",
+                return_value=target):
+            with patch(
+                    "video_streaming.ffmpeg.webhook_transport._PinnedHTTPSConnection",
+                    return_value=connection):
+                result = request_webhook(
+                    "https://callback.example.test/callback",
+                    body="{}",
+                    connect_timeout=2.0,
+                    read_timeout=4.0,
+                    headers={"Idempotency-Key": "job:fingerprint:node"},
+                )
+        self.assertEqual(
+            connection.request.call_args.kwargs["headers"]["Idempotency-Key"],
+            "job:fingerprint:node",
+        )
+        result.close()
+
+    def test_request_rejects_header_injection_and_reserved_headers(self):
+        target = WebhookTarget(
+            scheme="https", hostname="callback.example.test", port=443,
+            request_target="/callback", host_header="callback.example.test",
+            addresses=("93.184.216.34",),
+        )
+        with patch(
+                "video_streaming.ffmpeg.webhook_transport.resolve_webhook_target",
+                return_value=target):
+            with self.assertRaises(WebhookDestinationError):
+                request_webhook(
+                    "https://callback.example.test/callback",
+                    body="{}",
+                    connect_timeout=2.0,
+                    read_timeout=4.0,
+                    headers={"X-Test": "safe\\r\\nInjected: yes"},
+                )
+            with self.assertRaises(WebhookDestinationError):
+                request_webhook(
+                    "https://callback.example.test/callback",
+                    body="{}",
+                    connect_timeout=2.0,
+                    read_timeout=4.0,
+                    headers={"Host": "attacker.example"},
+                )
+
     def test_http_response_is_returned_without_following_redirects(self):
         target = WebhookTarget(
             scheme="https",
