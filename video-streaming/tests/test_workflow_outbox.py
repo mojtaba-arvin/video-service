@@ -290,24 +290,28 @@ class PostgreSQLWorkflowOutboxConcurrencyTests(unittest.TestCase):
             # this concurrency test; the relay must observe this independent
             # transaction and skip the locked row.
             with repository.engine.connect() as lock_connection:
-                with lock_connection.begin():
-                    # claim_outbox_batch is intentionally global. Lock
-                    # every row that can become eligible during this short
-                    # test, including fixtures left by earlier test classes,
-                    # so the competing relay cannot claim an unrelated row.
-                    locked_ids = set(lock_connection.execute(
-                        text(
-                            "SELECT id FROM workflow_outbox "
-                            "WHERE available_at <= "
-                            "CURRENT_TIMESTAMP + INTERVAL '1 minute' "
-                            "AND (state = 'PENDING' OR "
-                            "(state = 'PROCESSING' AND lease_expires_at <= "
-                            "CURRENT_TIMESTAMP + INTERVAL '1 minute')) "
-                            "FOR UPDATE"
-                        )
-                    ).scalars().all())
-                    self.assertIn(outbox_id, locked_ids)
-                    with ThreadPoolExecutor(max_workers=1) as executor:
+                # The executor must outlive the transaction, not the other
+                # way around: a timeout first unwinds the transaction and
+                # releases its row locks, then executor shutdown may wait for
+                # the competing worker without holding those locks.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    with lock_connection.begin():
+                        # claim_outbox_batch is intentionally global. Lock
+                        # every row that can become eligible during this short
+                        # test, including fixtures left by earlier test classes,
+                        # so the competing relay cannot claim an unrelated row.
+                        locked_ids = set(lock_connection.execute(
+                            text(
+                                "SELECT id FROM workflow_outbox "
+                                "WHERE available_at <= "
+                                "CURRENT_TIMESTAMP + INTERVAL '1 minute' "
+                                "AND (state = 'PENDING' OR "
+                                "(state = 'PROCESSING' AND lease_expires_at <= "
+                                "CURRENT_TIMESTAMP + INTERVAL '1 minute')) "
+                                "FOR UPDATE"
+                            )
+                        ).scalars().all())
+                        self.assertIn(outbox_id, locked_ids)
                         future = executor.submit(
                             competing_repository.claim_outbox_batch,
                             "relay-concurrent",
