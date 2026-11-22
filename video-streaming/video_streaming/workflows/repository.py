@@ -3567,11 +3567,18 @@ class WorkflowRepository:
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason
             workflow = session.get(WorkflowRecord, stage.workflow_id)
-            workflow.state = WorkflowState.CANCELLED.value
-            workflow.updated_at = now
-            job.state = JobState.CANCELLED.value
-            job.updated_at = now
-            job.version += 1
+            # A sibling may already have failed the Job (or the workflow may
+            # have reached another terminal state). Stop this Attempt without
+            # rewriting that authoritative terminal outcome as CANCELLED.
+            if job.state not in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                workflow.state = WorkflowState.CANCELLED.value
+                workflow.updated_at = now
+                job.state = JobState.CANCELLED.value
+                job.updated_at = now
+                job.version += 1
             _record_event(
                 session,
                 job_id,
