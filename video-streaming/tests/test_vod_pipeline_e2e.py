@@ -554,14 +554,10 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             ],
         )
 
-        accepted = self.stub.create_job(
-            request, timeout=120, metadata=self.rpc_metadata
-        )
+        accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
 
-        replayed = self.stub.create_job(
-            request, timeout=120, metadata=self.rpc_metadata
-        )
+        replayed = self.stub.create_job(request, timeout=120)
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
         # The callback destination is encrypted in PostgreSQL, never copied
