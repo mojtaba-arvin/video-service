@@ -433,6 +433,19 @@ def build_publication_handlers(
         relative_prefix = posixpath.relpath(
             version_prefix, posixpath.dirname(publication_manifest_key) or "."
         )
+        if len(publication_manifest_key.encode("utf-8")) > 1024:
+            raise PermanentOperationError(
+                "derived S3 publication key exceeds 1,024 bytes"
+            )
+        for item in package_manifest["files"]:
+            if not isinstance(item, dict):
+                raise PermanentOperationError("package file entry is invalid")
+            relative = _safe_relative_path(item.get("path"))
+            derived_key = posixpath.join(version_prefix, relative)
+            if len(derived_key.encode("utf-8")) > 1024:
+                raise PermanentOperationError(
+                    "derived S3 package key exceeds 1,024 bytes"
+                )
         uploaded = []
         total_bytes = 0
         input_bytes = 0
