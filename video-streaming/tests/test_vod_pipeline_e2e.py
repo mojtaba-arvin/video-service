@@ -38,6 +38,24 @@ _HAS_RUNTIME = all(
 )
 
 
+class AuthenticatedStub:
+    """Attach the E2E bearer token to every generated gRPC call."""
+
+    def __init__(self, stub, metadata):
+        self._stub = stub
+        self._metadata = tuple(metadata)
+
+    def __getattr__(self, name):
+        rpc = getattr(self._stub, name)
+
+        def authenticated_call(request, *args, **kwargs):
+            metadata = tuple(kwargs.pop("metadata", ()) or ())
+            kwargs["metadata"] = metadata + self._metadata
+            return rpc(request, *args, **kwargs)
+
+        return authenticated_call
+
+
 class InMemoryCache:
     def __init__(self):
         self.values = {}
