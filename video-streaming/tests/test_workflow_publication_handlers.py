@@ -191,6 +191,31 @@ class DurablePublicationHandlerTests(unittest.TestCase):
         self.assertIn(".workflow-versions/", root)
         self.assertEqual(result["metrics"]["artifact_count"], 4)
 
+    def test_directory_retry_reuses_versioned_package_and_entrypoint(self):
+        files = []
+        for path, payload in (
+            ("master.m3u8", b"#EXTM3U\\n720p.m3u8\\n"),
+            ("720p.m3u8", b"#EXTM3U\\n#EXTINF:2,\\nsegment.ts\\n"),
+            ("segment.ts", b"transport-stream"),
+        ):
+            artifact = self.store.add("s3://retry-package/" + path, payload)
+            files.append({"path": path, "artifact": artifact})
+        manifest_payload = json.dumps({
+            "schema_version": 1, "protocol": "hls",
+            "entrypoint": files[0]["artifact"], "files": files,
+        }).encode("utf-8")
+        manifest = self.store.add("s3://retry-package/manifest.json", manifest_payload)
+        artifacts = {"package-node": [{
+            **manifest, "logical_name": "package.directory_manifest",
+        }]}
+        handler = self.build()["video.output.upload_directory"]
+        params = {"bucket": "media-output", "key": "vod/master.m3u8",
+                  "protocol": "hls", "dont_replace": False}
+        first = handler({"parameters": params}, _Context(artifacts, "attempt-one"))
+        second = handler({"parameters": params}, _Context(artifacts, "attempt-two"))
+        self.assertEqual(first["artifacts"][0]["uri"], second["artifacts"][0]["uri"])
+        self.assertEqual(second["validation_report"]["valid"], True)
+
     def test_webhook_uses_stable_delivery_id_header_and_writes_receipt(self):
         calls = []
 
