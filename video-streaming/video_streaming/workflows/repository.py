@@ -1747,6 +1747,24 @@ class WorkflowRepository:
                 JobRecord.id == workflow.job_id
             ).with_for_update()
         ).scalar_one_or_none()
+        if stage.status in (
+                StageState.PROCESSING.value,
+                StageState.VALIDATED.value):
+            # A validation report from an unfinished processing Attempt is
+            # not a valid hand-off. Publication Attempt recovery is different:
+            # it must retain the report from the already-succeeded processor.
+            reports = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.attempt_id == attempt.id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                )
+            ).scalars().all()
+            for report in reports:
+                report.status = "INVALIDATED"
+
         if job is None or job.state in (
                 JobState.CANCELLED.value,
                 JobState.FAILED.value,
