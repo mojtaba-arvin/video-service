@@ -35,6 +35,13 @@ def _required_text(value, name):
     return value.strip()
 
 
+def _input_name(value):
+    name = _required_text(value, "input_name")
+    if name not in ("video", "watermark"):
+        raise PermanentOperationError("unsupported input name")
+    return name
+
+
 def _check_active(context):
     if context.is_cancelled():
         context.cancel(reason="JOB_CANCELLED_DURING_INPUT_OPERATION")
@@ -129,7 +136,7 @@ def build_input_handlers(
 
     def check_input(node, context):
         params = _parameters(node)
-        name = _required_text(params.get("input_name"), "input_name")
+        name = _input_name(params.get("input_name"))
         bucket = _required_text(params.get("bucket"), "bucket")
         key = _required_text(params.get("key"), "key")
         _check_active(context)
