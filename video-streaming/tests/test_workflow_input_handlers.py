@@ -69,13 +69,16 @@ class _ArtifactStore:
         with open(local_path, "rb") as source:
             return self._store(source.read(), logical_key, attempt_id, media_type)
 
-    def download_file(self, uri, destination_path, expected_sha256=None):
+    def download_file(
+            self, uri, destination_path, expected_sha256=None, on_chunk=None):
         payload = self.objects[uri]
         digest = hashlib.sha256(payload).hexdigest()
         if expected_sha256 is not None and digest != expected_sha256:
             raise ValueError("checksum mismatch")
         with open(destination_path, "wb") as target:
             target.write(payload)
+        if on_chunk is not None and payload:
+            on_chunk(len(payload))
         return {
             "path": destination_path,
             "size_bytes": len(payload),
