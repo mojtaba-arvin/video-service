@@ -414,6 +414,51 @@ jobs:
               raise SystemExit("Required Redis/Celery recovery acceptance failed")
           PY
 
+      - name: Run real OS-process worker kill/restart recovery test
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+          WORKFLOW_TEST_BROKER_URL: redis://127.0.0.1:6379/5
+          WORKFLOW_TEST_RESULT_BACKEND: redis://127.0.0.1:6379/6
+        run: |
+          python - <<'PY'
+          import unittest
+
+          loader = unittest.TestLoader()
+          suite = loader.discover(
+              "video-streaming/tests",
+              pattern="test_workflow_worker_process_recovery.py",
+          )
+          if loader.errors:
+              raise SystemExit(
+                  "Worker process recovery discovery failed:\\n"
+                  + "\\n".join(loader.errors)
+              )
+          discovered = suite.countTestCases()
+          if discovered != 1:
+              raise SystemExit(
+                  "Expected exactly one OS-process recovery test; got {}".format(
+                      discovered
+                  )
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          skipped = len(result.skipped)
+          print(
+              "Worker process tests: discovered={}, executed={}, skipped={}, "
+              "failures={}, errors={}".format(
+                  discovered, result.testsRun, skipped,
+                  len(result.failures), len(result.errors)
+              )
+          )
+          if (
+              result.testsRun != discovered
+              or skipped
+              or result.failures
+              or result.errors
+          ):
+              raise SystemExit("OS-process worker recovery acceptance failed")
+          PY
+
       - name: Run durable S3 publication and webhook retry contract tests
         env:
           PYTHONPATH: video-streaming
