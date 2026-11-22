@@ -125,9 +125,26 @@ class DurablePublicationHandlerTests(unittest.TestCase):
             "dont_replace": False,
         }}, context)
         record = result["artifacts"][0]
-        self.assertIn("attempt-123", record["uri"])
+        self.assertIn(".workflow-attempts/", record["uri"])
         self.assertEqual(record["logical_name"], "output.published_object")
         self.assertEqual(result["metrics"]["output_bytes"], len(b"jpeg-data"))
+
+    def test_single_file_retry_reuses_same_idempotent_publication(self):
+        source = self.store.add("s3://input/thumbnail", b"jpeg-data")
+        artifacts = {"thumbnail-node": [{
+            **source, "logical_name": "thumbnail.image",
+        }]}
+        handler = self.build()["video.output.upload_file"]
+        first = handler({"parameters": {
+            "bucket": "media-output", "key": "thumbs/retry.jpg",
+            "dont_replace": True,
+        }}, _Context(artifacts, attempt_id="attempt-first"))
+        second = handler({"parameters": {
+            "bucket": "media-output", "key": "thumbs/retry.jpg",
+            "dont_replace": True,
+        }}, _Context(artifacts, attempt_id="attempt-retry"))
+        self.assertEqual(first["artifacts"][0]["uri"], second["artifacts"][0]["uri"])
+        self.assertTrue(second["artifacts"][0]["metadata"]["replayed"])
 
     def test_single_file_dont_replace_is_atomic_at_requested_key(self):
         source = self.store.add("s3://input/thumbnail", b"jpeg-data")
@@ -168,10 +185,10 @@ class DurablePublicationHandlerTests(unittest.TestCase):
             context,
         )
         published = result["artifacts"][0]
-        self.assertIn("attempt-123", published["uri"])
+        self.assertIn(".workflow-attempts/", published["uri"])
         bucket, key = published["uri"][5:].split("/", 1)
         root = self.s3.objects[(bucket, key)]["body"].decode("utf-8")
-        self.assertIn(".workflow-versions/attempt-123/720p.m3u8", root)
+        self.assertIn(".workflow-versions/", root)
         self.assertEqual(result["metrics"]["artifact_count"], 4)
 
     def test_webhook_uses_stable_delivery_id_header_and_writes_receipt(self):
