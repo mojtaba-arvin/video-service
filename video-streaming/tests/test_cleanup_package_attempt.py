@@ -62,7 +62,7 @@ class CleanupPackageAttemptTests(unittest.TestCase):
                 ],
             ) as cleanup:
                 result = cleanup_task.cleanup_abandoned_packages.run(
-                    task_self, limit=2
+                    limit=2
                 )
 
         self.assertEqual(cleanup.call_count, 2)
