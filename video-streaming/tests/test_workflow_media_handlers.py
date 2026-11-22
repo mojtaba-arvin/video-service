@@ -58,9 +58,12 @@ class _ArtifactStore:
             "checksum_sha256": digest,
         }
 
-    def put_file(self, path, logical_key, attempt_id, media_type=None):
+    def put_file(
+            self, path, logical_key, attempt_id, media_type=None, on_chunk=None):
         with open(path, "rb") as source:
             payload = source.read()
+        if on_chunk and payload:
+            on_chunk(len(payload))
         digest = hashlib.sha256(payload).hexdigest()
         uri = "s3://artifacts/{}/{}".format(attempt_id, logical_key)
         self.objects[uri] = payload
