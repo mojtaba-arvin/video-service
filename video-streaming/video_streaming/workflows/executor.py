@@ -30,6 +30,7 @@ class NodeExecutionContext:
     idempotency_key: str
     heartbeat: object
     cancel: object
+    is_cancelled: object
     is_terminal: object
     input_artifacts: dict = None
 
@@ -123,6 +124,10 @@ class WorkflowNodeExecutor:
                 lease_ttl_seconds=self.lease_ttl_seconds,
             )
 
+        def is_cancelled():
+            current = self.repository.get_job_snapshot(job_id)
+            return current is not None and current["status"] == "CANCELLED"
+
         def is_terminal():
             current = self.repository.get_job_snapshot(job_id)
             return current is None or current["status"] in (
@@ -149,6 +154,7 @@ class WorkflowNodeExecutor:
             idempotency_key=idempotency_key,
             heartbeat=heartbeat,
             cancel=cancel,
+            is_cancelled=is_cancelled,
             is_terminal=is_terminal,
             input_artifacts=input_artifacts,
         )
