@@ -48,6 +48,23 @@ def parse_artifact_uri(uri):
     return parsed.netloc, key
 
 
+class _ProgressReader:
+    """File-like wrapper that renews the owning Attempt as boto3 reads bytes."""
+
+    def __init__(self, source, callback):
+        self._source = source
+        self._callback = callback
+
+    def read(self, size=-1):
+        chunk = self._source.read(size)
+        if chunk and self._callback is not None:
+            self._callback(len(chunk))
+        return chunk
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+
 class S3ArtifactStore:
     """Immutable S3 artifact adapter; never returns local paths as references."""
 
@@ -59,7 +76,9 @@ class S3ArtifactStore:
         self._client = s3_client
         self._default_bucket = default_bucket
 
-    def put_file(self, local_path, logical_key, attempt_id, media_type=None):
+    def put_file(
+            self, local_path, logical_key, attempt_id, media_type=None,
+            on_chunk=None):
         if not isinstance(local_path, str) or not os.path.isfile(local_path):
             raise ValueError("local_path must identify an existing regular file")
         key = attempt_scoped_object_key(logical_key, attempt_id)
@@ -78,6 +97,8 @@ class S3ArtifactStore:
                         snapshot.write(chunk)
                         digest.update(chunk)
                         size += len(chunk)
+                        if on_chunk is not None:
+                            on_chunk(len(chunk))
             checksum = digest.hexdigest()
             metadata = {"sha256": checksum, "attempt_id": attempt_id}
             extra = {"Metadata": metadata, "IfNoneMatch": "*"}
@@ -88,7 +109,7 @@ class S3ArtifactStore:
                     self._client.put_object(
                         Bucket=self._default_bucket,
                         Key=key,
-                        Body=source,
+                        Body=_ProgressReader(source, on_chunk),
                         **extra
                     )
             except Exception as exc:
@@ -123,7 +144,9 @@ class S3ArtifactStore:
             except OSError:
                 pass
 
-    def put_bytes(self, payload, logical_key, attempt_id, media_type=None):
+    def put_bytes(
+            self, payload, logical_key, attempt_id, media_type=None,
+            on_chunk=None):
         """Persist a bounded in-memory payload as an immutable S3 Artifact."""
         if not isinstance(payload, bytes):
             raise TypeError("payload must be bytes")
@@ -139,6 +162,7 @@ class S3ArtifactStore:
                 logical_key,
                 attempt_id,
                 media_type=media_type,
+                on_chunk=on_chunk,
             )
         finally:
             try:
