@@ -58,6 +58,22 @@ class _ArtifactStore:
             "checksum_sha256": digest,
         }
 
+    def put_bytes(
+            self, payload, logical_key, attempt_id, media_type=None, on_chunk=None):
+        descriptor, path = tempfile.mkstemp(prefix="media-test-artifact-")
+        try:
+            with os.fdopen(descriptor, "wb") as target:
+                target.write(payload)
+            return self.put_file(
+                path, logical_key, attempt_id,
+                media_type=media_type, on_chunk=on_chunk,
+            )
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     def put_file(
             self, path, logical_key, attempt_id, media_type=None, on_chunk=None):
         with open(path, "rb") as source:
