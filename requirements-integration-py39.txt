@@ -9,7 +9,7 @@ python-ffmpeg-video-streaming==0.1.14
 ffmpeg-python==0.2.0
 python-decouple==3.8
 redis==5.2.1
-boto3==1.17.14
+boto3==1.35.99
 psutil==5.9.8
 
 # durable workflow state and PostgreSQL adapter
