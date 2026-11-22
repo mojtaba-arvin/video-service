@@ -18,7 +18,10 @@ from video_streaming.workflows.metrics import (
     child_cpu_seconds_since,
     configured_pricing,
 )
-from video_streaming.execution.process_control import run_streaming_process
+from video_streaming.execution.process_control import (
+    ProcessUsageAccumulator,
+    run_streaming_process,
+)
 from video_streaming.execution.media_probe import probe_media
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
@@ -104,27 +107,16 @@ def add_watermark(
         lease_token,
         lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
-    process_usage = {}
+    process_usage = ProcessUsageAccumulator()
 
     def aggregate_process_usage():
-        samples = list(process_usage.values())
-        return {
-            "cpu_seconds": sum(
-                float(item.get("cpu_seconds") or 0.0) for item in samples
-            ),
-            "peak_memory_bytes": max(
-                (int(item.get("peak_memory_bytes") or 0) for item in samples),
-                default=0,
-            ) or None,
-            "memory_duration_ms": sum(
-                int(item.get("memory_duration_ms") or 0) for item in samples
-            ),
-        }
+        return process_usage.aggregate()
 
     def measured_cpu_seconds():
+        sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
         return max(
             child_cpu_seconds_since(cpu_started),
-            aggregate_process_usage()["cpu_seconds"],
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
         )
 
     def process_resource_metrics():
@@ -137,8 +129,7 @@ def add_watermark(
     output_path = None
 
     def capture_process_usage(metrics):
-        process_id = str(metrics.get("process_id") or "legacy")
-        process_usage[process_id] = dict(metrics)
+        process_usage.record(metrics)
         lease_heartbeat.on_usage(metrics)
 
     try:
@@ -306,7 +297,7 @@ def add_watermark(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        cpu_seconds=measured_cpu_seconds(),
         **process_resource_metrics(),
         validation_report=validation_report,
         artifact_type="video_file",
