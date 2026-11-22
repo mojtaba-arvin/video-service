@@ -139,13 +139,19 @@ def build_input_handlers(
         size = details.get("ContentLength")
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise PermanentOperationError("input object is empty or has invalid size")
+        etag = details.get("ETag")
+        version_id = details.get("VersionId")
+        if not version_id and (not isinstance(etag, str) or not etag):
+            raise PermanentOperationError(
+                "input object has no stable version or ETag validator"
+            )
         reference = {
             "input_name": name,
             "bucket": bucket,
             "key": key,
             "size_bytes": size,
-            "etag": details.get("ETag"),
-            "version_id": details.get("VersionId"),
+            "etag": etag,
+            "version_id": version_id,
             "content_type": details.get("ContentType"),
             "last_modified": (
                 details["LastModified"].isoformat()
@@ -187,7 +193,12 @@ def build_input_handlers(
             digest_size = 0
             body = None
             try:
-                response = s3_client.get_object(Bucket=bucket, Key=key)
+                get_args = {"Bucket": bucket, "Key": key}
+                if reference.get("version_id"):
+                    get_args["VersionId"] = reference["version_id"]
+                elif reference.get("etag"):
+                    get_args["IfMatch"] = reference["etag"]
+                response = s3_client.get_object(**get_args)
                 body = response["Body"]
                 with os.fdopen(descriptor, "wb") as target:
                     descriptor = None
