@@ -5,6 +5,7 @@ import selectors
 import signal
 import subprocess
 import time
+import uuid
 
 import psutil
 
@@ -191,6 +192,9 @@ def run_cancellable_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    # A PID is not a durable identity: the OS may reuse it for a later FFprobe.
+    # Keep one opaque identity for every callback emitted by this subprocess.
+    process_id = uuid.uuid4().hex
     started_at = time.monotonic()
     terminated = False
     peak_memory_bytes = 0
@@ -199,7 +203,8 @@ def run_cancellable_process(
     def emit_usage():
         if on_usage is not None:
             on_usage({
-                "process_id": process.pid,
+                "process_id": process_id,
+                "process_pid": process.pid,
                 "cpu_seconds": sampled_cpu_seconds,
                 "peak_memory_bytes": peak_memory_bytes or None,
                 "memory_duration_ms": max(
@@ -322,6 +327,8 @@ def run_streaming_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    # Do not use PID as the key: sequential subprocesses can reuse a PID.
+    process_id = uuid.uuid4().hex
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     pending = bytearray()
@@ -339,7 +346,8 @@ def run_streaming_process(
         peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
         if on_usage is not None:
             on_usage({
-                "process_id": process.pid,
+                "process_id": process_id,
+                "process_pid": process.pid,
                 "cpu_seconds": sampled_cpu_seconds,
                 "peak_memory_bytes": peak_memory_bytes or None,
                 "memory_duration_ms": max(
