@@ -220,6 +220,15 @@ class SettingsEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(relay["schedule"], 5.0)
         self.assertEqual(relay["options"]["expires"], 4)
+        recovery = settings.CELERY_BEAT_SCHEDULE[
+            "reconcile-expired-durable-workflows"
+        ]
+        self.assertEqual(
+            recovery["task"],
+            "video_streaming.workflows.reconcile_expired_attempts",
+        )
+        self.assertEqual(recovery["schedule"], 15.0)
+        self.assertEqual(recovery["options"]["expires"], 14)
 
     def test_workflow_dispatch_can_be_enabled_only_by_explicit_configuration(self):
         settings = load_settings({
