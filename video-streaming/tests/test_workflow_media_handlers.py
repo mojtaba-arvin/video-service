@@ -319,6 +319,9 @@ class DurableMediaHandlerTests(unittest.TestCase):
                     "width": 1920,
                     "height": 1080,
                     "codec_name": "h264",
+                }, {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
                 }]
             },
         )
