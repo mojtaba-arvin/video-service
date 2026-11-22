@@ -195,15 +195,21 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(recovered, ["check"])
 
     def _make_retry_due(self, job_id):
-        from video_streaming.workflows.repository import OutboxRecord, utcnow
+        from video_streaming.workflows.repository import (
+            AttemptRecord, StageRecord, WorkflowRecord, utcnow,
+        )
 
         with self.repository._session.begin() as session:
-            row = session.query(OutboxRecord).filter_by(
-                job_id=job_id,
-                event_type="WORKFLOW_PLAN_DISPATCH",
-            ).order_by(OutboxRecord.created_at.desc()).first()
-            self.assertIsNotNone(row)
-            row.available_at = utcnow() - timedelta(seconds=1)
+            attempt = (
+                session.query(AttemptRecord)
+                .join(StageRecord, StageRecord.id == AttemptRecord.stage_id)
+                .join(WorkflowRecord, WorkflowRecord.id == StageRecord.workflow_id)
+                .filter(WorkflowRecord.job_id == job_id)
+                .order_by(AttemptRecord.attempt_number.desc())
+                .first()
+            )
+            self.assertIsNotNone(attempt)
+            attempt.finished_at = utcnow() - timedelta(seconds=10)
 
     def test_crash_after_side_effect_reuses_stable_idempotency_key(self):
         seen_keys = set()
