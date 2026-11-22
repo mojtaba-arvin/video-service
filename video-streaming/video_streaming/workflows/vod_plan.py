@@ -136,6 +136,10 @@ def _normalize_custom_qualities(value, field):
             raise VODPlanBuildError(
                 "{} must define a size or bitrate".format(item_field)
             )
+        if (size is None) != (bitrate is None):
+            raise VODPlanBuildError(
+                "{} must define both size and bitrate".format(item_field)
+            )
         normalized.append({
             "size": list(size) if size is not None else None,
             "bitrate": list(bitrate) if bitrate is not None else None,
