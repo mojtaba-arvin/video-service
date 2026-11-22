@@ -126,7 +126,8 @@ class WorkflowTaskConsumerTests(unittest.TestCase):
         })
         self.assertEqual(repository.asserted_limit, 100)
         publish.assert_called_once_with(
-            args=("expired-job", "workflow", "1", "a" * 64)
+            args=("expired-job", "workflow", "1", "a" * 64),
+            expires=45,
         )
 
     def test_handler_factory_is_mandatory_and_explicit(self):
