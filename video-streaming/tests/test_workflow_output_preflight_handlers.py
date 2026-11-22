@@ -30,6 +30,8 @@ class _S3:
     def head_bucket(self, **kwargs):
         bucket = kwargs["Bucket"]
         self.head_bucket_calls.append(kwargs)
+        if bucket == "denied-output":
+            raise _S3Error("AccessDenied", 403)
         if bucket not in self.buckets:
             raise _S3Error("404", 404)
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
@@ -143,6 +145,42 @@ class OutputPreflightHandlerTests(unittest.TestCase):
                 _Context("missing-bucket"),
             )
         self.assertEqual(self.s3.created, [])
+
+    def test_bucket_access_denial_is_not_treated_as_missing(self):
+        with self.assertRaises(PermanentOperationError):
+            self.handlers["video.output.bucket.check"](
+                self._node({
+                    "bucket": "denied-output",
+                    "create_bucket": True,
+                }),
+                _Context("denied-bucket"),
+            )
+        self.assertEqual(self.s3.created, [])
+
+    def test_key_preflight_rejects_disabled_dont_replace_contract(self):
+        with self.assertRaises(PermanentOperationError):
+            self.handlers["video.output.key.check"](
+                self._node({
+                    "bucket": "existing-output",
+                    "key": "exports/master.m3u8",
+                    "dont_replace": False,
+                }),
+                _Context("replace-enabled"),
+            )
+        self.assertEqual(self.s3.head_object_calls, [])
+
+    def test_us_east_1_bucket_creation_omits_location_constraint(self):
+        handlers = build_output_preflight_handlers(
+            self.s3, self.store, region_name="us-east-1"
+        )
+        handlers["video.output.bucket.check"](
+            self._node({
+                "bucket": "east-output",
+                "create_bucket": True,
+            }),
+            _Context("east-bucket"),
+        )
+        self.assertEqual(self.s3.created[-1], {"Bucket": "east-output"})
 
     def test_existing_output_key_is_rejected_when_replacement_disabled(self):
         self.s3.objects.add(("existing-output", "exports/master.m3u8"))
