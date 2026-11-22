@@ -2981,7 +2981,10 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 session.execute(
                     select(func.count()).select_from(AttemptRecord).join(
                         StageRecord, AttemptRecord.stage_id == StageRecord.id
-                    ).where(StageRecord.stage_key == "p0")
+                    ).join(
+                        WorkflowRecord,
+                        StageRecord.workflow_id == WorkflowRecord.id,
+                    ).where(WorkflowRecord.job_id == job_id)
                 ).scalar_one(),
                 0,
             )
