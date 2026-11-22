@@ -86,13 +86,14 @@ def _find_dependency_artifact(context, logical_name):
     )
 
 
-def _read_json_artifact(artifact_store, artifact, suffix):
+def _read_json_artifact(artifact_store, artifact, suffix, on_chunk=None):
     descriptor, path = tempfile.mkstemp(prefix="workflow-input-", suffix=suffix)
     os.close(descriptor)
     try:
         artifact_store.download_file(
             artifact["uri"], path,
             expected_sha256=artifact.get("checksum_sha256"),
+            on_chunk=on_chunk,
         )
         with open(path, "rb") as source:
             value = json.loads(source.read().decode("utf-8"))
@@ -180,7 +181,8 @@ def build_input_handlers(
             context, "input.{}.object_ref".format(name)
         )
         reference = _read_json_artifact(
-            artifact_store, reference_artifact, ".json"
+            artifact_store, reference_artifact, ".json",
+            on_chunk=lambda _size: _check_active(context),
         )
         if (
             reference.get("input_name") != name
@@ -259,6 +261,7 @@ def build_input_handlers(
             artifact_store.download_file(
                 source["uri"], local_path,
                 expected_sha256=source.get("checksum_sha256"),
+                on_chunk=lambda _size: _check_active(context),
             )
             _check_active(context)
             metadata = probe(
@@ -313,7 +316,10 @@ def build_input_handlers(
                 name = logical_name[len("input."):-len(".probe_metadata")]
                 if name in inputs:
                     raise PermanentOperationError("duplicate input probe metadata")
-                metadata = _read_json_artifact(artifact_store, artifact, ".json")
+                metadata = _read_json_artifact(
+                    artifact_store, artifact, ".json",
+                    on_chunk=lambda _size: _check_active(context),
+                )
                 file_artifact = _find_dependency_artifact(
                     context, "input.{}.file_artifact".format(name)
                 )
