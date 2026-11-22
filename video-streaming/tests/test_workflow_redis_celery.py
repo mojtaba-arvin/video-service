@@ -22,9 +22,11 @@ if importlib.util.find_spec("celery") and importlib.util.find_spec("redis"):
     from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
     from video_streaming.workflows.repository import (
         AttemptRecord,
+        OutboxRecord,
         WorkflowRepository,
         utcnow,
     )
+    from video_streaming.workflows.relay import WorkflowOutboxRelay
 else:
     start_worker = None
     settings = None
@@ -132,6 +134,103 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
                 return snapshot
             time.sleep(0.05)
         self.fail("durable Job did not finish before timeout")
+
+    def test_outbox_republishes_when_broker_accepts_but_db_ack_fails(self):
+        """A real Redis publish followed by a lost DB ack must replay safely."""
+        job_id = str(uuid.uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "root",
+                "operation": "video.input.check",
+                "stage_key": "root",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "exponential",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 10,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="outbox-redis-" + job_id,
+            request_hash="d" * 64,
+            execution_plan=plan,
+            enqueue_dispatch=True,
+        )
+        with self.repository._session() as session:
+            outbox_id = session.query(OutboxRecord.id).filter_by(
+                job_id=job_id
+            ).scalar()
+
+        relay_queue = "outbox-ack-loss-" + uuid.uuid4().hex
+        accepted = []
+        send_task = celery_app.send_task
+
+        def publish(name, **kwargs):
+            # This invokes the configured Celery producer and publishes to
+            # the real Redis broker. No worker consumes this isolated queue.
+            accepted.append((name, dict(kwargs)))
+            return send_task(name, **kwargs)
+
+        mark_published = self.repository.mark_outbox_published
+        ack_attempts = []
+
+        def fail_first_database_ack(row_id, lease_token, **kwargs):
+            ack_attempts.append(row_id)
+            if len(ack_attempts) == 1:
+                raise ConnectionError("simulated PostgreSQL ack interruption")
+            return mark_published(row_id, lease_token, **kwargs)
+
+        relay = WorkflowOutboxRelay(
+            repository=self.repository,
+            publisher=type(
+                "RedisPublisher", (), {"send_task": staticmethod(publish)}
+            )(),
+            owner="redis-outbox-test",
+            queue=relay_queue,
+            retry_base_seconds=1,
+        )
+        with patch.object(
+                self.repository,
+                "mark_outbox_published",
+                side_effect=fail_first_database_ack):
+            first = relay.run_once()
+            self.assertEqual(first["retried"], 1)
+            self.assertEqual(
+                self.repository.get_outbox_snapshot(outbox_id)["state"],
+                "PENDING",
+            )
+
+            with self.repository._session.begin() as session:
+                row = session.get(OutboxRecord, outbox_id)
+                row.available_at = utcnow() - timedelta(seconds=1)
+
+            second = relay.run_once()
+
+        self.assertEqual(second["published"], 1)
+        self.assertEqual(len(accepted), 2)
+        self.assertEqual(accepted[0][0], accepted[1][0])
+        self.assertEqual(
+            accepted[0][1]["task_id"],
+            accepted[1][1]["task_id"],
+        )
+        self.assertEqual(
+            accepted[0][1]["args"],
+            accepted[1][1]["args"],
+        )
+        self.assertEqual(accepted[0][1]["queue"], relay_queue)
+        self.assertEqual(
+            self.repository.get_outbox_snapshot(outbox_id)["state"],
+            "PUBLISHED",
+        )
 
     def test_duplicate_delivery_uses_one_attempt_owner(self):
         entered = threading.Event()
