@@ -1960,10 +1960,6 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
-            # Lease timing starts after the stage lock is acquired; lock wait
-            # must not consume the new worker's lease or stale recovery clock.
-            now = utcnow()
-            lease_expires_at = now + timedelta(seconds=ttl)
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             if (
                     workflow.execution_backend == "durable_vod_v1"
@@ -2083,6 +2079,10 @@ class WorkflowRepository:
                     "A terminal or missing Job cannot claim an Attempt"
                 )
 
+            # The Job row is the final blocking lock in this claim path.
+            # Start the lease only after it is acquired and eligibility passes.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             previous_status = stage.status
             next_number = session.execute(
                 select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
@@ -2552,9 +2552,6 @@ class WorkflowRepository:
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
-            # Publication lease timing also begins after acquiring the lock.
-            now = utcnow()
-            lease_expires_at = now + timedelta(seconds=ttl)
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             if workflow.execution_backend == "durable_vod_v1":
                 raise InvalidStateTransition(
@@ -2651,6 +2648,10 @@ class WorkflowRepository:
                     "A terminal or missing Job cannot claim publication"
                 )
 
+            # Publication lease timing starts after all row locks and
+            # eligibility checks, not before a potentially blocking Job lock.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             previous_status = stage.status
             if stage.status == StageState.RETRY_WAIT.value:
                 self._transition(stage, StageState.VALIDATED)

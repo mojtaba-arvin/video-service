@@ -709,6 +709,84 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         self.assertGreater(renewed_expiry, expires_at)
 
+    def test_claim_leases_start_after_contended_job_lock_for_processing_and_publication(self):
+        def hold_job_lock(job_id):
+            locked = threading.Event()
+            release = threading.Event()
+            errors = []
+
+            def hold():
+                try:
+                    with self.repository._session.begin() as session:
+                        session.execute(
+                            select(JobRecord)
+                            .where(JobRecord.id == job_id)
+                            .with_for_update()
+                        ).scalar_one()
+                        locked.set()
+                        release.wait(timeout=3)
+                except Exception as exc:
+                    errors.append(exc)
+
+            holder = threading.Thread(target=hold)
+            holder.start()
+            self.assertTrue(locked.wait(timeout=2), "Job lock was not acquired")
+
+            def release_after_ttl():
+                threading.Event().wait(0.15)
+                release.set()
+
+            releaser = threading.Thread(target=release_after_ttl)
+            releaser.start()
+            return holder, releaser, release, errors
+
+        job_id = self.create_job("p0")
+        holder, releaser, release, errors = hold_job_lock(job_id)
+        try:
+            processing_id, _, processing_token, processing_expiry = (
+                self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="contended-processing",
+                    lease_ttl_seconds=0.05,
+                )
+            )
+        finally:
+            release.set()
+            holder.join(timeout=2)
+            releaser.join(timeout=2)
+        self.assertFalse(holder.is_alive())
+        self.assertFalse(errors)
+        self.assertGreater(processing_expiry, utcnow())
+        self.repository.renew_attempt_lease(
+            job_id, "p0", processing_id, processing_token,
+            lease_ttl_seconds=30,
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        holder, releaser, release, errors = hold_job_lock(job_id)
+        try:
+            publication_id, _, publication_token, publication_expiry = (
+                self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner="contended-publication",
+                    lease_ttl_seconds=0.05,
+                    processing_attempt_id=processing_id,
+                )
+            )
+        finally:
+            release.set()
+            holder.join(timeout=2)
+            releaser.join(timeout=2)
+        self.assertFalse(holder.is_alive())
+        self.assertFalse(errors)
+        self.assertGreater(publication_expiry, utcnow())
+        self.repository.renew_attempt_lease(
+            job_id, "p0", publication_id, publication_token,
+            lease_ttl_seconds=30,
+        )
+
     def test_expired_attempt_lease_is_recovered_and_old_worker_is_fenced(self):
         from unittest.mock import patch
 
