@@ -114,6 +114,19 @@ class DurablePublicationHandlerTests(unittest.TestCase):
             self.s3, self.store, self.repository, **kwargs
         )
 
+    def test_installed_s3_sdk_exposes_conditional_write_parameters(self):
+        import botocore.session
+
+        model = botocore.session.get_session().get_service_model("s3")
+        self.assertIn(
+            "IfNoneMatch",
+            model.operation_model("PutObject").input_shape.members,
+        )
+        self.assertIn(
+            "IfNoneMatch",
+            model.operation_model("CompleteMultipartUpload").input_shape.members,
+        )
+
     def test_single_file_upload_uses_attempt_scoped_key_when_replace_allowed(self):
         source = self.store.add("s3://input/thumbnail", b"jpeg-data")
         context = _Context({"thumbnail-node": [{
