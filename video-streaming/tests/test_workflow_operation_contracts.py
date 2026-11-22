@@ -33,6 +33,53 @@ class OperationContractTests(unittest.TestCase):
                 self.assertTrue(contract.cancellation)
                 self.assertTrue(contract.idempotency)
 
+    def test_watermarked_media_inputs_are_alternatives_not_all_required(self):
+        for operation in (
+            "video.hls.package",
+            "video.dash.package",
+            "video.thumbnail.generate",
+        ):
+            with self.subTest(operation=operation):
+                contract = OPERATION_CONTRACTS[operation]
+                self.assertEqual(
+                    contract.one_of_artifacts,
+                    frozenset({"inputs.manifest", "watermark.video"}),
+                )
+                self.assertFalse(contract.required_artifacts)
+
+    def test_funnel_requires_video_and_allows_optional_watermark_metadata(self):
+        contract = OPERATION_CONTRACTS["video.inputs.funnel"]
+        self.assertEqual(
+            contract.required_artifacts, frozenset({"input.video.probe_metadata"})
+        )
+        self.assertEqual(
+            contract.optional_artifacts,
+            frozenset({"input.watermark.probe_metadata"}),
+        )
+
+    def test_analyze_passes_through_source_artifact_for_funnel(self):
+        contract = OPERATION_CONTRACTS["video.input.analyze"]
+        self.assertEqual(
+            contract.outputs,
+            frozenset({
+                "input.{input_name}.file_artifact",
+                "input.{input_name}.probe_metadata",
+            }),
+        )
+
+    def test_webhook_secret_is_a_parameter_not_a_dependency_artifact(self):
+        contract = OPERATION_CONTRACTS["video.webhook.deliver"]
+        self.assertIn("webhook_secret_ref", contract.optional_parameters)
+        self.assertFalse(contract.inputs)
+        self.assertEqual(contract.outputs, frozenset({"webhook.delivery_receipt"}))
+
+    def test_file_upload_accepts_exactly_one_publishable_media_artifact(self):
+        contract = OPERATION_CONTRACTS["video.output.upload_file"]
+        self.assertEqual(
+            contract.one_of_artifacts,
+            frozenset({"thumbnail.image", "watermark.video"}),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
