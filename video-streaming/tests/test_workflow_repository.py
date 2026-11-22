@@ -901,7 +901,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         from unittest.mock import patch
 
         job_id = self.create_job("p0")
-        processing_id, _, _, expiry = self.repository.claim_attempt(
+        processing_id, _, processing_token, expiry = self.repository.claim_attempt(
             job_id, "p0", lease_owner="worker-validation-interrupted"
         )
         self.repository.mark_validated(
@@ -909,6 +909,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             "p0",
             processing_id,
             {"valid": True, "errors": []},
+            lease_token=processing_token,
             complete_attempt=False,
         )
         recovery_time = expiry + timedelta(seconds=1)
