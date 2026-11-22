@@ -5,6 +5,7 @@ PostgreSQL. They exercise duplicate delivery and retry after an external
 side-effect acceptance using the real broker/worker path.
 """
 import importlib.util
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -323,6 +324,53 @@ class DurableWorkflowRedisCeleryTests(unittest.TestCase):
         self.assertEqual(attempts[0]["status"], "RETRYABLE")
         self.assertEqual(attempts[1]["status"], "SUCCEEDED")
         self.assertEqual(len(calls), 1)
+
+
+    def test_concurrent_claims_recover_expired_attempt_once(self):
+        """Concurrent claimers must not create two successors to one lease."""
+        job_id, _snapshot = self._create_job(retry_delay=0)
+        attempt_id, _number, _token, _expiry = (
+            self.repository.claim_node_attempt(
+                job_id,
+                "root",
+                lease_owner="worker-that-was-lost",
+                lease_ttl_seconds=30,
+            )
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        start = threading.Barrier(2)
+
+        def claim(worker_name):
+            start.wait(timeout=5)
+            try:
+                claimed_id, number, _token, _expiry = (
+                    self.repository.claim_node_attempt(
+                        job_id,
+                        "root",
+                        lease_owner=worker_name,
+                        lease_ttl_seconds=30,
+                    )
+                )
+                return ("claimed", claimed_id, number)
+            except Exception as exc:
+                return ("rejected", type(exc).__name__)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(claim, ("recovery-worker-a", "recovery-worker-b")))
+
+        winners = [item for item in results if item[0] == "claimed"]
+        losers = [item for item in results if item[0] == "rejected"]
+        self.assertEqual(len(winners), 1, results)
+        self.assertEqual(len(losers), 1, results)
+        self.assertEqual(losers[0][1], "StageAlreadyRunning")
+
+        snapshot = self.repository.get_stage_snapshot(job_id, "root")
+        self.assertEqual(len(snapshot["attempts"]), 2)
+        self.assertEqual(snapshot["attempts"][0]["status"], "RETRYABLE")
+        self.assertEqual(snapshot["attempts"][1]["status"], "RUNNING")
 
 
 if __name__ == "__main__":
