@@ -402,6 +402,18 @@ def build_publication_handlers(
         if not isinstance(entrypoint, dict):
             raise PermanentOperationError("package entrypoint is missing")
         entrypoint = _artifact_metadata(entrypoint)
+        package_paths = [
+            _safe_relative_path(item.get("path"))
+            for item in package_manifest["files"]
+            if isinstance(item, dict)
+        ]
+        if (
+            len(package_paths) != len(package_manifest["files"])
+            or len(package_paths) != len(set(package_paths))
+        ):
+            raise PermanentOperationError(
+                "package file inventory contains invalid or duplicate paths"
+            )
         entrypoint_path = _safe_relative_path(
             posixpath.basename(manifest_key)
         )
