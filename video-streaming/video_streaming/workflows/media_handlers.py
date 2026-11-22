@@ -160,7 +160,6 @@ def build_media_handlers(
         for name, value in (("scale_width", width), ("scale_height", height)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise PermanentOperationError("{} is invalid".format(name))
-        manifest = _read_manifest(artifact_store, context)
         usage = ProcessUsageAccumulator()
         with tempfile.TemporaryDirectory(prefix="workflow-thumbnail-") as directory:
             if params.get("use_watermark"):
@@ -169,6 +168,7 @@ def build_media_handlers(
                     artifact_store, context, source, "watermarked-video", directory
                 )
             else:
+                manifest = _read_manifest(artifact_store, context)
                 video_path, source = _download_input(
                     artifact_store, context, manifest, "video", directory
                 )
