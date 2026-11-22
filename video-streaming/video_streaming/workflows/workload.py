@@ -20,15 +20,31 @@ class WorkloadClass(str, Enum):
 
 
 _OPERATION_CLASSES = {
-    OperationKind.PROBE: WorkloadClass.METADATA,
-    OperationKind.VALIDATE_PACKAGE: WorkloadClass.METADATA,
-    OperationKind.PUBLISH_PACKAGE: WorkloadClass.STORAGE_IO,
-    OperationKind.HLS_PACKAGE_AND_PUBLISH: WorkloadClass.PACKAGING,
-    OperationKind.DASH_PACKAGE_AND_PUBLISH: WorkloadClass.PACKAGING,
-    OperationKind.THUMBNAIL_AND_PUBLISH: WorkloadClass.MEDIA_TRANSFORM,
-    OperationKind.WATERMARK_AND_PUBLISH: WorkloadClass.MEDIA_TRANSFORM,
-    OperationKind.TRIM: WorkloadClass.MEDIA_TRANSFORM,
-    OperationKind.TRANSCODE: WorkloadClass.MEDIA_TRANSFORM,
+    # Typed application-operation contract.
+    OperationKind.PROBE.value: WorkloadClass.METADATA,
+    OperationKind.VALIDATE_PACKAGE.value: WorkloadClass.METADATA,
+    OperationKind.PUBLISH_PACKAGE.value: WorkloadClass.STORAGE_IO,
+    OperationKind.HLS_PACKAGE_AND_PUBLISH.value: WorkloadClass.PACKAGING,
+    OperationKind.DASH_PACKAGE_AND_PUBLISH.value: WorkloadClass.PACKAGING,
+    OperationKind.THUMBNAIL_AND_PUBLISH.value: WorkloadClass.MEDIA_TRANSFORM,
+    OperationKind.WATERMARK_AND_PUBLISH.value: WorkloadClass.MEDIA_TRANSFORM,
+    OperationKind.TRIM.value: WorkloadClass.MEDIA_TRANSFORM,
+    OperationKind.TRANSCODE.value: WorkloadClass.MEDIA_TRANSFORM,
+
+    # Durable 13-operation VOD execution-plan contract.
+    "video.input.check": WorkloadClass.METADATA,
+    "video.input.download": WorkloadClass.STORAGE_IO,
+    "video.input.analyze": WorkloadClass.METADATA,
+    "video.inputs.funnel": WorkloadClass.METADATA,
+    "video.output.bucket.check": WorkloadClass.METADATA,
+    "video.output.key.check": WorkloadClass.METADATA,
+    "video.hls.package": WorkloadClass.PACKAGING,
+    "video.dash.package": WorkloadClass.PACKAGING,
+    "video.thumbnail.generate": WorkloadClass.MEDIA_TRANSFORM,
+    "video.watermark.apply": WorkloadClass.MEDIA_TRANSFORM,
+    "video.output.upload_file": WorkloadClass.STORAGE_IO,
+    "video.output.upload_directory": WorkloadClass.STORAGE_IO,
+    "video.webhook.deliver": WorkloadClass.STORAGE_IO,
 }
 
 
@@ -39,16 +55,16 @@ def classify_operation(operation):
     Unknown operations fail closed so new operations cannot silently inherit
     an inappropriate scheduling policy.
     """
-    if not isinstance(operation, OperationKind):
-        try:
-            operation = OperationKind(operation)
-        except (TypeError, ValueError):
-            raise ValueError("unsupported workflow operation: {!r}".format(
-                operation
-            ))
+    operation_value = (
+        operation.value if isinstance(operation, OperationKind) else operation
+    )
+    if not isinstance(operation_value, str):
+        raise ValueError("unsupported workflow operation: {!r}".format(
+            operation
+        ))
 
     try:
-        return _OPERATION_CLASSES[operation]
+        return _OPERATION_CLASSES[operation_value]
     except KeyError:
         raise ValueError("operation has no workload classification: {}".format(
             operation.value
