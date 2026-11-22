@@ -320,13 +320,14 @@ def build_media_handlers(
                             )
                         size = quality.get("size")
                         bitrate = quality.get("bitrate")
-                        if not size or not bitrate:
+                        if size is None and bitrate is None:
                             raise PermanentOperationError(
-                                "custom quality requires both size and bitrate"
+                                "custom quality requires a size or bitrate"
                             )
-                        representations.append(
-                            Representation(Size(*size), Bitrate(*bitrate))
-                        )
+                        representations.append(Representation(
+                            Size(*size) if size is not None else None,
+                            Bitrate(*bitrate) if bitrate is not None else None,
+                        ))
                     if not representations:
                         raise PermanentOperationError(
                             "package requires at least one representation"
@@ -479,9 +480,25 @@ def build_media_handlers(
             try:
                 video = ffmpeg.input(video_path)
                 watermark = ffmpeg.input(watermark_path)
+                source_metadata = media_probe(
+                    video_path,
+                    ffprobe_bin_path=ffprobe_bin_path,
+                    timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
+                    should_cancel=context.is_cancelled,
+                    on_usage=on_usage,
+                )
+                has_audio = any(
+                    item.get("codec_type") == "audio"
+                    for item in source_metadata.get("streams", [])
+                )
                 stream = ffmpeg.filter([video, watermark], "overlay", 0, 0)
+                output_stream = (
+                    ffmpeg.output(stream, video.audio, output_path)
+                    if has_audio
+                    else stream.output(output_path)
+                )
                 command = ffmpeg.compile(
-                    stream.output(output_path),
+                    output_stream,
                     cmd=ffmpeg_bin_path,
                     overwrite_output=True,
                 )
