@@ -57,7 +57,7 @@ and failure before replay; do not blindly replay poison messages.
 
 ## Rollout gate
 
-The relay command and fake-publisher contract tests are implemented. Do not
+The relay command and fake-publisher contract tests are implemented. CI also includes a Redis-broker/PostgreSQL acceptance case that publishes to a real isolated Redis queue, simulates loss of the database acknowledgement after broker acceptance, and verifies a second publish reuses the same task ID and immutable plan reference. This test is pending execution on the latest branch head. Do not
 start a production relay or set `enqueue_dispatch=True` until a registered
 `video_streaming.workflows.dispatch_plan` consumer is deployed, the complete
 operation-handler registry is wired to real adapters, Job cancellation is
