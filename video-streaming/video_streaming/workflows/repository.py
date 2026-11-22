@@ -1679,7 +1679,10 @@ class WorkflowRepository:
             )
         )
         if lock:
-            query = query.with_for_update()
+            # The joined Workflow row participates in Job/Workflow updates
+            # with a different lock order. Lock only the Stage row here;
+            # callers that mutate Job state must then lock Job before Workflow.
+            query = query.with_for_update(of=StageRecord)
         stage = session.execute(query).scalar_one_or_none()
         if stage is None:
             raise KeyError("Unknown workflow stage: {} / {}".format(
@@ -3247,6 +3250,13 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
             if attempt.state != AttemptState.RUNNING.value:
                 if attempt.state == AttemptState.SUCCEEDED.value and \
                         stage.status == StageState.FINISHED.value:
@@ -3332,7 +3342,6 @@ class WorkflowRepository:
                     for item in completion_stages):
                 workflow.state = WorkflowState.FINISHED.value
                 workflow.updated_at = finished_at
-                job = session.get(JobRecord, job_id)
                 job.state = JobState.FINISHED.value
                 job.updated_at = finished_at
                 job.version += 1
@@ -3522,6 +3531,13 @@ class WorkflowRepository:
             self._assert_attempt_lease(attempt, lease_token)
             if attempt.state != AttemptState.RUNNING.value:
                 return False
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
                     StageState(stage.status)]:
                 raise InvalidStateTransition(
@@ -3553,7 +3569,6 @@ class WorkflowRepository:
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.CANCELLED.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.CANCELLED.value
             job.updated_at = now
             job.version += 1
@@ -4432,10 +4447,16 @@ class WorkflowRepository:
                 stage.version += 1
                 stage.updated_at = now
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
