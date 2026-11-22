@@ -411,7 +411,7 @@ def build_publication_handlers(
             hashlib.sha256(context.idempotency_key.encode("utf-8")).hexdigest()
         )
         relative_prefix = posixpath.relpath(
-            version_prefix, posixpath.dirname(manifest_key) or "."
+            version_prefix, posixpath.dirname(publication_manifest_key) or "."
         )
         uploaded = []
         total_bytes = 0
