@@ -671,7 +671,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 with self.repository._session() as session:
                     attempts = session.query(AttemptRecord).join(
                         StageRecord, StageRecord.id == AttemptRecord.stage_id
-                    ).filter(StageRecord.job_id == job_id).count()
+                    ).join(WorkflowRecord, WorkflowRecord.id == StageRecord.workflow_id)\n                    .filter(WorkflowRecord.job_id == job_id).count()
                 self.assertEqual(attempts, 0)
 
     def test_attempt_lease_is_hashed_exclusive_and_renewable(self):
