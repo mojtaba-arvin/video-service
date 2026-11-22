@@ -8,9 +8,14 @@ try:
     from video_streaming.grpc.protos import streaming_pb2
     from video_streaming.grpc.servicers.mixins.create_job import CreateJobMixin
 except ImportError:
-    # The general regression lanes intentionally do not install/generate gRPC
-    # modules. The dedicated gRPC integration lane generates them and runs
-    # this test module explicitly.
+    # General regression lanes may omit generated gRPC modules. The dedicated
+    # integration lane sets VIDEO_STREAMING_REQUIRE_GRPC_TESTS=1 so a missing
+    # generated module or a broken adapter import is a hard failure, never a
+    # silently skipped acceptance suite.
+    import os
+
+    if os.environ.get("VIDEO_STREAMING_REQUIRE_GRPC_TESTS") == "1":
+        raise
     streaming_pb2 = None
     CreateJobMixin = None
 
