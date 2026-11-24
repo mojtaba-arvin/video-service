@@ -54,7 +54,7 @@ class AttemptCgroupScopeTests(unittest.TestCase):
         fake = FakeAttemptCgroup()
         lines = []
         with mock.patch.object(
-                attempt_scope.settings, "ATTEMPT_CGROUP_V2_ENABLED", True):
+                settings, "ATTEMPT_CGROUP_V2_ENABLED", True):
             with mock.patch.object(
                     attempt_scope, "AttemptCgroupV2", return_value=fake):
                 with attempt_scope.attempt_cgroup_scope("attempt-3"):
@@ -70,7 +70,7 @@ class AttemptCgroupScopeTests(unittest.TestCase):
     def test_process_supervisor_uses_attempt_cgroup_implicitly(self):
         fake = FakeAttemptCgroup()
         with mock.patch.object(
-                attempt_scope.settings, "ATTEMPT_CGROUP_V2_ENABLED", True):
+                settings, "ATTEMPT_CGROUP_V2_ENABLED", True):
             with mock.patch.object(
                     attempt_scope, "AttemptCgroupV2", return_value=fake):
                 with attempt_scope.attempt_cgroup_scope("attempt-2"):
