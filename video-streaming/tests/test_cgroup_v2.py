@@ -92,7 +92,7 @@ class AttemptCgroupV2Tests(unittest.TestCase):
                 with self.assertRaises(CgroupV2CleanupError):
                     attempt.cleanup(timeout_seconds=0.01)
             self.assertTrue(os.path.isdir(attempt.path))
-            attempt.cleanup = mock.Mock()
+            self._remove_fake_cgroup_files(attempt)
             os.rmdir(attempt.path)
 
     def test_cleanup_only_removes_empty_attempt(self):
