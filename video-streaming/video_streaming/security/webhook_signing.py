@@ -7,6 +7,7 @@ IDs to reject replays.
 """
 import hashlib
 import hmac
+import json
 import re
 import time
 import uuid
@@ -32,7 +33,9 @@ def stable_delivery_id(job_id, stage_key):
         raise WebhookSignatureError("job_id is required")
     if not isinstance(stage_key, str) or not stage_key.strip():
         raise WebhookSignatureError("stage_key is required")
-    identity = "video-webhook:v1:{}:{}".format(job_id, stage_key)
+    identity = "video-webhook:v1:" + json.dumps(
+        [job_id, stage_key], ensure_ascii=True, separators=(",", ":")
+    )
     return "whd_" + uuid.uuid5(_DELIVERY_NAMESPACE, identity).hex
 
 
