@@ -28,6 +28,11 @@ class WebhookSigningTests(unittest.TestCase):
         self.assertNotEqual(
             self.delivery_id, stable_delivery_id("job-1", "callback")
         )
+        # Delimiter-containing values must not create ambiguous tuple encodings.
+        self.assertNotEqual(
+            stable_delivery_id("job:one", "stage"),
+            stable_delivery_id("job", "one:stage"),
+        )
         self.assertNotIn("job-1", self.delivery_id)
 
     def test_canonical_payload_binds_version_timestamp_id_and_exact_body(self):
