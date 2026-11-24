@@ -13,6 +13,7 @@ class FakeAttemptCgroup:
     def __init__(self):
         self.spawn_calls = 0
         self.terminated = False
+        self.usage_calls = 0
 
     def spawn(self, command, stdin, stdout, stderr):
         self.spawn_calls += 1
@@ -25,12 +26,10 @@ class FakeAttemptCgroup:
         return process
 
     def usage(self):
-        return {
-            "cpu": {"usage_usec": 250000},
-            "memory_peak_bytes": 8192,
-            "memory_events": {"oom_kill": 0},
-            "pids_current": 1,
-        }
+        self.usage_calls += 1
+        raise AssertionError(
+            "Attempt-wide cgroup counters must not enter per-process callbacks"
+        )
 
     def terminate(self):
         self.terminated = True
@@ -50,9 +49,10 @@ class CgroupProcessSupervisorTests(unittest.TestCase):
             attempt_cgroup=cgroup,
         )
         self.assertEqual(cgroup.spawn_calls, 1)
+        self.assertEqual(cgroup.usage_calls, 0)
         self.assertTrue(samples)
-        self.assertGreaterEqual(samples[-1]["cpu_seconds"], 0.25)
-        self.assertGreaterEqual(samples[-1]["peak_memory_bytes"], 8192)
+        self.assertTrue(samples[-1]["process_id"])
+        self.assertEqual(samples[-1]["process_pid"] > 0, True)
 
     def test_streaming_runner_launches_inside_attempt_cgroup(self):
         cgroup = FakeAttemptCgroup()
@@ -66,10 +66,11 @@ class CgroupProcessSupervisorTests(unittest.TestCase):
             attempt_cgroup=cgroup,
         )
         self.assertEqual(cgroup.spawn_calls, 1)
+        self.assertEqual(cgroup.usage_calls, 0)
         self.assertEqual(lines, ["bounded"])
         self.assertTrue(samples)
-        self.assertGreaterEqual(samples[-1]["cpu_seconds"], 0.25)
-        self.assertGreaterEqual(samples[-1]["peak_memory_bytes"], 8192)
+        self.assertTrue(samples[-1]["process_id"])
+        self.assertEqual(samples[-1]["process_pid"] > 0, True)
 
 
 if __name__ == "__main__":
