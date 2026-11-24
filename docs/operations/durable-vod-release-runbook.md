@@ -57,11 +57,16 @@ deployed legacy API and workers.
 Do not downgrade by dropping workflow or outbox tables after any durable rows
 have been written. Migrations 0006–0010 now fail closed before removing tenant
 ownership, encrypted Job secrets, Attempt lease state, Outbox rows, or workflow
-dependency edges (PR #160). Their unit tests cover populated-state refusal and
-empty-state downgrade behavior, but this is not yet a real PostgreSQL
-rollback/re-upgrade rehearsal. Prefer rolling application components back
-while retaining additive state, then use a reviewed forward migration if
-correction is needed.
+dependency edges (PR #160). The PostgreSQL CI lane now also creates a separate,
+empty rehearsal database and executes the complete Alembic chain:
+`upgrade head → downgrade base → upgrade head`. It verifies that representative
+workflow tables are absent at base and that the final revision is
+`0010_workflow_stage_dependencies`. This proves empty-database schema-chain
+reversibility on PostgreSQL; it does **not** prove rollback with populated
+production data, deployment rollback safety, or application compatibility with
+a downgraded schema. Prefer rolling application components back while
+retaining additive state, then use a reviewed forward migration if correction
+is needed.
 
 ## Gate 2 — accepted legacy Job and callback inventory
 
