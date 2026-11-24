@@ -363,28 +363,28 @@ def create_playlist(
             )
             validation_report.require_valid()
             validation_payload = validation_report.as_dict()
-            lease_heartbeat.assert_owned()
-            workflow_repository.complete_processing_attempt(
-                job_id=request_id,
-                stage_key=output_id,
-                attempt_id=attempt_id,
-                validation_report=validation_payload,
-                lease_token=lease_token,
-                metrics={
-                    "input_bytes": input_bytes,
-                    # Storage is charged to the separate publication Attempt.
-                    "output_bytes": 0,
-                    "cpu_seconds": measured_cpu_seconds(),
-                    **process_resource_metrics(),
-                    "local_package": {
-                        "directory": directory,
-                        "manifest_path": output_path,
-                        "expected_renditions": list(expected_renditions),
-                        "package_type": "hls" if is_hls else "dash",
-                    },
+        lease_heartbeat.assert_owned()
+        workflow_repository.complete_processing_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_payload,
+            lease_token=lease_token,
+            metrics={
+                "input_bytes": input_bytes,
+                # Storage is charged to the separate publication Attempt.
+                "output_bytes": 0,
+                "cpu_seconds": measured_cpu_seconds(),
+                **process_resource_metrics(),
+                "local_package": {
+                    "directory": directory,
+                    "manifest_path": output_path,
+                    "expected_renditions": list(expected_renditions),
+                    "package_type": "hls" if is_hls else "dash",
                 },
-                pricing=configured_pricing(settings),
-            )
+            },
+            pricing=configured_pricing(settings),
+        )
     except AttemptLeaseLost:
         # The callback has already terminated the FFmpeg process tree. A stale
         # worker must not mutate durable state after losing its lease.
