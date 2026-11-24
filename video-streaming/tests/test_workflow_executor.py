@@ -400,6 +400,8 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
             job_id, "failing", lease_owner="worker-failing", lease_ttl_seconds=30,
         )
 
+        cancellation_checks = []
+
         def handler(_node, context):
             self.assertTrue(self.repository.fail_attempt(
                 job_id, "failing", failed_id,
@@ -409,11 +411,12 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
                 lease_token=failed_token,
             ))
             self.assertTrue(context.is_terminal())
-            self.assertFalse(context.is_cancelled())
+            cancellation_checks.append(context.is_cancelled())
             context.cancel(reason="sibling failed the workflow")
             raise AttemptLeaseLost("workflow is terminal")
 
         result = self.executor(handler).execute(job_id, "active")
+        self.assertEqual(cancellation_checks, [False])
         self.assertEqual(result["status"], "terminal")
         self.assertEqual(result["job_status"], "FAILED")
         snapshot = self.repository.get_job_snapshot(job_id)
