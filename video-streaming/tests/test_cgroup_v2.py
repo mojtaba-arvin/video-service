@@ -66,7 +66,7 @@ class AttemptCgroupV2Tests(unittest.TestCase):
                 ):
                     with open(os.path.join(attempt.path, name), "r") as stream:
                         self.assertEqual(stream.read(), expected)
-                self.assertFalse(os.path.exists(os.path.join(attempt.path, "pids.max")))
+                self.assertNotIn("pids.max", os.listdir(attempt.path))
             finally:
                 self._remove_fake_cgroup_files(attempt)
                 os.rmdir(attempt.path)
