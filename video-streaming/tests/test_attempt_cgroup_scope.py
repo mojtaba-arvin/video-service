@@ -5,6 +5,7 @@ import sys
 import unittest
 from unittest import mock
 
+from video_streaming import settings
 from video_streaming.execution import attempt_scope
 from video_streaming.execution.process_control import (
     run_cancellable_process,
@@ -42,7 +43,7 @@ class FakeAttemptCgroup:
 class AttemptCgroupScopeTests(unittest.TestCase):
     def test_disabled_scope_does_not_create_a_cgroup(self):
         with mock.patch.object(
-                attempt_scope.settings, "ATTEMPT_CGROUP_V2_ENABLED", False):
+                settings, "ATTEMPT_CGROUP_V2_ENABLED", False):
             with mock.patch.object(attempt_scope, "AttemptCgroupV2") as factory:
                 with attempt_scope.attempt_cgroup_scope("attempt-1") as active:
                     self.assertIsNone(active)
