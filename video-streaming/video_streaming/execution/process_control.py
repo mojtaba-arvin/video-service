@@ -217,6 +217,11 @@ def _sample_process_group_usage(process_group_id):
 
 
 def _start_managed_process(command, stdin, stdout, stderr, attempt_cgroup=None):
+    if attempt_cgroup is None:
+        from video_streaming.execution.attempt_scope import (
+            current_attempt_cgroup,
+        )
+        attempt_cgroup = current_attempt_cgroup()
     if attempt_cgroup is not None:
         return attempt_cgroup.spawn(
             command, stdin=stdin, stdout=stdout, stderr=stderr

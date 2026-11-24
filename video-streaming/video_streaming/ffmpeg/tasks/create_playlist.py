@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 from video_streaming import settings
+from video_streaming.execution.attempt_scope import attempt_cgroup_scope
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
@@ -234,133 +235,134 @@ def create_playlist(
 
 
     try:
-        input_bytes = os.path.getsize(video_path)
+        with attempt_cgroup_scope(attempt_id):
+            input_bytes = os.path.getsize(video_path)
 
-        self.save_primary_status(
-            self.primary_status.OUTPUTS_PROGRESSING,
-            request_id)
-        self.save_output_status(
-            self.output_status.PREPARATION_PROCESSING,
-            output_id,
-            request_id)
+            self.save_primary_status(
+                self.primary_status.OUTPUTS_PROGRESSING,
+                request_id)
+            self.save_output_status(
+                self.output_status.PREPARATION_PROCESSING,
+                output_id,
+                request_id)
 
-        base_output_path = output_path
-        if base_output_path is None:
-            output_filename = s3_output_key.rpartition("/")[-1]
-            base_output_path = os.path.join(
-                self.get_outputs_root_directory(request_id),
-                str(output_id),
-                output_filename,
-            )
-        output_path, directory = attempt_scoped_local_output_path(
-            base_output_path, attempt_id
-        )
-        os.makedirs(directory, exist_ok=True)
-
-        lease_heartbeat.assert_owned()
-        playlist = self.initial_protocol(
-            video_path,
-            output_id,
-            request_id,
-            encode_format,
-            video_codec=video_codec,
-            audio_codec=audio_codec,
-            is_hls=is_hls,
-            fragmented=fragmented,
-            custom_qualities=custom_qualities,
-            quality_names=quality_names,
-        )
-
-        lease_heartbeat.assert_owned()
-        representations = list(playlist.reps)
-        if is_hls:
-            manifest_stem = os.path.splitext(
-                os.path.basename(output_path)
-            )[0]
-            expected_renditions = [
-                "{}_{}p.m3u8".format(manifest_stem, rep.size.height)
-                for rep in representations
-            ]
-        else:
-            expected_renditions = [
-                str(index) for index, _ in enumerate(representations)
-            ]
-
-        # Let the library prepare HLS/DASH output paths and master
-        # playlists, but do not delegate process ownership to its internal
-        # monitor thread. The shared process supervisor owns timeout,
-        # cancellation, process-tree termination and callback failures.
-        playlist.output(output_path, run_command=False)
-        ffmpeg_callback = FfmpegCallback(
-            task=self,
-            task_id=self.request.id.__str__(),
-            output_id=output_id,
-            request_id=request_id,
-            on_progress=lease_heartbeat.on_progress,
-        )
-        duration_seconds = 0.0
-        current_seconds = 0.0
-
-        def report_progress(line, process):
-            nonlocal duration_seconds, current_seconds
-            duration_match = re.search(
-                r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
-                line,
-            )
-            current_match = re.search(
-                r"\btime=(\d+):(\d+):(\d+(?:\.\d+)?)",
-                line,
-            )
-            if duration_match:
-                hours, minutes, seconds = duration_match.groups()
-                duration_seconds = (
-                    int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            base_output_path = output_path
+            if base_output_path is None:
+                output_filename = s3_output_key.rpartition("/")[-1]
+                base_output_path = os.path.join(
+                    self.get_outputs_root_directory(request_id),
+                    str(output_id),
+                    output_filename,
                 )
-            if current_match:
-                hours, minutes, seconds = current_match.groups()
-                current_seconds = (
-                    int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                )
-            ffmpeg_callback.progress(
-                line,
-                duration_seconds,
-                current_seconds,
-                max(0.0, duration_seconds - current_seconds),
-                process,
+            output_path, directory = attempt_scoped_local_output_path(
+                base_output_path, attempt_id
+            )
+            os.makedirs(directory, exist_ok=True)
+
+            lease_heartbeat.assert_owned()
+            playlist = self.initial_protocol(
+                video_path,
+                output_id,
+                request_id,
+                encode_format,
+                video_codec=video_codec,
+                audio_codec=audio_codec,
+                is_hls=is_hls,
+                fragmented=fragmented,
+                custom_qualities=custom_qualities,
+                quality_names=quality_names,
             )
 
-        command = shlex.split(
-            command_builder(settings.FFMPEG_BIN_PATH, playlist)
-        )
-        run_streaming_process(
-            command,
-            timeout_seconds=settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS,
-            on_line=report_progress,
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            on_usage=record_process_usage,
-        )
+            lease_heartbeat.assert_owned()
+            representations = list(playlist.reps)
+            if is_hls:
+                manifest_stem = os.path.splitext(
+                    os.path.basename(output_path)
+                )[0]
+                expected_renditions = [
+                    "{}_{}p.m3u8".format(manifest_stem, rep.size.height)
+                    for rep in representations
+                ]
+            else:
+                expected_renditions = [
+                    str(index) for index, _ in enumerate(representations)
+                ]
 
-        lease_heartbeat.assert_owned()
-        validation_report = validate_package(
-            directory=directory,
-            manifest_path=output_path,
-            package_type="hls" if is_hls else "dash",
-            expected_renditions=expected_renditions,
-            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
-            metadata_probe_timeout_seconds=(
-                settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
-            ),
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            on_usage=record_process_usage,
-        )
-        validation_report.require_valid()
-        validation_payload = validation_report.as_dict()
+            # Let the library prepare HLS/DASH output paths and master
+            # playlists, but do not delegate process ownership to its internal
+            # monitor thread. The shared process supervisor owns timeout,
+            # cancellation, process-tree termination and callback failures.
+            playlist.output(output_path, run_command=False)
+            ffmpeg_callback = FfmpegCallback(
+                task=self,
+                task_id=self.request.id.__str__(),
+                output_id=output_id,
+                request_id=request_id,
+                on_progress=lease_heartbeat.on_progress,
+            )
+            duration_seconds = 0.0
+            current_seconds = 0.0
+
+            def report_progress(line, process):
+                nonlocal duration_seconds, current_seconds
+                duration_match = re.search(
+                    r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
+                    line,
+                )
+                current_match = re.search(
+                    r"\btime=(\d+):(\d+):(\d+(?:\.\d+)?)",
+                    line,
+                )
+                if duration_match:
+                    hours, minutes, seconds = duration_match.groups()
+                    duration_seconds = (
+                        int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                    )
+                if current_match:
+                    hours, minutes, seconds = current_match.groups()
+                    current_seconds = (
+                        int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                    )
+                ffmpeg_callback.progress(
+                    line,
+                    duration_seconds,
+                    current_seconds,
+                    max(0.0, duration_seconds - current_seconds),
+                    process,
+                )
+
+            command = shlex.split(
+                command_builder(settings.FFMPEG_BIN_PATH, playlist)
+            )
+            run_streaming_process(
+                command,
+                timeout_seconds=settings.FFMPEG_PLAYLIST_TIMEOUT_SECONDS,
+                on_line=report_progress,
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                on_usage=record_process_usage,
+            )
+
+            lease_heartbeat.assert_owned()
+            validation_report = validate_package(
+                directory=directory,
+                manifest_path=output_path,
+                package_type="hls" if is_hls else "dash",
+                expected_renditions=expected_renditions,
+                ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+                metadata_probe_timeout_seconds=(
+                    settings.PACKAGE_METADATA_PROBE_TIMEOUT_SECONDS
+                ),
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                on_usage=record_process_usage,
+            )
+            validation_report.require_valid()
+            validation_payload = validation_report.as_dict()
         lease_heartbeat.assert_owned()
         workflow_repository.complete_processing_attempt(
             job_id=request_id,

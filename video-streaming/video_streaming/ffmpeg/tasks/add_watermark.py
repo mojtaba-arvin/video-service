@@ -4,6 +4,7 @@ import ffmpeg
 from abc import ABC
 from pathlib import Path
 from video_streaming import settings
+from video_streaming.execution.attempt_scope import attempt_cgroup_scope
 from video_streaming.celery import celery_app
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import ChainCallbackMixin
@@ -133,95 +134,96 @@ def add_watermark(
         lease_heartbeat.on_usage(metrics)
 
     try:
-        lease_heartbeat.assert_owned()
-        self.save_output_status(
-            self.output_status.PREPARATION_PROCESSING,
-            output_id,
-            request_id)
+        with attempt_cgroup_scope(attempt_id):
+            lease_heartbeat.assert_owned()
+            self.save_output_status(
+                self.output_status.PREPARATION_PROCESSING,
+                output_id,
+                request_id)
 
-        output_path, directory = self.ensure_set_output_location(
-            request_id,
-            output_id,
-            output_path=output_path,
-            s3_output_key=s3_output_key)
-        directory = os.path.join(directory, ".attempts", attempt_id)
-        output_path = os.path.join(directory, os.path.basename(output_path))
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        lease_heartbeat.assert_owned()
+            output_path, directory = self.ensure_set_output_location(
+                request_id,
+                output_id,
+                output_path=output_path,
+                s3_output_key=s3_output_key)
+            directory = os.path.join(directory, ".attempts", attempt_id)
+            output_path = os.path.join(directory, os.path.basename(output_path))
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            lease_heartbeat.assert_owned()
 
-        main = ffmpeg.input(video_path)
-        watermark = ffmpeg.input(watermark_path)
-        callback = FfmpegCallback(
-            task=self,
-            task_id=self.request.id.__str__(),
-            output_id=output_id,
-            request_id=request_id,
-        ).progress
+            main = ffmpeg.input(video_path)
+            watermark = ffmpeg.input(watermark_path)
+            callback = FfmpegCallback(
+                task=self,
+                task_id=self.request.id.__str__(),
+                output_id=output_id,
+                request_id=request_id,
+            ).progress
 
-        stream = ffmpeg.filter(
-            [main, watermark], "overlay", 0, 0
-        ).output(output_path)
+            stream = ffmpeg.filter(
+                [main, watermark], "overlay", 0, 0
+            ).output(output_path)
 
-        duration = 1
-        current_time = 0
-        start_time = time.time()
+            duration = 1
+            current_time = 0
+            start_time = time.time()
 
-        def report_progress(line, process):
-            nonlocal duration, current_time
-            duration = get_time("Duration: ", line, duration)
-            current_time = get_time("time=", line, current_time)
-            callback(
-                line,
-                duration,
-                current_time,
-                time_left(start_time, current_time, duration),
-                process,
+            def report_progress(line, process):
+                nonlocal duration, current_time
+                duration = get_time("Duration: ", line, duration)
+                current_time = get_time("time=", line, current_time)
+                callback(
+                    line,
+                    duration,
+                    current_time,
+                    time_left(start_time, current_time, duration),
+                    process,
+                )
+
+            run_streaming_process(
+                stream.compile(cmd=settings.FFMPEG_BIN_PATH),
+                timeout_seconds=settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS,
+                on_line=report_progress,
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                on_usage=capture_process_usage,
             )
+            lease_heartbeat.assert_owned()
 
-        run_streaming_process(
-            stream.compile(cmd=settings.FFMPEG_BIN_PATH),
-            timeout_seconds=settings.FFMPEG_WATERMARK_TIMEOUT_SECONDS,
-            on_line=report_progress,
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            on_usage=capture_process_usage,
-        )
-        lease_heartbeat.assert_owned()
+            if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+                raise RuntimeError("Watermarked output is missing or empty")
 
-        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
-            raise RuntimeError("Watermarked output is missing or empty")
+            lease_heartbeat.assert_owned()
+            probe = probe_media(
+                output_path,
+                ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+                timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                on_usage=capture_process_usage,
+            )
+            video_stream = next(
+                (item for item in probe.get("streams", [])
+                 if item.get("codec_type") == "video"),
+                None,
+            )
+            if video_stream is None:
+                raise RuntimeError("Watermarked output contains no video stream")
+            lease_heartbeat.assert_owned()
 
-        lease_heartbeat.assert_owned()
-        probe = probe_media(
-            output_path,
-            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
-            timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            on_usage=capture_process_usage,
-        )
-        video_stream = next(
-            (item for item in probe.get("streams", [])
-             if item.get("codec_type") == "video"),
-            None,
-        )
-        if video_stream is None:
-            raise RuntimeError("Watermarked output contains no video stream")
-        lease_heartbeat.assert_owned()
-
-        validation_report = {
-            "valid": True,
-            "artifact_type": "video_file",
-            "width": int(video_stream.get("width") or 0),
-            "height": int(video_stream.get("height") or 0),
-            "size_bytes": os.path.getsize(output_path),
-            "video_codec": video_stream.get("codec_name"),
-            "errors": [],
-        }
+            validation_report = {
+                "valid": True,
+                "artifact_type": "video_file",
+                "width": int(video_stream.get("width") or 0),
+                "height": int(video_stream.get("height") or 0),
+                "size_bytes": os.path.getsize(output_path),
+                "video_codec": video_stream.get("codec_name"),
+                "errors": [],
+            }
         lease_heartbeat.assert_owned()
         repository.complete_processing_attempt(
             job_id=request_id,
