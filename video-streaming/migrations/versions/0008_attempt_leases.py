@@ -46,6 +46,16 @@ def upgrade():
 
 
 def downgrade():
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_attempts "
+        "WHERE lease_owner IS NOT NULL OR lease_token_hash IS NOT NULL "
+        "OR lease_expires_at IS NOT NULL OR heartbeat_at IS NOT NULL"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to remove Attempt lease state while leased or "
+            "historically leased Attempts exist"
+        )
     op.drop_index(
         "ix_workflow_attempts_lease_expiry",
         table_name="workflow_attempts",

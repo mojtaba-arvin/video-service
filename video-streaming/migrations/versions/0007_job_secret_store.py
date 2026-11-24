@@ -70,6 +70,14 @@ def upgrade():
 
 
 def downgrade():
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_job_secrets"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to drop encrypted Job secrets; revoke/export them "
+            "through the supported lifecycle before downgrade"
+        )
     op.drop_index(
         "ix_workflow_job_secrets_scope",
         table_name="workflow_job_secrets",

@@ -42,6 +42,16 @@ def upgrade():
 
 
 def downgrade():
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_jobs "
+        "WHERE owner_tenant_id IS NOT NULL OR owner_issuer IS NOT NULL "
+        "OR owner_subject IS NOT NULL"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to remove tenant ownership while owned Jobs exist; "
+            "export/reconcile ownership before downgrade"
+        )
     op.drop_index(
         "ix_workflow_jobs_owner_tenant_created",
         table_name="workflow_jobs",
