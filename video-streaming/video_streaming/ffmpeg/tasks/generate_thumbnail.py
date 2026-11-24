@@ -3,6 +3,7 @@ import os
 from abc import ABC
 from pathlib import Path
 from video_streaming import settings
+from video_streaming.execution.attempt_scope import attempt_cgroup_scope
 from video_streaming.celery import celery_app
 from video_streaming.core.tasks import ChainCallbackMixin
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
@@ -136,88 +137,90 @@ def generate_thumbnail(
         sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
         return max(
             child_cpu_seconds_since(cpu_started),
-            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
-        )
+            sam    try:
+        with attempt_cgroup_scope(attempt_id):
+    seconds if sampled_cpu_seconds is not None else 0.0,
+            )
 
-    try:
-        # Redis status is a projection; the PostgreSQL lease remains authoritative.
-        lease_heartbeat.assert_owned()
-        self.save_primary_status(
-            self.primary_status.OUTPUTS_PROGRESSING,
-            request_id)
-        self.save_output_status(
-            self.output_status.PREPARATION_PROCESSING,
-            output_id,
-            request_id)
+        try:
+            # Redis status is a projection; the PostgreSQL lease remains authoritative.
+            lease_heartbeat.assert_owned()
+            self.save_primary_status(
+                self.primary_status.OUTPUTS_PROGRESSING,
+                request_id)
+            self.save_output_status(
+                self.output_status.PREPARATION_PROCESSING,
+                output_id,
+                request_id)
 
-        output_path, directory = self.ensure_set_output_location(
-            request_id,
-            output_id,
-            output_path=requested_output_path,
-            s3_output_key=s3_output_key,
-        )
-        directory = os.path.join(directory, ".attempts", attempt_id)
-        output_path = os.path.join(directory, os.path.basename(output_path))
-        Path(directory).mkdir(parents=True, exist_ok=True)
+            output_path, directory = self.ensure_set_output_location(
+                request_id,
+                output_id,
+                output_path=requested_output_path,
+                s3_output_key=s3_output_key,
+            )
+            directory = os.path.join(directory, ".attempts", attempt_id)
+            output_path = os.path.join(directory, os.path.basename(output_path))
+            Path(directory).mkdir(parents=True, exist_ok=True)
 
-        lease_heartbeat.assert_owned()
-        render_thumbnail(
-            video_path=video_path,
-            output_path=output_path,
-            thumbnail_time=thumbnail_time,
-            scale_width=scale_width,
-            scale_height=scale_height,
-            ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
-            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
-            timeout_seconds=settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS,
-            ffprobe_timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            usage_callback=capture_usage,
-        )
-        lease_heartbeat.assert_owned()
-        dimensions = validate_thumbnail_output(
-            output_path=output_path,
-            ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
-            expected_width=scale_width if scale_width > 0 else None,
-            expected_height=scale_height if scale_height > 0 else None,
-            timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
-            should_cancel=lambda: (
-                self.is_forced_to_stop(request_id)
-                or self.is_output_forced_to_stop(request_id, output_id)
-            ),
-            on_usage=capture_usage,
-        )
-        lease_heartbeat.assert_owned()
-        validation_report = {
-            "valid": True,
-            "artifact_type": "image_thumbnail",
-            "width": dimensions["width"],
-            "height": dimensions["height"],
-            "size_bytes": os.path.getsize(output_path),
-            "errors": [],
-        }
-        lease_heartbeat.assert_owned()
-        repository.complete_processing_attempt(
-            job_id=request_id,
-            stage_key=output_id,
-            attempt_id=attempt_id,
-            validation_report=validation_report,
-            lease_token=lease_token,
-            metrics={
-                "input_bytes": input_bytes,
-                # The publisher owns the storage charge for the final object.
-                "output_bytes": 0,
-                "cpu_seconds": measured_cpu_seconds(),
-                "peak_memory_bytes": aggregate_process_usage()[
-                    "peak_memory_bytes"
-                ],
-                "memory_duration_ms": aggregate_process_usage()[
-                    "memory_duration_ms"
-                ],
-            },
+            lease_heartbeat.assert_owned()
+            render_thumbnail(
+                video_path=video_path,
+                output_path=output_path,
+                thumbnail_time=thumbnail_time,
+                scale_width=scale_width,
+                scale_height=scale_height,
+                ffmpeg_bin_path=settings.FFMPEG_BIN_PATH,
+                ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+                timeout_seconds=settings.FFMPEG_THUMBNAIL_TIMEOUT_SECONDS,
+                ffprobe_timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                usage_callback=capture_usage,
+            )
+            lease_heartbeat.assert_owned()
+            dimensions = validate_thumbnail_output(
+                output_path=output_path,
+                ffprobe_bin_path=settings.FFPROBE_BIN_PATH,
+                expected_width=scale_width if scale_width > 0 else None,
+                expected_height=scale_height if scale_height > 0 else None,
+                timeout_seconds=settings.FFPROBE_TIMEOUT_SECONDS,
+                should_cancel=lambda: (
+                    self.is_forced_to_stop(request_id)
+                    or self.is_output_forced_to_stop(request_id, output_id)
+                ),
+                on_usage=capture_usage,
+            )
+            lease_heartbeat.assert_owned()
+            validation_report = {
+                "valid": True,
+                "artifact_type": "image_thumbnail",
+                "width": dimensions["width"],
+                "height": dimensions["height"],
+                "size_bytes": os.path.getsize(output_path),
+                "errors": [],
+            }
+            lease_heartbeat.assert_owned()
+            repository.complete_processing_attempt(
+                job_id=request_id,
+                stage_key=output_id,
+                attempt_id=attempt_id,
+                validation_report=validation_report,
+                lease_token=lease_token,
+                metrics={
+                    "input_bytes": input_bytes,
+                    # The publisher owns the storage charge for the final object.
+                    "output_bytes": 0,
+                    "cpu_seconds": measured_cpu_seconds(),
+                    "peak_memory_bytes": aggregate_process_usage()[
+                        "peak_memory_bytes"
+                    ],
+                    "memory_duration_ms": aggregate_process_usage()[
+                        "memory_duration_ms"
+                    ],
+                },
             pricing=configured_pricing(settings),
         )
     except Exception as exc:
