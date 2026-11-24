@@ -1,7 +1,7 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `develop` at `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`
+- **Baseline:** `develop` at `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`
 - **Last reviewed:** 2026-11-24
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
@@ -158,20 +158,20 @@ Baseline on `develop` at `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803` (2026-11-24)
 
 - **PR #153 merged** as `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`: reusable, versioned creative workflow definition contract, canonical fingerprinting, DAG validation and Job-specific instantiation.
 - **PR #151 open (Draft)** at `d280a901ec8e97fcc5a367fd92e4b4b1de6e7137`: transactional dispatch outbox, PostgreSQL-backed Attempt leases/recovery, artifact handoff, KMS envelope secret storage and opt-in durable gRPC CreateJob path. Current-head CI and Dependency Review pass; all 31 inline threads are resolved. The recorded CodeRabbit `CHANGES_REQUESTED` review is stale, so a fresh review is still required. Durable dispatch remains disabled.
-- **PR #152 open (Draft)** at `7c4373780e4a29c6c5f61f29476af688a56eda29`: provider-neutral workload classification for typed and durable VOD operations, now distinguishing `NETWORK_IO` webhook delivery from `STORAGE_IO`. The prior CodeRabbit approval covered the previous head; fresh review and current-head CI are pending.
-- **PR #154 open (Draft)** at `1fbfbf0a6d8ff2d60f81d1164aa4308e817d7246`: Python 3.12.11 Alpine 3.22 production image, refreshed runtime pins, same-base FFmpeg/FFprobe, missing psutil dependency, and CI image/import/media-tool smoke lane. Dependency Review passed; CI is queued.
+- **PR #152 merged** as `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`: provider-neutral workload classification for typed and durable VOD operations, including `NETWORK_IO` webhook delivery. Current-head CI, Dependency Review and the preceding CodeRabbit approval passed before squash merge.
+- **PR #154 open (Draft)** at `7b3fe438121e6cf7bf0a59c1f7c217759bdc0980`: Python 3.12.11 Alpine 3.22 production image, refreshed runtime pins, same-base FFmpeg/FFprobe, psutil, startup Protobuf generation, and CI image/import/media-tool smoke lane. Current-head CI (including image build, app imports, Python 3.9/3.12 regression, PostgreSQL and full legacy VOD E2E) and Dependency Review pass. Full broker-backed VOD/migrations inside this exact image remain an operational acceptance gate.
 - **Governance #148 remains open**: `develop` has a stable always-running `Quality gates` aggregate, but active ruleset `Protect develop` still requires only deletion and non-fast-forward protection, not PRs or the aggregate check.
 - **Security state is partial on develop**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership/authorization, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, quotas, signed/replay-protected callbacks and delivery history remain open.
 - **FFmpeg isolation is partial**: process-tree termination and CPU/RSS sampling exist, but per-Attempt cgroup v2 CPU/memory/PID and aggregate disk limits are not implemented.
-- The production Docker image on `develop` is still Python 3.9.2 Alpine. Python 3.12 unit/regression tests are not a container migration; PR #154 must pass image build and import tests, then full broker-backed VOD and migration tests.
+- The production Docker image on `develop` remains Python 3.9.2 Alpine until PR #154 merges. Its Python 3.12 image build, startup import/code-generation smoke and regression lanes now pass; full broker-backed VOD and migration tests inside that exact image remain outstanding.
 
 Next execution order:
 
 1. **#71 — merge the durable VOD foundation only after fresh review.** PR #151 has green current-head CI, but keep it Draft until a fresh review addresses the latest code and the remaining inline review concerns. Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; after merge, prove broker redelivery/worker-loss behavior and legacy Job reconciliation in staging before any cutover.
 2. **#72 — implement per-Attempt cgroup v2 enforcement.** Keep process-group termination as the process cleanup boundary. Add delegated cgroup scopes for CPU bandwidth, memory, PID limits and observable limit events; define an honest disk-quota strategy. Do not substitute UID-wide RLIMIT_NPROC or per-file RLIMIT_FSIZE for per-Attempt isolation.
 3. **#73 — complete service security.** Preserve the OIDC/tenant/SSRF primitives already on develop; implement quota/admission controls, signed/replay-protected webhook delivery/history, production identity-provider configuration and legacy ownership reconciliation.
-4. **#74 — finish Python 3.12 container migration.** Run PR #154's image build/import/media-tool smoke lane, then migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside that exact image. Retire Python 3.9 only after those gates pass.
-5. **#80 — merge workload classification after current-head CI passes.** Then build deterministic CPU admission, per-tenant concurrency budgets, fairness and resource metering before considering GPU/Spot policies.
+4. **#74 — finish Python 3.12 container migration.** PR #154's image build/import/code-generation/media-tool smoke and CI gates pass; next run migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside that exact image. Retire Python 3.9 only after those gates pass.
+5. **#80 — workload classification is merged.** Build deterministic CPU admission, per-tenant concurrency budgets, fairness and resource metering before considering GPU/Spot policies.
 6. **#79 — extend the merged definition contract.** Add persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable creative stages.
 7. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; implement CDN delivery correlation with privacy/retention controls.
 8. **#76 — implement MCP only after the shared authorization, quota and audit layer is complete.**
