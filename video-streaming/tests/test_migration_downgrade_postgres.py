@@ -89,9 +89,9 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
                 "('job', 'tenant', 'issuer', 'subject', CURRENT_TIMESTAMP)",
                 "owned Jobs",
                 "DELETE FROM workflow_jobs",
-                "SELECT COUNT(*) = 0 FROM information_schema.columns "
-                "WHERE table_schema = 'pg_temp' AND table_name = 'workflow_jobs' "
-                "AND column_name = 'owner_tenant_id'",
+                "SELECT NOT EXISTS (SELECT 1 FROM pg_attribute "
+                "WHERE attrelid = to_regclass('pg_temp.workflow_jobs') "
+                "AND attname = 'owner_tenant_id' AND NOT attisdropped)",
             ),
             (
                 "0007_job_secret_store.py",
