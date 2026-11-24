@@ -75,6 +75,14 @@ def upgrade():
 
 
 def downgrade():
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_outbox"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to drop the workflow Outbox while dispatch history "
+            "or pending messages exist"
+        )
     op.drop_index("ix_workflow_outbox_job_created", table_name="workflow_outbox")
     op.drop_index("ix_workflow_outbox_ready", table_name="workflow_outbox")
     op.drop_table("workflow_outbox")
