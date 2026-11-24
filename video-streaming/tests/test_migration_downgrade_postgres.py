@@ -139,9 +139,9 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
                 "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 "leased or",
                 "DELETE FROM workflow_attempts",
-                "SELECT COUNT(*) = 0 FROM information_schema.columns "
-                "WHERE table_schema = 'pg_temp' AND table_name = 'workflow_attempts' "
-                "AND column_name = 'lease_owner'",
+                "SELECT NOT EXISTS (SELECT 1 FROM pg_attribute "
+                "WHERE attrelid = to_regclass('pg_temp.workflow_attempts') "
+                "AND attname = 'lease_owner' AND NOT attisdropped)",
             ),
             (
                 "0009_transactional_outbox.py",
