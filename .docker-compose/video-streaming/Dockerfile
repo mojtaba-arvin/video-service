@@ -1,9 +1,9 @@
-LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
-
 # Keep the Python runtime and FFmpeg userspace on the same Alpine/musl base.
 # The previous FFmpeg 4.1 stage was built against an older Alpine release and
 # copying its /usr/local tree into a newer Python image was not ABI-safe.
 FROM python:3.12.11-alpine3.22
+
+LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1 \
     && apk add --no-cache \
@@ -12,6 +12,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1 \
         libffi-dev \
         libxml2-dev \
         libxslt-dev \
+        postgresql-dev \
         zlib-dev \
         jpeg-dev \
         imagemagick \
