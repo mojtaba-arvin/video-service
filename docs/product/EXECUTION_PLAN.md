@@ -70,7 +70,7 @@ Deliver:
 
 **Exit gate:** unauthorized or cross-tenant requests cannot access resources; SSRF and replay tests pass; webhook delivery is bounded and auditable; the production-shaped Python 3.12 image completes the full VOD path and migrations.
 
-**Governance action:** update the active `Protect develop` ruleset to require the stable aggregate `Quality gates` check. The current ruleset blocks deletion and non-fast-forward updates but does not require this check. This needs repository-admin capability.
+**Governance state (2026-11-24):** the active `Protect develop` ruleset now requires pull requests and the stable aggregate `Quality gates` check, preserves deletion/non-fast-forward protection, and has no bypass actors. Verify the required check on a PR targeting `develop`; keep this gate green.
 
 ### Gate C — Measurable quality and economics (P1)
 
@@ -162,7 +162,7 @@ Baseline on `develop` as verified on 2026-11-24 (post-merge state):
 - **PR #154 merged** as `4062b6998b5fd6b1e0bd7b01de900f01f4137663`: Python 3.12.11 Alpine 3.22 production image, refreshed pins, same-base FFmpeg/FFprobe and startup Protobuf generation. Image/import/media-tool smoke and CI passed; full broker-backed VOD and migrations inside this image remain operational acceptance work.
 - **PR #156 merged** as `d546607e20ea6fcec4859688ebed9286bcf0b3da`: fail-closed Attempt cgroup v2 CPU/memory primitive and optional process-runner integration. PID admission is explicitly not implemented; Celery lifecycle wiring and delegated-Linux acceptance remain open.
 - **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
-- **Governance #148 remains open**: stable `Quality gates` exists, but active `Protect develop` ruleset still requires only deletion and non-fast-forward protection, not PRs or the aggregate check.
+- **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Keep the issue open until a PR targeting `develop` demonstrates the exact required check is reported and enforced.
 - **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, atomic tenant quotas, signed/replay-protected callbacks and delivery history remain open.
 - **Durable dispatch rollout remains disabled**: CI does not establish production KMS/STS/IAM policy, live S3 behavior, legacy callback migration or automatic broker redelivery in the deployed topology.
 
