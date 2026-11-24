@@ -1,8 +1,8 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `develop` at `c8460a751fc7a1167893891fac99896533598654`
-- **Last reviewed:** 2026-11-19
+- **Baseline:** `develop` at `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`
+- **Last reviewed:** 2026-11-24
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
 
@@ -154,29 +154,31 @@ Every parallel PR must name its owning issue, affected contracts, files/migratio
 
 ## 6. Current portfolio state and next execution order
 
-Baseline on `develop`:
-- PR #95 merged: direct streaming Watermark process-group CPU/RSS/duration metering.
-- PR #96 merged: public QoE cost-coverage fields and generated-Protobuf integration coverage.
-- PR #97 merged: bounded webhook connect/read waits, no automatic redirect/retry, deterministic cleanup.
-- PR #98 merged: roadmap/governance/runtime status corrected.
-- Current `develop` is `c8460a7` (full SHA in the baseline above); PR #105 merged the mandatory reliability/observability standard and ADR 0006.
-- PR #99 merged the product execution plan; PR #100 merged the first versioned execution-plan contract.
-- PR #104 merged the pure VOD plan builder; PR #106 merged atomic immutable execution-plan persistence after PostgreSQL migration/repository tests, Python 3.9/3.12 regression, full gRPC → Celery → FFmpeg → storage VOD integration, Documentation links, Dependency Review and aggregate `Quality gates` all passed on head `e42ef0e673bf14490eb66b1ca14afce941d506e3`.
+Baseline on `develop` at `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803` (2026-11-24):
+
+- **PR #153 merged** as `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`: reusable, versioned creative workflow definition contract, canonical fingerprinting, DAG validation and Job-specific instantiation.
+- **PR #151 open (Draft)** at `d280a901ec8e97fcc5a367fd92e4b4b1de6e7137`: transactional dispatch outbox, PostgreSQL-backed Attempt leases/recovery, artifact handoff, KMS envelope secret storage and opt-in durable gRPC CreateJob path. Current-head CI and Dependency Review pass; all 31 inline threads are resolved. The recorded CodeRabbit `CHANGES_REQUESTED` review is stale, so a fresh review is still required. Durable dispatch remains disabled.
+- **PR #152 open (Ready for review)** at `b01948ceeb2751de6b9c746f927e447bae5fa0f8`: provider-neutral workload classification for typed and durable VOD operations. The latest CodeRabbit review approved the corrected exception contract; Dependency Review passed and the full VOD integration CI lane is still running.
+- **PR #154 open (Draft)** at `1fbfbf0a6d8ff2d60f81d1164aa4308e817d7246`: Python 3.12.11 Alpine 3.22 production image, refreshed runtime pins, same-base FFmpeg/FFprobe, missing psutil dependency, and CI image/import/media-tool smoke lane. Dependency Review passed; CI is queued.
+- **Governance #148 remains open**: `develop` has a stable always-running `Quality gates` aggregate, but active ruleset `Protect develop` still requires only deletion and non-fast-forward protection, not PRs or the aggregate check.
+- **Security state is partial on develop**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership/authorization, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, quotas, signed/replay-protected callbacks and delivery history remain open.
+- **FFmpeg isolation is partial**: process-tree termination and CPU/RSS sampling exist, but per-Attempt cgroup v2 CPU/memory/PID and aggregate disk limits are not implemented.
+- The production Docker image on `develop` is still Python 3.9.2 Alpine. Python 3.12 unit/regression tests are not a container migration; PR #154 must pass image build and import tests, then full broker-backed VOD and migration tests.
 
 Next execution order:
-1. **#71 — complete VOD DAG builder (merged in PR #104).** The pure transport-neutral builder now represents preflight, input analysis, fan-in, watermark, HLS/DASH, thumbnails, uploads and callback references. Keep the live dispatch path unchanged.
-2. **#71 — persist the immutable plan and version with the Job/Workflow/Stage transaction (PR #106 merged).** The plan snapshot, schema/workflow versions, fingerprint, Stage projections and JOB_CREATED event commit atomically; PostgreSQL, Python 3.9/3.12, full VOD E2E and Quality gates passed.
-3. **#71 — implement an authorized secret-reference store and resolution contract.** Encrypt at rest; scope reads to tenant and Job; resolve only inside the delivery adapter; redact logs/errors; define rotation, audit, retention and deletion. Migrate the legacy Redis `JOB_DETAILS` webhook path without putting plaintext secrets into plan JSON, outbox payloads or broker messages.
-4. **#71 — establish durable per-node execution claims and Attempt leases before outbox activation.** Cover concurrent claims, lease expiry/heartbeat, worker death, retries, cancellation, deterministic artifact keys and duplicate side-effect suppression. Then add broker-backed tests for commit-before-relay crash, publish-before-ack crash, broker outage and poison messages. Enable the relay only after all these pass.
-5. **#73 — implement the service security boundary in parallel.** Start with an explicit caller/tenant identity contract and a DNS/IP-aware webhook policy test matrix. The merged redirect and timeout protection is only a partial slice.
-6. **#72 — add real per-attempt cgroup/container resource enforcement.** First document Linux/container assumptions and expose a replaceable adapter; then test CPU, memory, PID and disk limits on CI workers capable of enforcing them.
-7. **#74 — uplift the full runtime to Python 3.12.** Keep this isolated from workflow feature work and gate rollout on full image-level VOD E2E.
-8. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; schema/fixture work can proceed meanwhile.
-9. **#79/#84 — begin AI workflow state and incremental contracts after the durable plan model stabilizes.**
-10. **#76 — implement MCP after the auth/authorization/quota layer is usable.**
-11. **#80/#81/#83 — make measured go/no-go decisions after cost, workload and delivery baselines exist.**
 
-The versioned execution-plan contract (PR #100), complete pure VOD DAG builder (PR #104), reliability/observability standard (PR #105), and atomic immutable plan persistence (PR #106) are merged. PR #106 passed PostgreSQL migration/repository tests, Python 3.9/3.12 regression, full VOD integration, Dependency Review and aggregate Quality gates. Next: tenant-scoped encrypted secret resolution, durable per-node claims/Attempt leases, then broker-backed crash/replay tests. Do not add or activate an outbox relay until every side-effecting node has a durable idempotent claim and all failure gates pass.
+1. **#71 — merge the durable VOD foundation only after fresh review.** PR #151 has green current-head CI, but keep it Draft until a fresh review addresses the latest code and the remaining inline review concerns. Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; after merge, prove broker redelivery/worker-loss behavior and legacy Job reconciliation in staging before any cutover.
+2. **#72 — implement per-Attempt cgroup v2 enforcement.** Keep process-group termination as the process cleanup boundary. Add delegated cgroup scopes for CPU bandwidth, memory, PID limits and observable limit events; define an honest disk-quota strategy. Do not substitute UID-wide RLIMIT_NPROC or per-file RLIMIT_FSIZE for per-Attempt isolation.
+3. **#73 — complete service security.** Preserve the OIDC/tenant/SSRF primitives already on develop; implement quota/admission controls, signed/replay-protected webhook delivery/history, production identity-provider configuration and legacy ownership reconciliation.
+4. **#74 — finish Python 3.12 container migration.** Run PR #154's image build/import/media-tool smoke lane, then migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside that exact image. Retire Python 3.9 only after those gates pass.
+5. **#80 — merge workload classification after current-head CI passes.** Then build deterministic CPU admission, per-tenant concurrency budgets, fairness and resource metering before considering GPU/Spot policies.
+6. **#79 — extend the merged definition contract.** Add persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable creative stages.
+7. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; implement CDN delivery correlation with privacy/retention controls.
+8. **#76 — implement MCP only after the shared authorization, quota and audit layer is complete.**
+9. **#84 — design incremental ingestion/output after artifact identity, resumability and backpressure contracts stabilize.**
+10. **#81/#83 — make measured JIT-packaging and Edge–Cloud go/no-go decisions only after real workload baselines exist.
+
+No PR branch is counted as merged work. Keep issues open until their acceptance criteria are verified on `develop` or in the required operational environment.
 
 ## 7. Explicit no-go decisions for now
 
