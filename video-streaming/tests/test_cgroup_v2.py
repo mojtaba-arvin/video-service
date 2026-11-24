@@ -21,6 +21,10 @@ class AttemptCgroupV2Tests(unittest.TestCase):
                 stream.write(value)
         return root
 
+    def _remove_fake_cgroup_files(self, attempt):
+        for name in os.listdir(attempt.path):
+            os.remove(os.path.join(attempt.path, name))
+
     def _attempt(self, root):
         attempt = AttemptCgroupV2(
             root, cpu_max="50000 100000",
@@ -59,7 +63,7 @@ class AttemptCgroupV2Tests(unittest.TestCase):
                     with open(os.path.join(attempt.path, name), "r") as stream:
                         self.assertEqual(stream.read(), expected)
             finally:
-                attempt.cleanup = mock.Mock()
+                self._remove_fake_cgroup_files(attempt)
                 os.rmdir(attempt.path)
 
     def test_usage_exposes_kernel_counters(self):
@@ -71,7 +75,7 @@ class AttemptCgroupV2Tests(unittest.TestCase):
             self.assertEqual(usage["memory_peak_bytes"], 4096)
             self.assertEqual(usage["memory_events"]["oom_kill"], 0)
             self.assertEqual(usage["pids_current"], 2)
-            attempt.cleanup = mock.Mock()
+            self._remove_fake_cgroup_files(attempt)
             os.rmdir(attempt.path)
 
     def test_cleanup_refuses_populated_attempt(self):
@@ -89,6 +93,9 @@ class AttemptCgroupV2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self._delegated_root(root)
             attempt = self._attempt(root)
+            self._remove_fake_cgroup_files(attempt)
+            # cgroupfs exposes virtual control files; the temporary-directory
+            # fixture models them as ordinary files, so remove those first.
             with mock.patch.object(attempt, "wait_empty", return_value=True):
                 attempt.cleanup()
             self.assertFalse(os.path.exists(attempt.path))
