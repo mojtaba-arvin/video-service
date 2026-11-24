@@ -389,6 +389,8 @@ jobs:
             --entrypoint /bin/sh video-service-runtime-ci -ec '
               cp video_streaming/.env.example video_streaming/.env
               trap "rm -f video_streaming/.env" EXIT
+              cd scripts && sh generate_grpc_codes.sh
+              cd ..
               PYTHONPATH=/opt/workdir/video-streaming python -c "from video_streaming.grpc.server import GrpcServer; from video_streaming.celery import celery_app; from video_streaming.workflows.repository import WorkflowRepository"
             '
 
