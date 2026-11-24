@@ -130,12 +130,11 @@ def add_watermark(
     output_path = None
 
     def capture_process_usage(metrics):
-            try:
-        with attempt_cgroup_scope(attempt_id):
-    sage.record(metrics)
-            lease_heartbeat.on_usage(metrics)
+        process_usage.record(metrics)
+        lease_heartbeat.on_usage(metrics)
 
-        try:
+    try:
+        with attempt_cgroup_scope(attempt_id):
             lease_heartbeat.assert_owned()
             self.save_output_status(
                 self.output_status.PREPARATION_PROCESSING,
@@ -239,8 +238,8 @@ def add_watermark(
                     "cpu_seconds": measured_cpu_seconds(),
                     **process_resource_metrics(),
                 },
-            pricing=configured_pricing(settings),
-        )
+                pricing=configured_pricing(settings),
+            )
 
     except Exception as exc:
         if output_path:
