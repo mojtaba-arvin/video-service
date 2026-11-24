@@ -100,11 +100,10 @@ class WebhookSigningTests(unittest.TestCase):
             canonical_webhook_payload("1700000000", "bad id", self.body)
         with self.assertRaises(WebhookSignatureError):
             canonical_webhook_payload("1700000000", self.delivery_id, "{}")
-        with self.assertRaises(WebhookSignatureError):
-            verify_webhook_signature(
-                self.secret, "1700000000", self.delivery_id, self.body,
-                "v2=" + "0" * 64, now=1700000000,
-            )
+        self.assertFalse(verify_webhook_signature(
+            self.secret, "1700000000", self.delivery_id, self.body,
+            "v2=" + "0" * 64, now=1700000000,
+        ))
 
 
 if __name__ == "__main__":
