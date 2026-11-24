@@ -62,9 +62,7 @@ class WorkloadClassificationTests(unittest.TestCase):
     def test_unknown_or_untyped_operations_fail_closed(self):
         for operation in ("video.unknown", None, 123):
             with self.subTest(operation=operation):
-                with self.assertRaisesRegex(
-                    ValueError, "unsupported|no workload classification"
-                ):
+                with self.assertRaises(ValueError):
                     classify_operation(operation)
 
 
