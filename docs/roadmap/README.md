@@ -63,7 +63,7 @@ identified separately and is not counted as merged.
 
 | Priority | Outcome lane | Verified state | Next acceptance evidence |
 |---|---|---|---|
-| P0 | Engineering foundation | **Partial** — pinned CI actions, Python 3.9/3.12 regression lanes, synthetic VOD fixtures, Dependency Review, Dependabot, agent guidance and stable aggregate `Quality gates` check (PR #88). Active `Protect develop` ruleset currently blocks deletion/non-fast-forward only; it does not yet require `Quality gates` | Repository admin must make the single stable `Quality gates` check a required status check; keep it green |
+| P0 | Engineering foundation | **Partial** — pinned CI actions, Python 3.9/3.12 regression lanes, synthetic VOD fixtures, Dependency Review, Dependabot, agent guidance and stable aggregate `Quality gates` check (PR #88). Active `Protect develop` now requires PRs and `Quality gates`, while retaining deletion/non-fast-forward protection and no bypass actors | Verify the exact required check on a PR targeting `develop`; keep it green |
 | P0 | Configuration and repository hygiene | **Done** — settings regressions and safe environment template/ignore checks (PR #55/#56) | Confirm historic development broker credentials are no longer accepted by any shared service |
 | P0 | Thumbnail correctness | **Done** — actual FFmpeg render plus FFprobe checks before completion (PR #57/#59) | Add failure/cancellation coverage to the complete workflow |
 | P0 | HLS/DASH correctness and publication | **Done** — package graph validation, expected rendition checks, bounded metadata probing, storage readback and manifest-last publication (PR #62/#64) | Add adversarial tests for cleanup/partial failure as the package contract evolves |
@@ -102,7 +102,7 @@ the same files or migration/protobuf ownership.
 
 ## First end-to-end target
 
-The next milestone is a **failure-tested, cost-observable VOD vertical**. Immutable execution-plan persistence is now merged (PR #106); the next missing safety contracts are secret resolution and durable per-node claims. The live dispatch path is still the legacy gRPC/Celery graph. The target vertical is:
+The next milestone is a **failure-tested, cost-observable VOD vertical**. Immutable execution-plan persistence (PR #106), durable dispatch/outbox and per-node claims (PR #151), and the versioned creative-definition contract (PR #153) are merged. Remaining release gates include live KMS/STS/IAM configuration, legacy Job/callback reconciliation, deployed broker redelivery and staging acceptance. The target vertical is:
 
 1. A caller submits a typed request with a stable idempotency key.
 2. PostgreSQL persists the Job, Workflow, immutable plan/version/fingerprint,
@@ -156,10 +156,8 @@ CI retains Python 3.9 regression coverage for backward compatibility and
 runs a separate Python 3.12 suite, but neither proves that the application
 image/runtime has migrated.
 
-Research on the pinned stack identified old gevent and PyZMQ versions as
-migration blockers; see [Issue #74](https://github.com/mojtaba-arvin/video-service/issues/74)
-for compatibility evidence and the selected target. Next acceptance
-increment: uplift the complete dependency set, rebuild the container from
-pinned inputs, run migrations and broker-backed worker smoke tests, and run
-the complete VOD path inside the Python 3.12 image before retiring the legacy
-lane.
+The Python 3.12.11 production image and dependency refresh are merged (PR #154).
+See [Issue #74](https://github.com/mojtaba-arvin/video-service/issues/74)
+for compatibility evidence. Remaining acceptance: run migrations, broker-backed
+worker smoke tests, and the complete VOD path inside that exact Python 3.12
+image before retiring the legacy lane.
