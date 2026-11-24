@@ -1,9 +1,9 @@
-"""Attempt-scoped cgroup v2 resource enforcement.
+"""Attempt-scoped CPU and memory enforcement with cgroup v2.
 
-The caller must pass a delegated cgroup-v2 directory whose cpu, memory and
-pids controllers are already enabled in cgroup.subtree_control. This module
-never changes host-wide controller policy and fails closed when delegation or
-required kernel interfaces are unavailable.
+The caller must pass a delegated cgroup-v2 directory whose cpu and memory
+controllers are already enabled in cgroup.subtree_control. PID admission is
+intentionally not claimed here: safely enforcing pids.max at process creation
+requires an atomic CLONE_INTO_CGROUP-style launch path, not post-fork migration.
 """
 import os
 import signal
@@ -36,18 +36,18 @@ def _read_key_values(path):
 
 
 class AttemptCgroupV2:
-    """One cgroup per durable Attempt, with limits applied before exec.
+    """One cgroup per durable Attempt, with CPU/memory limits applied pre-exec.
 
-    Use `spawn` instead of subprocess.Popen: a tiny Python gate process starts,
-    is moved into cgroup.procs, and only then execs the requested command.
-    This avoids the unbounded fork-to-attach window and does not use
-    preexec_fn (which is unsafe in threaded workers).
+    A gate process is attached to cgroup.procs before it is released to exec.
+    This avoids the unbounded fork-to-exec workload window and does not use
+    preexec_fn, which is unsafe in threaded workers. The gate itself is briefly
+    forked outside the target cgroup; therefore pids.max is deliberately not
+    configured or represented as an enforced limit by this implementation.
     """
 
-    REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
+    REQUIRED_CONTROLLERS = ("cpu", "memory")
 
-    def __init__(self, delegated_root, cpu_max, memory_max, pids_max,
-                 attempt_id=None):
+    def __init__(self, delegated_root, cpu_max, memory_max, attempt_id=None):
         self.root = os.path.realpath(delegated_root)
         self.attempt_id = str(attempt_id or uuid.uuid4().hex)
         if not self.attempt_id or any(
@@ -59,9 +59,8 @@ class AttemptCgroupV2:
         quota, period = cpu_max.split()
         if not quota.isdigit() or not period.isdigit() or int(quota) <= 0 or int(period) <= 0:
             raise ValueError("cpu_max quota and period must be positive integers")
-        for name, value in (("memory_max", memory_max), ("pids_max", pids_max)):
-            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                raise ValueError("{} must be a positive integer".format(name))
+        if not isinstance(memory_max, int) or isinstance(memory_max, bool) or memory_max <= 0:
+            raise ValueError("memory_max must be a positive integer")
 
         controllers_path = os.path.join(self.root, "cgroup.controllers")
         subtree_path = os.path.join(self.root, "cgroup.subtree_control")
@@ -85,11 +84,14 @@ class AttemptCgroupV2:
         try:
             _write(os.path.join(self.path, "cpu.max"), cpu_max)
             _write(os.path.join(self.path, "memory.max"), memory_max)
-            _write(os.path.join(self.path, "pids.max"), pids_max)
-            required = ("cgroup.procs", "cgroup.events", "cgroup.kill",
-                        "cpu.stat", "memory.peak", "memory.events", "pids.current")
-            absent = [name for name in required
-                      if not os.path.exists(os.path.join(self.path, name))]
+            required = (
+                "cgroup.procs", "cgroup.events", "cgroup.kill",
+                "cpu.stat", "memory.peak", "memory.events",
+            )
+            absent = [
+                name for name in required
+                if not os.path.exists(os.path.join(self.path, name))
+            ]
             if absent:
                 raise CgroupV2Unavailable(
                     "kernel lacks required cgroup files: {}".format(", ".join(absent))
@@ -120,8 +122,13 @@ class AttemptCgroupV2:
                 stdin=stdin, stdout=stdout, stderr=stderr, env=env,
                 pass_fds=(read_fd,), start_new_session=True, bufsize=0,
             )
-        finally:
+        except BaseException:
             os.close(read_fd)
+            os.close(write_fd)
+            raise
+        else:
+            os.close(read_fd)
+
         try:
             _write(os.path.join(self.path, "cgroup.procs"), process.pid)
             os.write(write_fd, b"1")
@@ -139,7 +146,7 @@ class AttemptCgroupV2:
         return process
 
     def usage(self):
-        """Return kernel counters without converting unavailable data to zero."""
+        """Return Attempt-wide kernel counters, not per-process measurements."""
         return {
             "cpu": _read_key_values(os.path.join(self.path, "cpu.stat")),
             "memory_peak_bytes": int(open(
@@ -148,9 +155,6 @@ class AttemptCgroupV2:
             "memory_events": _read_key_values(
                 os.path.join(self.path, "memory.events")
             ),
-            "pids_current": int(open(
-                os.path.join(self.path, "pids.current"), "r"
-            ).read().strip()),
         }
 
     def terminate(self):
@@ -164,8 +168,7 @@ class AttemptCgroupV2:
         deadline = time.monotonic() + timeout_seconds
         events_path = os.path.join(self.path, "cgroup.events")
         while time.monotonic() < deadline:
-            with open(events_path, "r") as stream:
-                events = _read_key_values(events_path)
+            events = _read_key_values(events_path)
             if events.get("populated") == 0:
                 return True
             time.sleep(min(0.05, max(0, deadline - time.monotonic())))
