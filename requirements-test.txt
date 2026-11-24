@@ -23,3 +23,6 @@ protobuf==6.33.5
 
 # OIDC/JWKS bearer authentication tests
 PyJWT[crypto]==2.15.1
+
+# Explicit dependency used by the Redis/Celery recovery compatibility tests.
+packaging==25.0
