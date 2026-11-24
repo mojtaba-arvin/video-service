@@ -1,5 +1,4 @@
 """Integration contract tests for cgroup-aware process supervision."""
-import signal
 import subprocess
 import sys
 import unittest
