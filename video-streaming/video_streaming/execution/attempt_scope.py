@@ -3,7 +3,6 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from video_streaming import settings
 from video_streaming.execution.cgroup_v2 import (
     AttemptCgroupV2,
     CgroupV2CleanupError,
@@ -27,6 +26,11 @@ def attempt_cgroup_scope(attempt_id):
     fails closed rather than silently running an unbounded process. All child
     processes are terminated and reaped before the cgroup directory is removed.
     """
+    # Import settings only when a task explicitly enters the opt-in scope.
+    # Process supervisors are also used by isolated FFmpeg helpers that do not
+    # have a project .env file loaded.
+    from video_streaming import settings
+
     if not settings.ATTEMPT_CGROUP_V2_ENABLED:
         yield None
         return
