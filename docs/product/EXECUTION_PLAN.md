@@ -1,7 +1,7 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `4062b6998b5fd6b1e0bd7b01de900f01f4137663` at `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`
+- **Baseline:** `d546607e20ea6fcec4859688ebed9286bcf0b3da` (current `develop` base at review time)
 - **Last reviewed:** 2026-11-24
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
