@@ -143,6 +143,16 @@ def terminate_process_tree(process, grace_period=1.0):
         ProcessTreeTerminationError: A descendant survives forced termination.
         psutil.AccessDenied: The worker lacks permission to stop a process.
     """
+    cgroup = getattr(process, "_video_service_cgroup", None)
+    if cgroup is not None:
+        cgroup.terminate()
+        if not cgroup.wait_empty(max(grace_period, 0.05)):
+            raise ProcessTreeTerminationError(
+                "Attempt cgroup remained populated after forced termination"
+            )
+        if process.poll() is None:
+            process.wait(timeout=grace_period)
+        return
     if getattr(process, "_video_service_process_group", False):
         _terminate_process_group(process, grace_period)
         return
@@ -206,7 +216,11 @@ def _sample_process_group_usage(process_group_id):
     return cpu_seconds, resident_bytes
 
 
-def _start_managed_process(command, stdin, stdout, stderr):
+def _start_managed_process(command, stdin, stdout, stderr, attempt_cgroup=None):
+    if attempt_cgroup is not None:
+        return attempt_cgroup.spawn(
+            command, stdin=stdin, stdout=stdout, stderr=stderr
+        )
     process = subprocess.Popen(
         command,
         stdin=stdin,
@@ -227,7 +241,8 @@ def run_cancellable_process(
         should_cancel=None,
         poll_interval=0.2,
         terminate_grace_period=1.0,
-        on_usage=None):
+        on_usage=None,
+        attempt_cgroup=None):
     """Run a command with a deadline and cooperative process-group cancellation.
 
     Both stdout and stderr are drained while polling. Dedicated process groups
@@ -258,6 +273,7 @@ def run_cancellable_process(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        attempt_cgroup=attempt_cgroup,
     )
     # A PID is not a durable identity: the OS may reuse it for a later FFprobe.
     # Keep one opaque identity for every callback emitted by this subprocess.
@@ -281,22 +297,9 @@ def run_cancellable_process(
 
     def capture_usage():
         nonlocal peak_memory_bytes, sampled_cpu_seconds
-        try:
-            root = psutil.Process(process.pid)
-            processes = [root] + root.children(recursive=True)
-            cpu_seconds = 0.0
-            current_rss = 0
-            for child in processes:
-                try:
-                    cpu = child.cpu_times()
-                    cpu_seconds += float(cpu.user + cpu.system)
-                    current_rss += int(child.memory_info().rss)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
-            peak_memory_bytes = max(peak_memory_bytes, current_rss)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+        cpu_seconds, current_rss = _sample_process_group_usage(process.pid)
+        sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
+        peak_memory_bytes = max(peak_memory_bytes, current_rss)
         emit_usage()
 
     try:
@@ -366,7 +369,8 @@ def run_streaming_process(
         poll_interval=0.2,
         terminate_grace_period=1.0,
         max_line_bytes=65536,
-        on_usage=None):
+        on_usage=None,
+        attempt_cgroup=None):
     """Run a command while delivering stdout/stderr lines as they arrive.
 
     The pipe is read with selectors/os.read rather than blocking readline(), so
@@ -394,6 +398,7 @@ def run_streaming_process(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        attempt_cgroup=attempt_cgroup,
     )
     # Do not use PID as the key: sequential subprocesses can reuse a PID.
     process_id = uuid.uuid4().hex
@@ -409,6 +414,9 @@ def run_streaming_process(
 
     def capture_usage():
         nonlocal sampled_cpu_seconds, peak_memory_bytes
+        # cgroup cpu.stat and memory.peak are Attempt-wide counters. Keep
+        # this callback's per-process contract by sampling only this process
+        # group; Attempt-wide kernel counters remain available via cgroup.usage().
         cpu_seconds, resident_bytes = _sample_process_group_usage(process.pid)
         sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
         peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
