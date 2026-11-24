@@ -230,13 +230,12 @@ def create_playlist(
         sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
         return max(
             child_cpu_seconds_since(cpu_started),
-            samp    try:
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
+        )
+
+
+    try:
         with attempt_cgroup_scope(attempt_id):
-    econds if sampled_cpu_seconds is not None else 0.0,
-            )
-
-
-        try:
             input_bytes = os.path.getsize(video_path)
 
             self.save_primary_status(
@@ -384,8 +383,8 @@ def create_playlist(
                         "package_type": "hls" if is_hls else "dash",
                     },
                 },
-            pricing=configured_pricing(settings),
-        )
+                pricing=configured_pricing(settings),
+            )
     except AttemptLeaseLost:
         # The callback has already terminated the FFmpeg process tree. A stale
         # worker must not mutate durable state after losing its lease.
