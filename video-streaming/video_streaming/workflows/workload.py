@@ -17,6 +17,7 @@ class WorkloadClass(str, Enum):
     MEDIA_TRANSFORM = "media_transform"
     PACKAGING = "packaging"
     STORAGE_IO = "storage_io"
+    NETWORK_IO = "network_io"
 
 
 _OPERATION_CLASSES = {
@@ -44,7 +45,7 @@ _OPERATION_CLASSES = {
     "video.watermark.apply": WorkloadClass.MEDIA_TRANSFORM,
     "video.output.upload_file": WorkloadClass.STORAGE_IO,
     "video.output.upload_directory": WorkloadClass.STORAGE_IO,
-    "video.webhook.deliver": WorkloadClass.STORAGE_IO,
+    "video.webhook.deliver": WorkloadClass.NETWORK_IO,
 }
 
 
