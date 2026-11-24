@@ -358,6 +358,42 @@ jobs:
             -p 'test_workflow_repository.py' \
             -v
 
+  container-runtime:
+    name: Container runtime build (Python 3.12)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the production runtime image
+        run: docker build --pull --tag video-service-runtime-ci ./.docker-compose/video-streaming
+
+      - name: Smoke-test runtime, native extensions and media tools
+        run: |
+          docker run --rm --entrypoint /bin/sh video-service-runtime-ci -ec '
+            python --version
+            python -c "import asgiref, boto3, celery, circus, cryptography, gevent, grpc, psutil, psycopg2, sqlalchemy, zmq"
+            ffmpeg -version
+            ffprobe -version
+            circusd --version
+          '
+
+      - name: Import the mounted application under the production runtime
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE/video-streaming:/opt/workdir/video-streaming" \
+            --workdir /opt/workdir/video-streaming \
+            --entrypoint /bin/sh video-service-runtime-ci -ec '
+              cp video_streaming/.env.example video_streaming/.env
+              trap "rm -f video_streaming/.env" EXIT
+              cd scripts && sh generate_grpc_codes.sh
+              cd ..
+              PYTHONPATH=/opt/workdir/video-streaming python -c "from video_streaming.grpc.server import GrpcServer; from video_streaming.celery import celery_app; from video_streaming.workflows.repository import WorkflowRepository"
+            '
+
   quality-gates:
     name: Quality gates
     if: always()
@@ -368,6 +404,7 @@ jobs:
       - compatibility
       - vod-e2e
       - durable-workflow-state
+      - container-runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -379,6 +416,7 @@ jobs:
       PY312_RESULT: ${{ needs.compatibility.result }}
       VOD_E2E_RESULT: ${{ needs.vod-e2e.result }}
       PG312_RESULT: ${{ needs.durable-workflow-state.result }}
+      CONTAINER_RESULT: ${{ needs.container-runtime.result }}
     steps:
       - name: Enforce the required check policy
         shell: bash
@@ -400,6 +438,7 @@ jobs:
             [[ "$PY312_RESULT" == "success" ]] || fail "Python 3.12 regression suite did not pass."
             [[ "$VOD_E2E_RESULT" == "success" ]] || fail "VOD end-to-end integration did not pass."
             [[ "$PG312_RESULT" == "success" ]] || fail "PostgreSQL compatibility tests on Python 3.12 did not pass."
+            [[ "$CONTAINER_RESULT" == "success" ]] || fail "Python 3.12 production container build and smoke test did not pass."
           fi
 
           echo "All required checks passed for the detected change set." >> "$GITHUB_STEP_SUMMARY"
