@@ -30,6 +30,16 @@ else
     exit 1
 fi
 
+# Generate the gRPC modules from the checked-in proto before either
+# Circus watcher imports the application. The application source is mounted
+# into the image at this path by docker-compose.yml.
+APP_DIR="${APP_DIR:-/opt/workdir/video-streaming}"
+printf "\033[0;32m > Generate gRPC Python modules ...\n"
+if ! (cd "${APP_DIR}/scripts" && sh generate_grpc_codes.sh); then
+    printf "\033[0;31m > gRPC code generation failed!!\n" >&2
+    exit 1
+fi
+
 printf "\033[0;32m > Start Server ...\n"
 printf "\033[0m\n"
 
