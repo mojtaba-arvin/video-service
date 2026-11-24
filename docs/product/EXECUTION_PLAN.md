@@ -154,32 +154,29 @@ Every parallel PR must name its owning issue, affected contracts, files/migratio
 
 ## 6. Current portfolio state and next execution order
 
-Baseline on `develop` at `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803` (2026-11-24):
+Baseline on `develop` as verified on 2026-11-24 (post-merge state):
 
-- **PR #153 merged** as `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`: reusable, versioned creative workflow definition contract, canonical fingerprinting, DAG validation and Job-specific instantiation.
-- **PR #151 open (Draft)** at `d280a901ec8e97fcc5a367fd92e4b4b1de6e7137`: transactional dispatch outbox, PostgreSQL-backed Attempt leases/recovery, artifact handoff, KMS envelope secret storage and opt-in durable gRPC CreateJob path. Current-head CI and Dependency Review pass; all 31 inline threads are resolved. The recorded CodeRabbit `CHANGES_REQUESTED` review is stale, so a fresh review is still required. Durable dispatch remains disabled.
-- **PR #152 merged** as `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`: provider-neutral workload classification for typed and durable VOD operations, including `NETWORK_IO` webhook delivery. Current-head CI, Dependency Review and the preceding CodeRabbit approval passed before squash merge.
-- **PR #154 merged** as `4062b6998b5fd6b1e0bd7b01de900f01f4137663`: Python 3.12.11 Alpine 3.22 production image, refreshed runtime pins, same-base FFmpeg/FFprobe, psutil, startup Protobuf generation, and CI image/import/media-tool smoke lane. Current-head CI, Dependency Review, Docker image build, application imports, Python 3.9/3.12 regression, PostgreSQL tests and full legacy VOD E2E all pass. Full broker-backed VOD/migrations inside the Python 3.12 image remain an operational acceptance gate.
-- **Governance #148 remains open**: `develop` has a stable always-running `Quality gates` aggregate, but active ruleset `Protect develop` still requires only deletion and non-fast-forward protection, not PRs or the aggregate check.
-- **Security state is partial on develop**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership/authorization, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, quotas, signed/replay-protected callbacks and delivery history remain open.
-- **FFmpeg isolation is partial**: process-tree termination and CPU/RSS sampling exist, but per-Attempt cgroup v2 CPU/memory/PID and aggregate disk limits are not implemented.
-- The production Docker image on `develop` now targets Python 3.12.11 Alpine 3.22 (PR #154). Its image build, startup Protobuf generation, application imports and regression lanes pass; full broker-backed VOD and migration tests inside that exact image remain outstanding.
+- **PR #151 merged** as `ead3c17de2f74223f25908f05f2600574b515b41`: transactional dispatch outbox, PostgreSQL Attempt leases/recovery, artifact handoff, KMS envelope secret storage and opt-in durable gRPC CreateJob path. CI and Dependency Review passed on the merged head. Durable dispatch remains disabled by default; live KMS/STS/IAM, legacy callback Job reconciliation and deployed broker redelivery remain release gates.
+- **PR #152 merged** as `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`: provider-neutral workload classification for typed operations, including `NETWORK_IO` webhook delivery.
+- **PR #153 merged** as `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`: reusable versioned creative workflow definitions, canonical fingerprints, DAG validation and Job-specific instantiation.
+- **PR #154 merged** as `4062b6998b5fd6b1e0bd7b01de900f01f4137663`: Python 3.12.11 Alpine 3.22 production image, refreshed pins, same-base FFmpeg/FFprobe and startup Protobuf generation. Image/import/media-tool smoke and CI passed; full broker-backed VOD and migrations inside this image remain operational acceptance work.
+- **PR #156 merged** as `d546607e20ea6fcec4859688ebed9286bcf0b3da`: fail-closed Attempt cgroup v2 CPU/memory primitive and optional process-runner integration. PID admission is explicitly not implemented; Celery lifecycle wiring and delegated-Linux acceptance remain open.
+- **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
+- **Governance #148 remains open**: stable `Quality gates` exists, but active `Protect develop` ruleset still requires only deletion and non-fast-forward protection, not PRs or the aggregate check.
+- **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, atomic tenant quotas, signed/replay-protected callbacks and delivery history remain open.
+- **Durable dispatch rollout remains disabled**: CI does not establish production KMS/STS/IAM policy, live S3 behavior, legacy callback migration or automatic broker redelivery in the deployed topology.
 
 Next execution order:
 
-1. **#71 — merge the durable VOD foundation only after fresh review.** PR #151 has green current-head CI, but keep it Draft until a fresh review addresses the latest code and the remaining inline review concerns. Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; after merge, prove broker redelivery/worker-loss behavior and legacy Job reconciliation in staging before any cutover.
-2. **#72 — implement per-Attempt cgroup v2 enforcement.** Keep process-group termination as the process cleanup boundary. Add delegated cgroup scopes for CPU bandwidth, memory, PID limits and observable limit events; define an honest disk-quota strategy. Do not substitute UID-wide RLIMIT_NPROC or per-file RLIMIT_FSIZE for per-Attempt isolation.
-3. **#73 — complete service security.** Preserve the OIDC/tenant/SSRF primitives already on develop; implement quota/admission controls, signed/replay-protected webhook delivery/history, production identity-provider configuration and legacy ownership reconciliation.
-4. **#74 — complete Python 3.12 operational acceptance.** The Python 3.12.11 production image is merged and its build/import/code-generation/media-tool smoke and CI gates pass; next run migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside that exact image.
-5. **#80 — workload classification is merged.** Build deterministic CPU admission, per-tenant concurrency budgets, fairness and resource metering before considering GPU/Spot policies.
-6. **#79 — extend the merged definition contract.** Add persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable creative stages.
-7. **#75/#82 — prepare benchmark/provider and CDN observability in parallel.** Execute representative codec tests only after licensed corpus approval; implement CDN delivery correlation with privacy/retention controls.
-8. **#76 — implement MCP only after the shared authorization, quota and audit layer is complete.**
+1. **#72 — finish Attempt-scoped isolation.** Wire one cgroup to the durable Celery Attempt lifecycle and every FFmpeg/FFprobe subprocess; handle success/failure/timeout/cancel/lease loss; collect final kernel counters; add delegated-Linux tests. Keep PID limits unclaimed until atomic in-cgroup admission is available. Do not enable worker policy before these gates pass.
+2. **#73 — finish security.** Add atomic tenant quota reservation before both legacy and durable dispatch; implement the separate `webhook.signing` secret purpose, canonical HMAC(timestamp + delivery ID + exact body), receiver replay contract and durable bounded delivery history. Verify production issuer/audience/JWKS and legacy ownership reconciliation.
+3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
+4. **#74 — close runtime migration acceptance.** Run migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside the exact Python 3.12 production image; retire Python 3.9 only after operational acceptance.
+5. **#80 — implement deterministic CPU admission and tenant fairness** before GPU/Spot policies.
+6. **#79 — extend the merged definition contract** with persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable stages.
+7. **#75/#82 — prepare licensed benchmark corpus and CDN telemetry correlation in parallel**, with privacy/retention controls.
+8. **#76 — implement MCP only after shared authorization, quota and audit contracts are complete.**
 9. **#84 — design incremental ingestion/output after artifact identity, resumability and backpressure contracts stabilize.**
-10. **#81/#83 — make measured JIT-packaging and Edge–Cloud go/no-go decisions only after real workload baselines exist.
-
-No PR branch is counted as merged work. Keep issues open until their acceptance criteria are verified on `develop` or in the required operational environment.
-
 ## 7. Explicit no-go decisions for now
 
 - No "exactly once" delivery claim.
