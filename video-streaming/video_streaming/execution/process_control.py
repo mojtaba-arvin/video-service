@@ -297,33 +297,9 @@ def run_cancellable_process(
 
     def capture_usage():
         nonlocal peak_memory_bytes, sampled_cpu_seconds
-        if attempt_cgroup is not None:
-            counters = attempt_cgroup.usage()
-            sampled_cpu_seconds = max(
-                sampled_cpu_seconds,
-                float(counters["cpu"].get("usage_usec", 0)) / 1000000.0,
-            )
-            peak_memory_bytes = max(
-                peak_memory_bytes, counters["memory_peak_bytes"]
-            )
-            emit_usage()
-            return
-        try:
-            root = psutil.Process(process.pid)
-            processes = [root] + root.children(recursive=True)
-            cpu_seconds = 0.0
-            current_rss = 0
-            for child in processes:
-                try:
-                    cpu = child.cpu_times()
-                    cpu_seconds += float(cpu.user + cpu.system)
-                    current_rss += int(child.memory_info().rss)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
-            peak_memory_bytes = max(peak_memory_bytes, current_rss)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+        cpu_seconds, current_rss = _sample_process_group_usage(process.pid)
+        sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
+        peak_memory_bytes = max(peak_memory_bytes, current_rss)
         emit_usage()
 
     try:
@@ -438,14 +414,10 @@ def run_streaming_process(
 
     def capture_usage():
         nonlocal sampled_cpu_seconds, peak_memory_bytes
-        if attempt_cgroup is not None:
-            counters = attempt_cgroup.usage()
-            cpu_seconds = float(
-                counters["cpu"].get("usage_usec", 0)
-            ) / 1000000.0
-            resident_bytes = counters["memory_peak_bytes"]
-        else:
-            cpu_seconds, resident_bytes = _sample_process_group_usage(process.pid)
+        # cgroup cpu.stat and memory.peak are Attempt-wide counters. Keep
+        # this callback's per-process contract by sampling only this process
+        # group; Attempt-wide kernel counters remain available via cgroup.usage().
+        cpu_seconds, resident_bytes = _sample_process_group_usage(process.pid)
         sampled_cpu_seconds = max(sampled_cpu_seconds, cpu_seconds)
         peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
         if on_usage is not None:
