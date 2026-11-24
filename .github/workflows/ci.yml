@@ -510,6 +510,16 @@ jobs:
           WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
         run: alembic -c video-streaming/alembic.ini upgrade head
 
+      - name: Rehearse destructive migration guards on PostgreSQL
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_migration_downgrade_postgres.py' \
+            -v
+
       - name: Run durable workflow repository tests
         env:
           PYTHONPATH: video-streaming
