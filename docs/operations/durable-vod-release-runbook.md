@@ -2,10 +2,12 @@
 
 ## Status and safety boundary
 
-This runbook describes the release gates for the durable VOD implementation on
-`work/durable-vod-integration`. The verified CI head
-`e1469bf13280650cd552b78a5bae3d7e07d849d3` passed the Push, Pull Request,
-and Dependency Review workflows on 2026-11-22.
+This runbook describes the release gates for the durable VOD implementation
+currently integrated on `develop`. The latest relevant merged baseline is
+`8811c9bee0629e8e765122ee01c4005bf9a40f5c` (PR #160); its PR CI run
+[45374558976](https://github.com/mojtaba-arvin/video-service/actions/runs/45374558976)
+passed the required `Quality gates`, Python 3.9/3.12 regression and full VOD
+integration lanes, PostgreSQL workflow tests, and Python 3.12 container build.
 
 This is **not production activation approval**. The durable dispatch feature
 gate defaults to false, and the gRPC `CreateJob` path continues to use
@@ -53,8 +55,13 @@ connection limits, backup/restore, and compatibility with the currently
 deployed legacy API and workers.
 
 Do not downgrade by dropping workflow or outbox tables after any durable rows
-have been written. Prefer rolling application components back while retaining
-additive state, then use a reviewed forward migration if correction is needed.
+have been written. Migrations 0006–0010 now fail closed before removing tenant
+ownership, encrypted Job secrets, Attempt lease state, Outbox rows, or workflow
+dependency edges (PR #160). Their unit tests cover populated-state refusal and
+empty-state downgrade behavior, but this is not yet a real PostgreSQL
+rollback/re-upgrade rehearsal. Prefer rolling application components back
+while retaining additive state, then use a reviewed forward migration if
+correction is needed.
 
 ## Gate 2 — accepted legacy Job and callback inventory
 
