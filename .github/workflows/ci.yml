@@ -381,6 +381,17 @@ jobs:
             circusd --version
           '
 
+      - name: Import the mounted application under the production runtime
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE/video-streaming:/opt/workdir/video-streaming" \
+            --workdir /opt/workdir/video-streaming \
+            --entrypoint /bin/sh video-service-runtime-ci -ec '
+              cp video_streaming/.env.example video_streaming/.env
+              trap "rm -f video_streaming/.env" EXIT
+              PYTHONPATH=/opt/workdir/video-streaming python -c "from video_streaming.grpc.server import GrpcServer; from video_streaming.celery import celery_app; from video_streaming.workflows.repository import WorkflowRepository"
+            '
+
   quality-gates:
     name: Quality gates
     if: always()
