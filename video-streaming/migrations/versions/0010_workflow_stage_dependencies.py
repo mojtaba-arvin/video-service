@@ -50,6 +50,13 @@ def upgrade():
 
 
 def downgrade():
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_stage_dependencies"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to drop workflow dependency edges while any exist"
+        )
     op.drop_index(
         "ix_workflow_stage_dependencies_workflow",
         table_name="workflow_stage_dependencies",
