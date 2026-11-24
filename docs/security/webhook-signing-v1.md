@@ -16,7 +16,8 @@ The canonical byte sequence is exactly:
 v1\n<timestamp>\n<delivery-id>\n<exact HTTP request body bytes>
 ```
 
-The signing key is a distinct secret with at least 32 bytes of entropy. It must
+The signing key is a distinct 32-byte-or-longer secret generated with a
+cryptographically secure random source. The helper enforces length, not entropy. It must
 not be derived from, reused as, or stored under the `webhook.callback`
 destination-URL secret purpose. The API must persist it under a separate
 `webhook.signing` purpose and expose only its opaque reference in the plan.
