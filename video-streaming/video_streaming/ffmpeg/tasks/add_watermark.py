@@ -224,22 +224,22 @@ def add_watermark(
                 "video_codec": video_stream.get("codec_name"),
                 "errors": [],
             }
-            lease_heartbeat.assert_owned()
-            repository.complete_processing_attempt(
-                job_id=request_id,
-                stage_key=output_id,
-                attempt_id=attempt_id,
-                validation_report=validation_report,
-                lease_token=lease_token,
-                metrics={
-                    "input_bytes": input_bytes,
-                    # The publisher owns the storage charge for the final object.
-                    "output_bytes": 0,
-                    "cpu_seconds": measured_cpu_seconds(),
-                    **process_resource_metrics(),
-                },
-                pricing=configured_pricing(settings),
-            )
+        lease_heartbeat.assert_owned()
+        repository.complete_processing_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report,
+            lease_token=lease_token,
+            metrics={
+                "input_bytes": input_bytes,
+                # The publisher owns the storage charge for the final object.
+                "output_bytes": 0,
+                "cpu_seconds": measured_cpu_seconds(),
+                **process_resource_metrics(),
+            },
+            pricing=configured_pricing(settings),
+        )
 
     except Exception as exc:
         if output_path:
