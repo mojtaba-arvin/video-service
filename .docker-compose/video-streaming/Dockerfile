@@ -31,6 +31,6 @@ RUN pip3 install --no-cache-dir --default-timeout=100 \
 COPY circus/circus.ini /etc/circus.ini
 
 COPY ./sh/*.sh /docker/bin/
-RUN chmod a+x /docker/bin/*.sh && sed -i -e 's/\\r$//' /docker/bin/*.sh
+RUN chmod a+x /docker/bin/*.sh && sed -i -e 's/\r$//' /docker/bin/*.sh
 
 ENTRYPOINT ["/docker/bin/run.sh"]
