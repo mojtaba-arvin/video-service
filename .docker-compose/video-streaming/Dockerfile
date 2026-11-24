@@ -1,29 +1,35 @@
-FROM jrottenberg/ffmpeg:4.1-alpine as ffmpeg
 LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
 
-# Not yet published grpcio Wheel for python3.10
-# FROM python:3.10.0a5-alpine
+# Keep the Python runtime and FFmpeg userspace on the same Alpine/musl base.
+# The previous FFmpeg 4.1 stage was built against an older Alpine release and
+# copying its /usr/local tree into a newer Python image was not ABI-safe.
+FROM python:3.12.11-alpine3.22
 
-FROM python:3.9.2-alpine
-# Recognize musllinux wheels for pinned cryptography builds on Alpine.
-RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1
-RUN apk add --update --no-cache alpine-sdk linux-headers musl-dev libffi-dev py3-libxml2 libxslt-dev zlib-dev jpeg-dev imagemagick
-COPY --from=ffmpeg /usr/local /usr/local
+RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1 \
+    && apk add --no-cache \
+        build-base \
+        linux-headers \
+        libffi-dev \
+        libxml2-dev \
+        libxslt-dev \
+        zlib-dev \
+        jpeg-dev \
+        imagemagick \
+        ffmpeg
 
-# set workdir
-RUN mkdir -p /opt/workdir
 WORKDIR /opt/workdir
 
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONUNBUFFERED=1 \
+    FFMPEG_BIN_PATH=/usr/bin/ffmpeg \
+    FFPROBE_BIN_PATH=/usr/bin/ffprobe
 
-ADD requirements.txt /opt/workdir
-RUN pip3 install --no-cache-dir --default-timeout=100 -r /opt/workdir/requirements.txt
+COPY requirements.txt /opt/workdir/requirements.txt
+RUN pip3 install --no-cache-dir --default-timeout=100 \
+    --requirement /opt/workdir/requirements.txt
 
-ADD circus/circus.ini /etc/circus.ini
+COPY circus/circus.ini /etc/circus.ini
 
+COPY ./sh/*.sh /docker/bin/
+RUN chmod a+x /docker/bin/*.sh && sed -i -e 's/\\r$//' /docker/bin/*.sh
 
-COPY ["./sh/*.sh", "/docker/bin/"]
-RUN chmod a+x /docker/bin/*.sh && sed -i -e 's/\r$//' /docker/bin/*.sh
-
-# wait for dependencies and run the circusd
 ENTRYPOINT ["/docker/bin/run.sh"]
