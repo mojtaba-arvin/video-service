@@ -26,11 +26,14 @@ class AttemptCgroupV2Tests(unittest.TestCase):
             os.remove(os.path.join(attempt.path, name))
 
     def _attempt(self, root):
-        attempt = AttemptCgroupV2(
-            root, cpu_max="50000 100000",
-            memory_max=256 * 1024 * 1024, pids_max=64,
-            attempt_id="attempt-123",
-        )
+        with mock.patch(
+                "video_streaming.execution.cgroup_v2.os.path.exists",
+                return_value=True):
+            attempt = AttemptCgroupV2(
+                root, cpu_max="50000 100000",
+                memory_max=256 * 1024 * 1024, pids_max=64,
+                attempt_id="attempt-123",
+            )
         for name, value in (
             ("cgroup.procs", ""),
             ("cgroup.events", "populated 0\nfrozen 0\n"),
@@ -53,7 +56,10 @@ class AttemptCgroupV2Tests(unittest.TestCase):
     def test_applies_all_three_limits(self):
         with tempfile.TemporaryDirectory() as root:
             self._delegated_root(root)
-            attempt = AttemptCgroupV2(root, "50000 100000", 1024, 8)
+            with mock.patch(
+                    "video_streaming.execution.cgroup_v2.os.path.exists",
+                    return_value=True):
+                attempt = AttemptCgroupV2(root, "50000 100000", 1024, 8)
             try:
                 for name, expected in (
                     ("cpu.max", "50000 100000"),
