@@ -201,27 +201,27 @@ def generate_thumbnail(
                 "size_bytes": os.path.getsize(output_path),
                 "errors": [],
             }
-            lease_heartbeat.assert_owned()
-            repository.complete_processing_attempt(
-                job_id=request_id,
-                stage_key=output_id,
-                attempt_id=attempt_id,
-                validation_report=validation_report,
-                lease_token=lease_token,
-                metrics={
-                    "input_bytes": input_bytes,
-                    # The publisher owns the storage charge for the final object.
-                    "output_bytes": 0,
-                    "cpu_seconds": measured_cpu_seconds(),
-                    "peak_memory_bytes": aggregate_process_usage()[
-                        "peak_memory_bytes"
-                    ],
-                    "memory_duration_ms": aggregate_process_usage()[
-                        "memory_duration_ms"
-                    ],
-                },
-                pricing=configured_pricing(settings),
-            )
+        lease_heartbeat.assert_owned()
+        repository.complete_processing_attempt(
+            job_id=request_id,
+            stage_key=output_id,
+            attempt_id=attempt_id,
+            validation_report=validation_report,
+            lease_token=lease_token,
+            metrics={
+                "input_bytes": input_bytes,
+                # The publisher owns the storage charge for the final object.
+                "output_bytes": 0,
+                "cpu_seconds": measured_cpu_seconds(),
+                "peak_memory_bytes": aggregate_process_usage()[
+                    "peak_memory_bytes"
+                ],
+                "memory_duration_ms": aggregate_process_usage()[
+                    "memory_duration_ms"
+                ],
+            },
+            pricing=configured_pricing(settings),
+        )
     except Exception as exc:
         if output_path:
             try:
