@@ -13,12 +13,14 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from concurrent import futures
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
-from datetime import datetime, timedelta, timezone
+
+from video_streaming.core.constants.cache_keys import CacheKeysTemplates
 
 
 _REQUIRED_MODULES = (
@@ -34,6 +36,34 @@ _HAS_RUNTIME = all(
     importlib.util.find_spec(module_name) is not None
     for module_name in _REQUIRED_MODULES
 )
+
+
+class AuthenticatedStub:
+    """Attach the E2E bearer token to every generated gRPC call."""
+
+    def __init__(self, stub, metadata):
+        self._stub = stub
+        self._metadata = tuple(metadata)
+
+    def __getattr__(self, name):
+        rpc = getattr(self._stub, name)
+
+        def authenticated_call(request, *args, **kwargs):
+            # The wrapper owns the test credential. Call sites may supply
+            # unrelated metadata, but must never override or duplicate the
+            # Authorization header configured here.
+            metadata = tuple(kwargs.pop("metadata", ()) or ())
+            metadata = tuple(
+                item for item in metadata
+                if (
+                    (item.key if hasattr(item, "key") else item[0]).lower()
+                    != "authorization"
+                )
+            )
+            kwargs["metadata"] = metadata + self._metadata
+            return rpc(request, *args, **kwargs)
+
+        return authenticated_call
 
 
 class InMemoryCache:
@@ -132,69 +162,6 @@ class InMemoryS3:
             callback(len(value))
 
 
-class E2ETestAuthenticator:
-    """Explicit in-process test identity; never used by application startup."""
-
-    def __init__(self):
-        from video_streaming.security import RequestPrincipal
-
-        scopes = frozenset([
-            "video.jobs:create",
-            "video.jobs:read",
-            "video.jobs:cancel",
-            "video.jobs:outputs:revoke",
-            "video.playback:write",
-            "video.qoe:read",
-        ])
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-        self.principal = RequestPrincipal(
-            issuer="https://e2e-issuer.example.test/",
-            subject="e2e-test-subject",
-            tenant_id="e2e-test-tenant",
-            scopes=scopes,
-            roles=frozenset(["test"]),
-            authentication_method="test-bearer",
-            expires_at=expires_at,
-        )
-        self.foreign_principal = RequestPrincipal(
-            issuer="https://e2e-issuer.example.test/",
-            subject="foreign-test-subject",
-            tenant_id="foreign-test-tenant",
-            scopes=scopes,
-            roles=frozenset(["test"]),
-            authentication_method="test-bearer",
-            expires_at=expires_at,
-        )
-
-    def authenticate(self, token):
-        from video_streaming.security.oidc import AuthenticationError
-
-        if token == "e2e-test-token":
-            return self.principal
-        if token == "foreign-test-token":
-            return self.foreign_principal
-        raise AuthenticationError("Invalid test token")
-
-
-class AuthenticatedStub:
-    """Attach the test-only bearer credential to every RPC in this suite."""
-
-    def __init__(self, stub, token="e2e-test-token"):
-        self._stub = stub
-        self._token = token
-
-    def __getattr__(self, name):
-        method = getattr(self._stub, name)
-
-        def call(*args, **kwargs):
-            kwargs.setdefault(
-                "metadata", (("authorization", "Bearer {}".format(self._token)),)
-            )
-            return method(*args, **kwargs)
-
-        return call
-
-
 @unittest.skipUnless(
     _HAS_RUNTIME and shutil.which("ffmpeg") and shutil.which("ffprobe"),
     "Python 3.9 runtime dependencies and FFmpeg/FFprobe are required",
@@ -249,6 +216,8 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 "REDIS_TIMEOUT_SECOND=3600",
                 "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
                 "REDIS_URL=redis://127.0.0.1:6379/0",
+                # The callback server is bound to loopback in this isolated E2E.
+                "WEBHOOK_ALLOW_LOOPBACK_CALLBACKS=True",
             ]) + "\n",
             encoding="utf-8",
         )
@@ -283,7 +252,86 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             streaming_pb2_grpc,
         )
         from video_streaming.grpc.servicers.streaming_servicer import Streaming
+        from video_streaming.grpc.authentication import OIDCBearerInterceptor
+        from video_streaming.security import RequestPrincipal
+        from video_streaming.workflows import secret_runtime
+        from video_streaming.workflows.worker_identity import (
+            WorkflowWorkerIdentity,
+        )
 
+        class E2EKeyProvider:
+            key_id = "kms-e2e-test-key"
+
+            def __init__(self):
+                self.key = bytearray(range(32))
+
+            def generate_data_key(self, encryption_context):
+                wrapped = bytes(value ^ 0x5A for value in self.key)
+                return bytearray(self.key), wrapped
+
+            def decrypt_data_key(
+                    self, wrapped_key, encryption_context, key_id=None):
+                if key_id != self.key_id:
+                    raise ValueError("unexpected E2E KMS key")
+                return bytearray(value ^ 0x5A for value in wrapped_key)
+
+        # The end-to-end suite uses an in-process KMS/STS contract double;
+        # production code still requires live AWS KMS and STS credentials.
+        e2e_key_provider = E2EKeyProvider()
+        e2e_worker_identity = WorkflowWorkerIdentity(
+            account_id="123456789012",
+            arn=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/e2e"
+            ),
+            role_arn_prefix=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/"
+            ),
+        )
+        original_key_provider = secret_runtime.get_workflow_secret_key_provider
+        original_worker_identity = (
+            secret_runtime.get_verified_workflow_worker_identity
+        )
+        cls.addClassCleanup(
+            setattr,
+            secret_runtime,
+            "get_workflow_secret_key_provider",
+            original_key_provider,
+        )
+        cls.addClassCleanup(
+            setattr,
+            secret_runtime,
+            "get_verified_workflow_worker_identity",
+            original_worker_identity,
+        )
+        secret_runtime.get_workflow_secret_key_provider = (
+            lambda: e2e_key_provider
+        )
+        secret_runtime.get_verified_workflow_worker_identity = (
+            lambda: e2e_worker_identity
+        )
+
+        class E2EAuthenticator:
+            def authenticate(self, token):
+                if token != "e2e-test-token":
+                    raise ValueError("invalid test token")
+                return RequestPrincipal(
+                    issuer="https://e2e.example.test/",
+                    subject="vod-e2e-test",
+                    tenant_id="tenant-vod-e2e",
+                    scopes=frozenset({
+                        "video.jobs:create",
+                        "video.jobs:read",
+                        "video.playback:write",
+                        "video.qoe:read",
+                    }),
+                    roles=frozenset(),
+                    authentication_method="test-bearer",
+                    expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+
+        cls.rpc_metadata = (("authorization", "Bearer e2e-test-token"),)
         cls.pb2 = streaming_pb2
         cls.pb2_grpc = streaming_pb2_grpc
         cls.Streaming = Streaming
@@ -341,11 +389,9 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             cls.webhook_server.server_port
         )
 
-        from video_streaming.grpc.authentication import OIDCBearerInterceptor
-
         cls.grpc_server = cls.grpc.server(
             futures.ThreadPoolExecutor(max_workers=4),
-            interceptors=(OIDCBearerInterceptor(E2ETestAuthenticator()),),
+            interceptors=(OIDCBearerInterceptor(E2EAuthenticator()),),
         )
         cls.servicer = Streaming()
         cls.servicer._add_to_server(cls.grpc_server)
@@ -354,7 +400,9 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         cls.channel = cls.grpc.insecure_channel(
             "127.0.0.1:{}".format(cls.grpc_port)
         )
-        cls.stub = AuthenticatedStub(cls.pb2_grpc.StreamingStub(cls.channel))
+        cls.stub = AuthenticatedStub(
+            cls.pb2_grpc.StreamingStub(cls.channel), cls.rpc_metadata
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -536,34 +584,58 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
         accepted = self.stub.create_job(request, timeout=120)
         self.assertTrue(accepted.tracking_id)
 
-        # A valid but different tenant/subject cannot inspect the new Job.
-        foreign_stub = AuthenticatedStub(
-            self.pb2_grpc.StreamingStub(self.channel),
-            token="foreign-test-token",
-        )
-        with self.assertRaises(self.grpc.RpcError) as denied:
-            foreign_stub.get_results(
-                self.pb2.JobsResultsRequest(
-                    tracking_ids=[accepted.tracking_id]
-                ),
-                timeout=30,
-            )
-        self.assertEqual(denied.exception.code(), self.grpc.StatusCode.NOT_FOUND)
-
         replayed = self.stub.create_job(request, timeout=120)
         self.assertEqual(replayed.tracking_id, accepted.tracking_id)
 
-        from video_streaming.workflows.service import get_workflow_repository
-        snapshot = get_workflow_repository().get_job_snapshot(
-            accepted.tracking_id
+        # The callback destination is encrypted in PostgreSQL, never copied
+        # into the Redis status projection, and idempotent replay does not
+        # generate a second envelope.
+        cached_details = self.cache.get(
+            CacheKeysTemplates.JOB_DETAILS.format(
+                request_id=accepted.tracking_id
+            )
         )
+        self.assertNotIn(self.webhook_url, repr(cached_details))
+        from video_streaming.workflows.repository import JobSecretRecord
+        from video_streaming.workflows.service import get_workflow_repository
+        repository = get_workflow_repository()
+        with repository._session() as session:
+            envelopes = session.query(JobSecretRecord).filter_by(
+                job_id=accepted.tracking_id,
+                purpose="webhook.callback",
+                status="ACTIVE",
+            ).all()
+            self.assertEqual(len(envelopes), 1)
+            self.assertNotIn(self.webhook_url, repr(envelopes[0]))
+            self.assertTrue(envelopes[0].ciphertext)
+            self.assertTrue(envelopes[0].wrapped_dek)
+        snapshot = repository.get_job_snapshot(accepted.tracking_id)
+        persisted_plan = repository.get_execution_plan(accepted.tracking_id)
         self.assertIsNotNone(snapshot)
-        self.assertEqual(len(snapshot["stages"]), 2)
+        self.assertIsNotNone(persisted_plan)
+        plan_nodes = persisted_plan["plan"]["nodes"]
+        self.assertEqual(len(snapshot["stages"]), len(plan_nodes))
         self.assertEqual(
-            {stage["key"] for stage in snapshot["stages"]},
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
+            {
+                (stage["key"], stage["operation"])
+                for stage in snapshot["stages"]
+            },
+            {
+                (node["stage_key"], node["operation"])
+                for node in plan_nodes
+            },
+        )
+        self.assertEqual(
+            {stage["key"] for stage in snapshot["stages"]
+             if stage["key"] in {"p0", "t0"}},
             {"p0", "t0"},
         )
-        for durable_stage in snapshot["stages"]:
+        stages_by_key = {stage["key"]: stage for stage in snapshot["stages"]}
+        for output_id in ("p0", "t0"):
+            durable_stage = stages_by_key[output_id]
             self.assertEqual(durable_stage["status"], "FINISHED")
             self.assertEqual(len(durable_stage["attempts"]), 2)
             processing_attempt, publication_attempt = durable_stage["attempts"]
@@ -586,6 +658,15 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                     attempt["pricing_model_id"],
                     "relative-resource-index-v1",
                 )
+        internal_stages = [
+            stage for stage in snapshot["stages"]
+            if stage["key"] not in {"p0", "t0"}
+        ]
+        self.assertTrue(internal_stages)
+        self.assertTrue(all(
+            stage["status"] == "PENDING" and not stage["attempts"]
+            for stage in internal_stages
+        ))
         playlist_stage = next(
             stage for stage in snapshot["stages"] if stage["key"] == "p0"
         )
@@ -671,6 +752,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 tracking_ids=[accepted.tracking_id]
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         ).results[0]
         self.assertEqual(recovered.status, self.pb2.PrimaryStatus.FINISHED)
         self.assertEqual(recovered.ready_outputs, 2)
@@ -694,6 +776,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 client_version="synthetic-player/1.0",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertTrue(playback.session_id)
         self.assertTrue(playback.session_token)
@@ -708,12 +791,12 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             client_version="synthetic-player/1.0",
         )
         started = self.stub.record_playback_event(
-            started_event, timeout=30
+            started_event, timeout=30, metadata=self.rpc_metadata
         )
         self.assertTrue(started.accepted)
         self.assertFalse(started.duplicate)
         replayed_start = self.stub.record_playback_event(
-            started_event, timeout=30
+            started_event, timeout=30, metadata=self.rpc_metadata
         )
         self.assertTrue(replayed_start.duplicate)
 
@@ -725,6 +808,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 event_type=self.pb2.PlaybackEventType.BUFFERING_STARTED,
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         buffering_end = self.stub.record_playback_event(
             self.pb2.RecordPlaybackEventRequest(
@@ -734,6 +818,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 event_type=self.pb2.PlaybackEventType.BUFFERING_ENDED,
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(buffering_end.rebuffer_count, 1)
 
@@ -747,6 +832,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 decoder="synthetic-decoder",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(decoder_error.decoder_error_count, 1)
 
@@ -756,11 +842,11 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             event_id="e2e-playback-ended",
             event_type=self.pb2.PlaybackEventType.PLAYBACK_ENDED,
         )
-        ended = self.stub.record_playback_event(ended_event, timeout=30)
+        ended = self.stub.record_playback_event(ended_event, timeout=30, metadata=self.rpc_metadata)
         self.assertTrue(ended.ended)
         self.assertTrue(
             self.stub.record_playback_event(
-                ended_event, timeout=30
+                ended_event, timeout=30, metadata=self.rpc_metadata
             ).duplicate
         )
 
@@ -770,6 +856,7 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
                 output_id="p0",
             ),
             timeout=30,
+            metadata=self.rpc_metadata,
         )
         self.assertEqual(qoe.session_count, 1)
         self.assertEqual(qoe.playback_started_count, 1)

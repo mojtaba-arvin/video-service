@@ -7,7 +7,10 @@ import unittest
 
 import psutil
 
-from video_streaming.execution.process_control import terminate_process_tree
+from video_streaming.execution.process_control import (
+    ProcessUsageAccumulator,
+    terminate_process_tree,
+)
 
 
 class ProcessTreeTerminationTests(unittest.TestCase):
@@ -74,9 +77,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -108,9 +113,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -167,6 +174,46 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             usage_samples[-1]["memory_duration_ms"], 200
         )
 
+    def test_each_subprocess_has_a_stable_unique_usage_identity(self):
+        from video_streaming.execution.process_control import (
+            run_cancellable_process,
+            run_streaming_process,
+        )
+
+        identities = []
+        for runner in (
+                run_cancellable_process,
+                run_streaming_process,
+                run_cancellable_process):
+            samples = []
+            if runner is run_streaming_process:
+                runner(
+                    [sys.executable, "-c", "import time; time.sleep(0.12)"],
+                    timeout_seconds=2,
+                    poll_interval=0.02,
+                    on_line=lambda line, process: None,
+                    on_usage=samples.append,
+                )
+            else:
+                runner(
+                    [sys.executable, "-c", "import time; time.sleep(0.12)"],
+                    timeout_seconds=2,
+                    poll_interval=0.02,
+                    on_usage=samples.append,
+                )
+
+            self.assertTrue(samples)
+            process_ids = {sample["process_id"] for sample in samples}
+            self.assertEqual(len(process_ids), 1)
+            self.assertTrue(all(
+                sample["process_pid"] > 0 for sample in samples
+            ))
+            identities.append(process_ids.pop())
+
+        # Models FFmpeg followed by multiple FFprobe invocations: even if the
+        # operating system reuses a PID, process accounting must not merge them.
+        self.assertEqual(len(set(identities)), 3)
+
     def test_streaming_runner_delivers_lines_as_they_arrive(self):
         from video_streaming.execution.process_control import run_streaming_process
 
@@ -191,9 +238,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "orphan.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys; "
                 "subprocess.Popen([sys.executable, '-c', {!r}])"
@@ -224,9 +273,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "
@@ -275,6 +326,56 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             16 * 1024 * 1024,
         )
 
+    def test_usage_accumulator_preserves_known_cumulative_samples(self):
+        usage = ProcessUsageAccumulator()
+        usage.record({
+            "process_id": "ffmpeg",
+            "cpu_seconds": 0.5,
+            "peak_memory_bytes": 512,
+            "memory_duration_ms": 100,
+        })
+        # A later partial sample must not erase earlier valid observations.
+        usage.record({
+            "process_id": "ffmpeg",
+            "cpu_seconds": 0.75,
+            "peak_memory_bytes": None,
+            "memory_duration_ms": None,
+        })
+        usage.record({
+            "process_id": "ffprobe",
+            "cpu_seconds": 0.25,
+            "peak_memory_bytes": 128,
+            "memory_duration_ms": 40,
+        })
+
+        # CPU sums across distinct subprocesses; RSS remains a peak, while
+        # per-process lifetimes are additive.
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": 1.0,
+            "peak_memory_bytes": 512,
+            "memory_duration_ms": 140,
+        })
+
+    def test_usage_accumulator_distinguishes_unknown_from_measured_zero(self):
+        usage = ProcessUsageAccumulator()
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": None,
+            "peak_memory_bytes": None,
+            "memory_duration_ms": None,
+        })
+
+        usage.record({
+            "process_id": "zero-usage",
+            "cpu_seconds": 0.0,
+            "peak_memory_bytes": 0,
+            "memory_duration_ms": 0,
+        })
+        self.assertEqual(usage.aggregate(), {
+            "cpu_seconds": 0.0,
+            "peak_memory_bytes": 0,
+            "memory_duration_ms": 0,
+        })
+
     @staticmethod
     def _is_running(pid):
         try:
@@ -296,9 +397,11 @@ class ProcessTreeTerminationTests(unittest.TestCase):
             pid_path = Path(temp_dir) / "lease-lost-child.pid"
             child_code = (
                 "import os, time; "
-                "open({!r}, 'w').write(str(os.getpid())); "
+                "temporary = {!r}; target = {!r}; "
+                "open(temporary, 'w').write(str(os.getpid())); "
+                "os.replace(temporary, target); "
                 "time.sleep(60)"
-            ).format(str(pid_path))
+            ).format(str(pid_path) + ".tmp", str(pid_path))
             parent_code = (
                 "import subprocess, sys, time; "
                 "subprocess.Popen([sys.executable, '-c', {!r}]); "

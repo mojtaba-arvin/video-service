@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.ffmpeg.package_validation import (
     _probe_media,
     validate_package,
@@ -27,12 +28,14 @@ class PackageProbeSupervisionTests(unittest.TestCase):
             b"",
         )
         cancelled = lambda: False
+        usage = lambda metrics: None
 
         result = _probe_media(
             "/tmp/rendition.ts",
             "/usr/bin/ffprobe",
             8,
             should_cancel=cancelled,
+            on_usage=usage,
         )
 
         self.assertEqual(result["format"]["duration"], "2.0")
@@ -41,6 +44,34 @@ class PackageProbeSupervisionTests(unittest.TestCase):
         self.assertIn("-show_entries", args[0])
         self.assertEqual(kwargs["timeout_seconds"], 8)
         self.assertIs(kwargs["should_cancel"], cancelled)
+        self.assertIs(kwargs["on_usage"], usage)
+
+    @patch(
+        "video_streaming.ffmpeg.package_validation._probe_package_metadata",
+        side_effect=AttemptLeaseLost("worker lease expired"),
+    )
+    @patch(
+        "video_streaming.ffmpeg.package_validation.validate_streaming_package"
+    )
+    def test_attempt_lease_loss_is_not_converted_to_validation_report(
+            self, structural, metadata):
+        structural.return_value = {
+            "protocol": "hls",
+            "manifest": "master.m3u8",
+            "rendition_names": ["720p.m3u8"],
+            "segments": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "master.m3u8"
+            manifest.write_text("#EXTM3U\\n", encoding="utf-8")
+            with self.assertRaises(AttemptLeaseLost):
+                validate_package(
+                    directory=directory,
+                    package_type="hls",
+                    manifest_path=str(manifest),
+                    expected_renditions=["720p.m3u8"],
+                    ffprobe_bin_path="/usr/bin/ffprobe",
+                )
 
     @patch(
         "video_streaming.ffmpeg.package_validation.run_cancellable_process"
@@ -67,6 +98,7 @@ class PackageProbeSupervisionTests(unittest.TestCase):
         }
         metadata.return_value = []
         cancelled = lambda: False
+        usage = lambda metrics: None
 
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "master.m3u8"
@@ -79,11 +111,13 @@ class PackageProbeSupervisionTests(unittest.TestCase):
                 ffprobe_bin_path="/usr/bin/ffprobe",
                 metadata_probe_timeout_seconds=9,
                 should_cancel=cancelled,
+                on_usage=usage,
             )
 
         self.assertTrue(report.valid)
         self.assertEqual(metadata.call_args.kwargs["timeout_seconds"], 9)
         self.assertIs(metadata.call_args.kwargs["should_cancel"], cancelled)
+        self.assertIs(metadata.call_args.kwargs["on_usage"], usage)
 
 
 if __name__ == "__main__":

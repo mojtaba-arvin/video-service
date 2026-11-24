@@ -57,6 +57,30 @@ class GetResultsMixin(object):
         }.get(stage.get("status"))
 
     @staticmethod
+    def _durable_output_status_counts(stages, result_details, plan_backed=False):
+        """Count terminal outputs only; internal DAG nodes are not public outputs."""
+        stages = list(stages or [])
+        if not plan_backed:
+            selected = stages
+        else:
+            details = result_details or {}
+            output_ids = set(details.get("watermarked_outputs_ids") or [])
+            for field in (
+                "watermarked_playlists_ids",
+                "watermarked_thumbnails_ids",
+                "no_watermarked_playlists_ids",
+                "no_watermarked_thumbnails_ids",
+            ):
+                output_ids.update(details.get(field) or [])
+            selected = [stage for stage in stages if stage.get("key") in output_ids]
+        statuses = [stage.get("status") for stage in selected]
+        return {
+            "ready": statuses.count("FINISHED"),
+            "revoked": statuses.count("CANCELLED"),
+            "failed": statuses.count("FAILED"),
+        }
+
+    @staticmethod
     def _durable_stage_metrics(stage):
         """Aggregate active work across processing and publication Attempts."""
         attempts = (stage or {}).get("attempts", [])
@@ -462,13 +486,18 @@ class GetResultsMixin(object):
             # total_thumbnails: int = job_details['total_thumbnails']
 
             if durable_snapshot is not None:
-                durable_statuses = [
-                    stage.get("status")
-                    for stage in durable_snapshot.get("stages", [])
-                ]
-                ready_outputs = durable_statuses.count("FINISHED")
-                revoked_outputs = durable_statuses.count("CANCELLED")
-                failed_outputs = durable_statuses.count("FAILED")
+                output_counts = self._durable_output_status_counts(
+                    durable_snapshot.get("stages", []),
+                    persisted_details,
+                    plan_backed=bool(
+                        durable_snapshot.get("workflow", {}).get(
+                            "execution_plan_fingerprint"
+                        )
+                    ),
+                )
+                ready_outputs = output_counts["ready"]
+                revoked_outputs = output_counts["revoked"]
+                failed_outputs = output_counts["failed"]
             else:
                 ready_outputs: int = self.cache.get(
                     CacheKeysTemplates.READY_OUTPUTS.format(
@@ -542,12 +571,10 @@ class GetResultsMixin(object):
             return self.pb2.ResultDetails(**result_details)
 
     def _get_results(self, request, context):
-        # Authorize the entire batch before touching Redis or any result
-        # projection. A mixed owned/foreign batch must not partially read data.
+        # Authorize the complete batch before reading any Redis projection.
         request_ids = tuple(request.tracking_ids)
         for request_id in request_ids:
             require_job_access(request_id, "video.jobs:read", context)
-
         results: list[streaming_pb2.ResultDetails] = []
         for request_id in request_ids:
             result = self._get_result(request_id)

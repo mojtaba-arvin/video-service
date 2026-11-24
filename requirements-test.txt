@@ -1,4 +1,6 @@
 # Shared dependencies required by the regression test suite.
+celery==5.6.3
+python-ffmpeg-video-streaming==0.1.14
 ffmpeg-python==0.2.0
 # Process-tree termination regression tests
 psutil==5.9.8
@@ -6,9 +8,9 @@ psutil==5.9.8
 # gRPC server import path loads the Redis cache adapter
 redis==5.2.1
 
-# Importing the shared exception package requires the S3 SDK's botocore module.
-# Keep this aligned with the integration environment's boto3 pin.
-boto3==1.17.14
+# S3 conditional PutObject/CompleteMultipartUpload writes require a recent
+# botocore service model. Keep this aligned with the integration environment.
+boto3==1.35.99
 
 # Authenticated secret-envelope encryption tests.
 cryptography==50.0.2

@@ -7,12 +7,13 @@ import math
 import re
 import secrets
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
     ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
-    UniqueConstraint, create_engine,
+    UniqueConstraint, create_engine, and_, or_,
     select, func,
 )
 from sqlalchemy.exc import IntegrityError
@@ -165,6 +166,7 @@ class StageRecord(Base):
     __tablename__ = "workflow_stages"
     __table_args__ = (
         UniqueConstraint("workflow_id", "stage_key", name="uq_workflow_stage_key"),
+        UniqueConstraint("id", "workflow_id", name="uq_workflow_stage_id_workflow"),
         Index("ix_workflow_stages_status_updated", "status", "updated_at"),
     )
 
@@ -182,6 +184,38 @@ class StageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+
+
+class StageDependencyRecord(Base):
+    """Normalized, same-workflow dependency edge between durable stages."""
+
+    __tablename__ = "workflow_stage_dependencies"
+    __table_args__ = (
+        CheckConstraint(
+            "stage_id <> depends_on_stage_id",
+            name="ck_workflow_stage_dependency_not_self",
+        ),
+        ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_stage",
+        ),
+        ForeignKeyConstraint(
+            ["depends_on_stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="CASCADE",
+            name="fk_workflow_stage_dependency_parent",
+        ),
+        Index(
+            "ix_workflow_stage_dependencies_workflow",
+            "workflow_id", "stage_id",
+        ),
+    )
+
+    stage_id = Column(String(36), primary_key=True)
+    depends_on_stage_id = Column(String(36), primary_key=True)
+    workflow_id = Column(String(36), nullable=False)
 
 
 class AttemptRecord(Base):
@@ -295,6 +329,62 @@ class WorkflowEventRecord(Base):
     payload_json = Column(JSON, nullable=False, default=dict)
 
 
+class OutboxRecord(Base):
+    """Durable, leased reference to an immutable workflow execution plan."""
+
+    __tablename__ = "workflow_outbox"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_workflow_outbox_dedupe_key"),
+        CheckConstraint(
+            "state IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD')",
+            name="ck_workflow_outbox_state",
+        ),
+        CheckConstraint(
+            "schema_version >= 1",
+            name="ck_workflow_outbox_schema_version",
+        ),
+        CheckConstraint(
+            "(state = 'PROCESSING' AND locked_by IS NOT NULL AND "
+            "lock_token_hash IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(state <> 'PROCESSING' AND locked_by IS NULL AND "
+            "lock_token_hash IS NULL AND lease_expires_at IS NULL)",
+            name="ck_workflow_outbox_lease_complete",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_workflow_outbox_attempts"),
+        Index(
+            "ix_workflow_outbox_ready",
+            "state", "available_at", "lease_expires_at",
+        ),
+        Index("ix_workflow_outbox_job_created", "job_id", "created_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    job_id = Column(
+        String(36), ForeignKey("workflow_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_id = Column(
+        String(36), ForeignKey("workflow_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type = Column(String(80), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=1)
+    plan_version = Column(String(64), nullable=False)
+    plan_fingerprint = Column(String(64), nullable=False)
+    dedupe_key = Column(String(255), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    state = Column(String(16), nullable=False, default="PENDING")
+    attempts = Column(Integer, nullable=False, default=0)
+    available_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    locked_by = Column(String(255), nullable=True)
+    lock_token_hash = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(String(128), nullable=True)
+
+
 class PlaybackSessionRecord(Base):
     __tablename__ = "playback_sessions"
     __table_args__ = (
@@ -379,6 +469,91 @@ def _record_event(
 
 
 
+def _durable_retry_delay(workflow, stage_key, attempt_number):
+    """Return the persisted node policy delay for the next retry."""
+    plan = workflow.execution_plan_json if workflow is not None else None
+    if not isinstance(plan, dict):
+        return 0.0
+    node = next((
+        item for item in plan.get("nodes", [])
+        if item.get("stage_key") == stage_key
+    ), None)
+    policy = node.get("retry_policy", {}) if node else {}
+    try:
+        initial = float(policy["initial_delay_seconds"])
+        maximum = float(policy["max_delay_seconds"])
+        backoff = policy["backoff"]
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    if backoff == "fixed":
+        return min(initial, maximum)
+    if backoff == "exponential":
+        return min(maximum, initial * (2 ** max(0, attempt_number - 1)))
+    return 0.0
+
+
+def _durable_retry_not_before(workflow, stage_key, attempt):
+    if (
+            workflow is None
+            or workflow.execution_backend != "durable_vod_v1"
+            or attempt is None
+            or attempt.finished_at is None):
+        return None
+    finished_at = attempt.finished_at
+    if finished_at.tzinfo is None or finished_at.utcoffset() is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    delay = _durable_retry_delay(workflow, stage_key, attempt.attempt_number)
+    return finished_at + timedelta(seconds=delay)
+
+
+def _enqueue_durable_dispatch(
+        session, workflow, job_id, attempt_id, stage_id, available_at,
+        reason, event_type):
+    """Persist a retry/continuation wake-up with the state transition."""
+    if workflow.execution_backend != "durable_vod_v1":
+        return None
+    if not (
+            workflow.workflow_version
+            and workflow.execution_plan_fingerprint
+            and workflow.execution_plan_schema_version):
+        raise InvalidStateTransition(
+            "Durable dispatch requires an immutable execution-plan identity"
+        )
+    outbox_id = new_id()
+    session.add(OutboxRecord(
+        id=outbox_id,
+        job_id=job_id,
+        workflow_id=workflow.id,
+        event_type="WORKFLOW_PLAN_DISPATCH",
+        schema_version=workflow.execution_plan_schema_version,
+        plan_version=workflow.workflow_version,
+        plan_fingerprint=workflow.execution_plan_fingerprint,
+        dedupe_key="workflow.{}:{}:{}".format(
+            reason, workflow.id, attempt_id
+        ),
+        payload_json={
+            "schema_version": workflow.execution_plan_schema_version,
+            "job_id": job_id,
+            "workflow_version": workflow.workflow_version,
+            "plan_fingerprint": workflow.execution_plan_fingerprint,
+        },
+        state="PENDING",
+        attempts=0,
+        available_at=available_at,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    ))
+    _record_event(
+        session,
+        job_id,
+        workflow.id,
+        event_type,
+        stage_id=stage_id,
+        attempt_id=attempt_id,
+        payload={"outbox_id": outbox_id, "available_at": available_at.isoformat()},
+    )
+    return outbox_id
+
 
 class WorkflowRepository:
     """Persistent repository; Celery IDs are optional execution metadata only."""
@@ -414,6 +589,37 @@ class WorkflowRepository:
     def close(self):
         self.engine.dispose()
 
+    def find_idempotent_job(
+            self, idempotency_key, request_hash, owner_principal=None):
+        """Return an existing accepted Job after enforcing idempotency ownership.
+
+        CreateJob uses this read before generating a new random secret envelope,
+        so a legitimate retry reuses the original Job and never rotates its
+        encrypted callback secret or changes its plan fingerprint.
+        """
+        with self._session() as session:
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.idempotency_key == idempotency_key
+                )
+            ).scalar_one_or_none()
+            if job is None:
+                return None
+            if job.request_hash != request_hash:
+                raise IdempotencyConflict(
+                    "Idempotency key was already used with a different request"
+                )
+            if job.owner_tenant_id is not None and owner_principal is None:
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+            if owner_principal is not None and (
+                    job.owner_tenant_id != owner_principal.tenant_id
+                    or job.owner_issuer != owner_principal.issuer
+                    or job.owner_subject != owner_principal.subject):
+                from video_streaming.security import AuthorizationError
+                raise AuthorizationError("Resource not found or access denied")
+            return job.id
+
     def create_job(
             self,
             job_id,
@@ -425,7 +631,10 @@ class WorkflowRepository:
             metadata=None,
             execution_plan=None,
             owner_principal=None,
-            secret_envelopes=None):
+            secret_envelopes=None,
+            enqueue_dispatch=False,
+            outbox_dedupe_key=None,
+            execution_backend=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -512,6 +721,27 @@ class WorkflowRepository:
                 # the validated plan-derived stage identity and operation.
                 stage_specs = plan_stage_specs
         stage_specs = list(stage_specs or [])
+        if execution_backend is not None and (
+                not isinstance(execution_backend, str)
+                or not execution_backend.strip()
+                or len(execution_backend) > 64):
+            raise ValueError("execution_backend must contain 1 to 64 characters")
+        if not isinstance(enqueue_dispatch, bool):
+            raise TypeError("enqueue_dispatch must be a boolean")
+        if enqueue_dispatch and plan is None:
+            raise ValueError(
+                "dispatch outbox requires a persisted immutable execution plan"
+            )
+        if enqueue_dispatch:
+            if outbox_dedupe_key is None:
+                outbox_dedupe_key = "workflow.dispatch:{}".format(job_id)
+            if (
+                    not isinstance(outbox_dedupe_key, str)
+                    or not outbox_dedupe_key.strip()
+                    or len(outbox_dedupe_key) > 255):
+                raise ValueError(
+                    "outbox_dedupe_key must contain 1 to 255 characters"
+                )
         try:
             with self._session.begin() as session:
                 existing = session.execute(
@@ -542,9 +772,39 @@ class WorkflowRepository:
                             WorkflowRecord.job_id == existing.id
                         )
                     ).scalar_one()
+                    replay_plan = None
+                    if plan is not None:
+                        replay_plan = deepcopy(plan)
+                        replay_plan["job_id"] = existing.id
+                        # Concurrent idempotent CreateJob requests may have
+                        # generated different random envelope IDs before one
+                        # transaction wins. Rebind the candidate plan to the
+                        # already-accepted active envelope before comparing
+                        # fingerprints; never rotate the persisted secret.
+                        for node in replay_plan["nodes"]:
+                            parameters = node["parameters"]
+                            if "webhook_secret_ref" not in parameters:
+                                continue
+                            accepted_secret = session.execute(
+                                select(JobSecretRecord).where(
+                                    JobSecretRecord.job_id == existing.id,
+                                    JobSecretRecord.purpose == "webhook.callback",
+                                    JobSecretRecord.status == "ACTIVE",
+                                    JobSecretRecord.deleted_at.is_(None),
+                                    (JobSecretRecord.expires_at.is_(None)
+                                     | (JobSecretRecord.expires_at > utcnow())),
+                                )
+                            ).scalar_one_or_none()
+                            if accepted_secret is None:
+                                raise IdempotencyConflict(
+                                    "Idempotent plan references a missing active callback secret"
+                                )
+                            parameters["webhook_secret_ref"] = (
+                                accepted_secret.secret_id
+                            )
                     replay_fingerprint = (
-                        execution_plan_sha256(dict(plan, job_id=existing.id))
-                        if plan is not None else None
+                        execution_plan_sha256(replay_plan)
+                        if replay_plan is not None else None
                     )
                     if (
                             replay_fingerprint is not None
@@ -610,6 +870,7 @@ class WorkflowRepository:
                     job_id=job_id,
                     name=workflow_name,
                     state=WorkflowState.QUEUED.value,
+                    execution_backend=execution_backend,
                     workflow_version=(plan["workflow_version"] if plan else None),
                     execution_plan_schema_version=(plan["schema_version"] if plan else None),
                     execution_plan_fingerprint=plan_fingerprint,
@@ -634,8 +895,9 @@ class WorkflowRepository:
                         "execution_plan_fingerprint": plan_fingerprint,
                     },
                 )
+                stage_records = {}
                 for index, spec in enumerate(stage_specs):
-                    session.add(StageRecord(
+                    stage_record = StageRecord(
                         id=new_id(),
                         workflow_id=workflow_id,
                         stage_key=spec["stage_key"],
@@ -643,7 +905,28 @@ class WorkflowRepository:
                         ordinal=spec.get("ordinal", index),
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
-                    ))
+                    )
+                    stage_records[stage_record.stage_key] = stage_record
+                    session.add(stage_record)
+                session.flush()
+
+                if plan is not None:
+                    plan_nodes = {
+                        node["node_id"]: node for node in plan["nodes"]
+                    }
+                    for node in plan["nodes"]:
+                        stage_record = stage_records[node["stage_key"]]
+                        for dependency_node_id in node["depends_on"]:
+                            dependency_node = plan_nodes[dependency_node_id]
+                            dependency_stage = stage_records[
+                                dependency_node["stage_key"]
+                            ]
+                            session.add(StageDependencyRecord(
+                                workflow_id=workflow_id,
+                                stage_id=stage_record.id,
+                                depends_on_stage_id=dependency_stage.id,
+                            ))
+
                 for envelope in secret_envelopes:
                     context = envelope.context
                     session.add(JobSecretRecord(
@@ -679,6 +962,26 @@ class WorkflowRepository:
                             "kms_key_id": envelope.kms_key_id,
                         },
                     )
+                if enqueue_dispatch:
+                    session.add(OutboxRecord(
+                        id=new_id(),
+                        job_id=job_id,
+                        workflow_id=workflow_id,
+                        event_type="WORKFLOW_PLAN_DISPATCH",
+                        schema_version=1,
+                        plan_version=plan["workflow_version"],
+                        plan_fingerprint=plan_fingerprint,
+                        dedupe_key=outbox_dedupe_key,
+                        payload_json={
+                            "schema_version": 1,
+                            "job_id": job_id,
+                            "workflow_version": plan["workflow_version"],
+                            "plan_fingerprint": plan_fingerprint,
+                        },
+                        state="PENDING",
+                        attempts=0,
+                        available_at=utcnow(),
+                    ))
             return job_id, True
         except IntegrityError:
             # Concurrent duplicate submission: resolve through the unique
@@ -713,9 +1016,32 @@ class WorkflowRepository:
                         WorkflowRecord.job_id == existing.id
                     )
                 ).scalar_one()
+                replay_plan = None
+                if plan is not None:
+                    replay_plan = deepcopy(plan)
+                    replay_plan["job_id"] = existing.id
+                    for node in replay_plan["nodes"]:
+                        parameters = node["parameters"]
+                        if "webhook_secret_ref" not in parameters:
+                            continue
+                        accepted_secret = session.execute(
+                            select(JobSecretRecord).where(
+                                JobSecretRecord.job_id == existing.id,
+                                JobSecretRecord.purpose == "webhook.callback",
+                                JobSecretRecord.status == "ACTIVE",
+                                JobSecretRecord.deleted_at.is_(None),
+                                (JobSecretRecord.expires_at.is_(None)
+                                 | (JobSecretRecord.expires_at > utcnow())),
+                            )
+                        ).scalar_one_or_none()
+                        if accepted_secret is None:
+                            raise IdempotencyConflict(
+                                "Concurrent idempotent plan references a missing callback secret"
+                            )
+                        parameters["webhook_secret_ref"] = accepted_secret.secret_id
                 replay_fingerprint = (
-                    execution_plan_sha256(dict(plan, job_id=existing.id))
-                    if plan is not None else None
+                    execution_plan_sha256(replay_plan)
+                    if replay_plan is not None else None
                 )
                 if (
                         replay_fingerprint is not None
@@ -740,6 +1066,349 @@ class WorkflowRepository:
                             "Concurrent replay did not persist the expected Job secret"
                         )
                 return existing.id, False
+
+    def claim_outbox_batch(
+            self, owner, lease_ttl_seconds=30, limit=25, now=None,
+            max_attempts=20):
+        """Claim due outbox rows with SKIP LOCKED and a one-time lease token.
+
+        Expired claims consume the same bounded delivery budget as explicit
+        failures. Once the budget is exhausted, the row is dead-lettered
+        instead of being reclaimed forever after repeated relay crashes.
+        """
+        if not isinstance(owner, str) or not owner.strip() or len(owner) > 255:
+            raise ValueError("owner must contain 1 to 255 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if (
+                isinstance(max_attempts, bool)
+                or not isinstance(max_attempts, int)
+                or not 1 <= max_attempts <= 100):
+            raise ValueError("max_attempts must be between 1 and 100")
+        if (
+                isinstance(lease_ttl_seconds, bool)
+                or not isinstance(lease_ttl_seconds, (int, float))
+                or not math.isfinite(float(lease_ttl_seconds))
+                or not 1 <= lease_ttl_seconds <= 3600):
+            raise ValueError("lease_ttl_seconds must be between 1 and 3600")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        claimed = []
+        with self._session.begin() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.available_at <= now,
+                    or_(
+                        OutboxRecord.state == "PENDING",
+                        and_(
+                            OutboxRecord.state == "PROCESSING",
+                            OutboxRecord.lease_expires_at <= now,
+                        ),
+                    ),
+                ).order_by(
+                    OutboxRecord.available_at,
+                    OutboxRecord.created_at,
+                    OutboxRecord.id,
+                ).limit(limit).with_for_update(skip_locked=True)
+            ).scalars().all()
+            for row in rows:
+                # A relay can die after claiming but before it reports a
+                # publish failure. Expiry must therefore consume the bounded
+                # attempt budget too; otherwise crash loops never dead-letter.
+                if (
+                        row.state == "PROCESSING"
+                        and row.attempts >= max_attempts):
+                    row.state = "DEAD"
+                    row.locked_by = None
+                    row.lock_token_hash = None
+                    row.lease_expires_at = None
+                    row.last_error = "lease_expired_retry_limit"
+                    row.updated_at = now
+                    _record_event(
+                        session,
+                        row.job_id,
+                        row.workflow_id,
+                        "OUTBOX_DEAD_LETTERED",
+                        payload={
+                            "outbox_id": row.id,
+                            "attempt": row.attempts,
+                            "error_code": row.last_error,
+                            "reason": "lease_expired",
+                        },
+                    )
+                    continue
+                token = secrets.token_urlsafe(32)
+                row.state = "PROCESSING"
+                row.locked_by = owner.strip()
+                row.lock_token_hash = hashlib.sha256(
+                    token.encode("utf-8")
+                ).hexdigest()
+                row.lease_expires_at = now + timedelta(
+                    seconds=float(lease_ttl_seconds)
+                )
+                row.attempts += 1
+                row.updated_at = now
+                _record_event(
+                    session,
+                    row.job_id,
+                    row.workflow_id,
+                    "OUTBOX_CLAIMED",
+                    payload={
+                        "outbox_id": row.id,
+                        "attempt": row.attempts,
+                        "lease_expires_at": row.lease_expires_at.isoformat(),
+                    },
+                )
+                claimed.append({
+                    "id": row.id,
+                    "job_id": row.job_id,
+                    "workflow_id": row.workflow_id,
+                    "event_type": row.event_type,
+                    "schema_version": row.schema_version,
+                    "plan_version": row.plan_version,
+                    "plan_fingerprint": row.plan_fingerprint,
+                    "payload": row.payload_json,
+                    "attempts": row.attempts,
+                    "lease_token": token,
+                    "lease_expires_at": row.lease_expires_at.isoformat(),
+                })
+        return claimed
+
+    def mark_outbox_published(self, outbox_id, lease_token, now=None):
+        """Acknowledge only while the caller still owns an unexpired lease."""
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            lease_expires_at = (
+                row.lease_expires_at if row is not None else None
+            )
+            if (
+                    lease_expires_at is not None
+                    and (
+                        lease_expires_at.tzinfo is None
+                        or lease_expires_at.utcoffset() is None
+                    )):
+                lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
+            if (
+                    row is None
+                    or row.state != "PROCESSING"
+                    or lease_expires_at is None
+                    or lease_expires_at <= now
+                    or not hmac.compare_digest(row.lock_token_hash or "", digest)):
+                return False
+            row.state = "PUBLISHED"
+            row.published_at = now
+            row.updated_at = now
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            row.last_error = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                "OUTBOX_PUBLISHED",
+                payload={"outbox_id": row.id, "attempt": row.attempts},
+            )
+            return True
+
+    def retry_outbox(
+            self, outbox_id, lease_token, error_code,
+            delay_seconds, max_attempts=20, now=None):
+        """Release a failed delivery for bounded exponential retry or dead-letter."""
+        if (
+                isinstance(delay_seconds, bool)
+                or not isinstance(delay_seconds, (int, float))
+                or not math.isfinite(float(delay_seconds))
+                or delay_seconds < 0
+                or delay_seconds > 86400):
+            raise ValueError("delay_seconds must be between 0 and 86400")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            lease_expires_at = (
+                row.lease_expires_at if row is not None else None
+            )
+            if (
+                    lease_expires_at is not None
+                    and (
+                        lease_expires_at.tzinfo is None
+                        or lease_expires_at.utcoffset() is None
+                    )):
+                lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
+            if (
+                    row is None
+                    or row.state != "PROCESSING"
+                    or lease_expires_at is None
+                    or lease_expires_at <= now
+                    or not hmac.compare_digest(row.lock_token_hash or "", digest)):
+                return False
+            row.state = "DEAD" if row.attempts >= max_attempts else "PENDING"
+            row.available_at = now + timedelta(seconds=float(delay_seconds))
+            row.updated_at = now
+            row.last_error = re.sub(
+                r"[^A-Za-z0-9_.-]", "_", str(error_code or "dispatch_error")
+            )[:128]
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                (
+                    "OUTBOX_RETRY_SCHEDULED"
+                    if row.state == "PENDING"
+                    else "OUTBOX_DEAD_LETTERED"
+                ),
+                payload={
+                    "outbox_id": row.id,
+                    "attempt": row.attempts,
+                    "error_code": row.last_error,
+                    "available_at": row.available_at.isoformat(),
+                },
+            )
+            return row.state == "PENDING"
+
+    def list_outbox(self, state="DEAD", limit=100):
+        """List bounded non-secret relay records for operator inspection."""
+        if state not in ("PENDING", "PROCESSING", "PUBLISHED", "DEAD"):
+            raise ValueError("unsupported outbox state")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._session() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.state == state
+                ).order_by(
+                    OutboxRecord.updated_at,
+                    OutboxRecord.created_at,
+                    OutboxRecord.id,
+                ).limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "state": row.state,
+                "attempts": row.attempts,
+                "available_at": row.available_at.isoformat(),
+                "last_error": row.last_error,
+            } for row in rows]
+
+    def get_outbox_metrics(self, now=None):
+        """Return bounded-cardinality relay health counters and pending age."""
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session() as session:
+            grouped = session.execute(
+                select(OutboxRecord.state, func.count(OutboxRecord.id))
+                .group_by(OutboxRecord.state)
+            ).all()
+            counts = {state: int(count) for state, count in grouped}
+            oldest = session.execute(
+                select(func.min(OutboxRecord.created_at)).where(
+                    OutboxRecord.state == "PENDING"
+                )
+            ).scalar_one_or_none()
+            if oldest is not None and (
+                    oldest.tzinfo is None or oldest.utcoffset() is None):
+                oldest = oldest.replace(tzinfo=timezone.utc)
+            return {
+                "pending": counts.get("PENDING", 0),
+                "processing": counts.get("PROCESSING", 0),
+                "published": counts.get("PUBLISHED", 0),
+                "dead": counts.get("DEAD", 0),
+                "oldest_pending_age_seconds": (
+                    max(0, int((now - oldest).total_seconds()))
+                    if oldest is not None else None
+                ),
+            }
+
+    def replay_dead_outbox(self, outbox_id, operator_id, reason, now=None):
+        """Audited manual replay of one dead row; authorization is caller-owned.
+
+        This low-level method must only be exposed through an authenticated,
+        permission-checked operator action. The operator identity and reason
+        are persisted as a durable event.
+        """
+        if not isinstance(operator_id, str) or not operator_id.strip() or len(operator_id) > 255:
+            raise ValueError("operator_id must contain 1 to 255 characters")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1024:
+            raise ValueError("reason must contain 1 to 1024 characters")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if row is None or row.state != "DEAD":
+                return False
+            row.state = "PENDING"
+            row.attempts = 0
+            row.available_at = now
+            row.updated_at = now
+            row.last_error = None
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                "OUTBOX_MANUAL_REPLAY_REQUESTED",
+                payload={
+                    "outbox_id": row.id,
+                    "operator_id": operator_id.strip(),
+                    "reason": reason.strip(),
+                },
+            )
+            return True
+
+    def get_outbox_snapshot(self, outbox_id):
+        """Return non-secret operational metadata for one outbox delivery."""
+        with self._session() as session:
+            row = session.get(OutboxRecord, outbox_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "event_type": row.event_type,
+                "schema_version": row.schema_version,
+                "plan_version": row.plan_version,
+                "plan_fingerprint": row.plan_fingerprint,
+                "dedupe_key": row.dedupe_key,
+                "state": row.state,
+                "attempts": row.attempts,
+                "available_at": row.available_at.isoformat(),
+                "published_at": (
+                    row.published_at.isoformat() if row.published_at else None
+                ),
+                "last_error": row.last_error,
+            }
 
     def get_job_secret_envelope(
             self, job_id, principal, purpose, now=None):
@@ -808,6 +1477,96 @@ class WorkflowRepository:
                 algorithm=record.algorithm,
             )
 
+    def get_job_secret_envelope_for_worker(
+            self, job_id, worker_identity, purpose, secret_id, now=None):
+        """Fetch encrypted callback material for an STS-verified worker only.
+
+        This internal API is deliberately separate from the owner-facing
+        get_job_secret_envelope method. The worker identity must have been
+        produced by the STS verifier; it is never accepted from task arguments.
+        KMS Decrypt permissions must independently be restricted to this
+        workload role and the configured encryption context.
+        """
+        from video_streaming.workflows.worker_identity import (
+            WorkflowWorkerIdentity,
+        )
+        from video_streaming.security import AuthorizationError
+        from video_streaming.security.secret_store import (
+            SecretContext,
+            SecretEnvelope,
+        )
+
+        if not isinstance(worker_identity, WorkflowWorkerIdentity):
+            raise AuthorizationError("Workflow worker identity is required")
+        if purpose != "webhook.callback":
+            raise ValueError("unsupported Job secret purpose")
+        if (
+                not isinstance(secret_id, str)
+                or not secret_id
+                or len(secret_id) > 64):
+            raise ValueError("an exact opaque secret_id is required")
+        current = now or utcnow()
+        if current.tzinfo is None or current.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+
+        with self._session.begin() as session:
+            record = session.execute(
+                select(JobSecretRecord)
+                .join(JobRecord, JobRecord.id == JobSecretRecord.job_id)
+                .where(
+                    JobSecretRecord.job_id == job_id,
+                    JobSecretRecord.secret_id == secret_id,
+                    JobSecretRecord.purpose == purpose,
+                    JobSecretRecord.status == "ACTIVE",
+                    JobSecretRecord.deleted_at.is_(None),
+                    JobRecord.owner_tenant_id == JobSecretRecord.tenant_id,
+                    JobRecord.owner_issuer == JobSecretRecord.issuer,
+                    JobRecord.owner_subject == JobSecretRecord.subject,
+                )
+            ).scalar_one_or_none()
+            if record is None:
+                raise AuthorizationError("Resource not found or access denied")
+            expires_at = record.expires_at
+            if expires_at is not None and (
+                    expires_at.tzinfo is None or expires_at.utcoffset() is None):
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at is not None and current >= expires_at:
+                raise AuthorizationError("Resource not found or access denied")
+            context = SecretContext(
+                job_id=record.job_id,
+                tenant_id=record.tenant_id,
+                issuer=record.issuer,
+                subject=record.subject,
+                purpose=record.purpose,
+            )
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one()
+            _record_event(
+                session,
+                job_id,
+                workflow.id,
+                "JOB_SECRET_RESOLVE_AUTHORIZED",
+                payload={
+                    "secret_id": record.secret_id,
+                    "purpose": purpose,
+                    "worker_arn": worker_identity.arn,
+                },
+            )
+            return SecretEnvelope(
+                secret_id=record.secret_id,
+                context=context,
+                nonce=record.nonce,
+                ciphertext=record.ciphertext,
+                wrapped_dek=record.wrapped_dek,
+                kms_key_id=record.kms_key_id,
+                created_at=record.created_at.isoformat(),
+                expires_at=expires_at.isoformat() if expires_at else None,
+                algorithm=record.algorithm,
+            )
+
     def authorize_job_access(self, job_id, principal, required_scope):
         """Authorize one durable Job without exposing cross-tenant existence."""
         from video_streaming.security import authorize_tenant_resource
@@ -837,7 +1596,13 @@ class WorkflowRepository:
 
     def authorize_playback_session_access(
             self, session_id, principal, required_scope):
-        """Authorize the Job owning a playback session before accepting events."""
+        """Authorize a playback session through its owning durable Job.
+
+        The session token remains a separate capability checked when events
+        are recorded; this guard additionally requires the authenticated Job
+        owner and the requested tenant scope. Unknown and foreign sessions
+        deliberately share the same denial response.
+        """
         from video_streaming.security import (
             AuthorizationError,
             authorize_tenant_resource,
@@ -845,32 +1610,25 @@ class WorkflowRepository:
 
         if principal is None:
             raise AuthorizationError("Resource not found or access denied")
+
         with self._session() as session:
-            playback = session.execute(
-                select(PlaybackSessionRecord).where(
-                    PlaybackSessionRecord.id == session_id
-                )
-            ).scalar_one_or_none()
-            if playback is None:
-                raise AuthorizationError("Resource not found or access denied")
             job = session.execute(
-                select(JobRecord).where(
-                    JobRecord.id == playback.job_id
+                select(JobRecord)
+                .join(
+                    PlaybackSessionRecord,
+                    PlaybackSessionRecord.job_id == JobRecord.id,
                 )
+                .where(PlaybackSessionRecord.id == session_id)
             ).scalar_one_or_none()
             if job is None:
                 raise AuthorizationError("Resource not found or access denied")
             authorize_tenant_resource(
-                principal,
-                job.owner_tenant_id,
-                required_scope,
+                principal, job.owner_tenant_id, required_scope
             )
             if (
                     job.owner_issuer != principal.issuer
                     or job.owner_subject != principal.subject):
-                raise AuthorizationError(
-                    "Resource not found or access denied"
-                )
+                raise AuthorizationError("Resource not found or access denied")
         return True
 
     @staticmethod
@@ -921,7 +1679,10 @@ class WorkflowRepository:
             )
         )
         if lock:
-            query = query.with_for_update()
+            # The joined Workflow row participates in Job/Workflow updates
+            # with a different lock order. Lock only the Stage row here;
+            # callers that mutate Job state must then lock Job before Workflow.
+            query = query.with_for_update(of=StageRecord)
         stage = session.execute(query).scalar_one_or_none()
         if stage is None:
             raise KeyError("Unknown workflow stage: {} / {}".format(
@@ -949,6 +1710,11 @@ class WorkflowRepository:
                 raise AttemptLeaseLost("Attempt does not have a worker lease")
             return
         now = now or utcnow()
+        lease_expires_at = attempt.lease_expires_at
+        if lease_expires_at is not None and (
+                lease_expires_at.tzinfo is None
+                or lease_expires_at.utcoffset() is None):
+            lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
         if (
                 not isinstance(lease_token, str)
                 or not hmac.compare_digest(
@@ -956,26 +1722,118 @@ class WorkflowRepository:
                     hashlib.sha256(lease_token.encode("utf-8")).hexdigest(),
                 )
                 or attempt.state != AttemptState.RUNNING.value
-                or attempt.lease_expires_at is None
-                or attempt.lease_expires_at <= now):
+                or lease_expires_at is None
+                or lease_expires_at <= now):
             raise AttemptLeaseLost("Attempt lease is no longer valid")
 
     def _recover_expired_attempt_in_session(
             self, session, stage, attempt, now, pricing=None):
+        lease_expires_at = attempt.lease_expires_at
+        if lease_expires_at is not None and (
+                lease_expires_at.tzinfo is None
+                or lease_expires_at.utcoffset() is None):
+            lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
         if (
                 attempt.state != AttemptState.RUNNING.value
                 or attempt.lease_token_hash is None
-                or attempt.lease_expires_at is None
-                or attempt.lease_expires_at > now
+                or lease_expires_at is None
+                or lease_expires_at > now
                 or stage.status not in (
                     StageState.PROCESSING.value,
                     StageState.VALIDATED.value,
                     StageState.PUBLISHING.value)):
             return False
 
+        workflow = session.get(WorkflowRecord, stage.workflow_id)
+        job = session.execute(
+            select(JobRecord).where(
+                JobRecord.id == workflow.job_id
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if stage.status in (
+                StageState.PROCESSING.value,
+                StageState.VALIDATED.value):
+            # A validation report from an unfinished processing Attempt is
+            # not a valid hand-off. Publication Attempt recovery is different:
+            # it must retain the report from the already-succeeded processor.
+            reports = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == stage.id,
+                    ArtifactRecord.attempt_id == attempt.id,
+                    ArtifactRecord.artifact_type == "validation_report",
+                    ArtifactRecord.logical_name == "validation-report",
+                    ArtifactRecord.status == "AVAILABLE",
+                )
+            ).scalars().all()
+            for report in reports:
+                report.status = "INVALIDATED"
+
+        if job is None or job.state in (
+                JobState.CANCELLED.value,
+                JobState.FAILED.value,
+                JobState.FINISHED.value):
+            previous_status = stage.status
+            self._transition(stage, StageState.CANCELLED)
+            attempt.state = AttemptState.CANCELLED.value
+            attempt.finished_at = now
+            started = attempt.started_at
+            if started.tzinfo is None or started.utcoffset() is None:
+                started = started.replace(tzinfo=timezone.utc)
+            attempt.duration_ms = max(
+                0, int((now - started).total_seconds() * 1000)
+            )
+            self._apply_attempt_accounting(
+                attempt,
+                {
+                    "duration_ms": attempt.duration_ms,
+                    "usage_capture": "incomplete_worker_lost",
+                },
+                pricing,
+            )
+            self._clear_attempt_lease(attempt)
+            attempt.error_code = "JOB_TERMINAL"
+            attempt.error_message = (
+                "Expired worker lease recovered after terminal Job state"
+            )
+            if job is not None:
+                _record_event(
+                    session,
+                    workflow.job_id,
+                    workflow.id,
+                    "ATTEMPT_LEASE_EXPIRED_TERMINAL_JOB",
+                    from_state=previous_status,
+                    to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt.id,
+                    payload={"job_state": job.state},
+                )
+            return True
+
+        retry_limit = None
+        if (
+                workflow is not None
+                and workflow.execution_backend == "durable_vod_v1"
+                and isinstance(workflow.execution_plan_json, dict)):
+            node = next((
+                item for item in workflow.execution_plan_json.get("nodes", [])
+                if item.get("stage_key") == stage.stage_key
+            ), None)
+            retry_policy = node.get("retry_policy", {}) if node else {}
+            retry_limit = retry_policy.get("max_attempts")
+        exhausted = (
+            isinstance(retry_limit, int)
+            and not isinstance(retry_limit, bool)
+            and attempt.attempt_number >= retry_limit
+        )
+        target_stage = (
+            StageState.FAILED if exhausted else StageState.RETRY_WAIT
+        )
         previous_status = stage.status
-        self._transition(stage, StageState.RETRY_WAIT)
-        attempt.state = AttemptState.RETRYABLE.value
+        self._transition(stage, target_stage)
+        attempt.state = (
+            AttemptState.FAILED.value
+            if exhausted else AttemptState.RETRYABLE.value
+        )
         attempt.finished_at = now
         started = attempt.started_at
         if started.tzinfo is None:
@@ -991,19 +1849,88 @@ class WorkflowRepository:
         self._clear_attempt_lease(attempt)
         attempt.error_code = "WORKER_LEASE_EXPIRED"
         attempt.error_message = "Recovered expired worker lease"
-        workflow = session.get(WorkflowRecord, stage.workflow_id)
+        if not exhausted:
+            retry_not_before = _durable_retry_not_before(
+                workflow, stage.stage_key, attempt
+            )
+            _enqueue_durable_dispatch(
+                session,
+                workflow,
+                workflow.job_id,
+                attempt.id,
+                stage.id,
+                retry_not_before or now,
+                reason="retry",
+                event_type="WORKFLOW_RETRY_ENQUEUED",
+            )
+        if exhausted:
+            workflow.state = WorkflowState.FAILED.value
+            workflow.updated_at = now
+            job = session.get(JobRecord, workflow.job_id)
+            if job is not None:
+                job.state = JobState.FAILED.value
+                job.updated_at = now
+                job.version += 1
+                _record_event(
+                    session,
+                    workflow.job_id,
+                    workflow.id,
+                    "JOB_FAILED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FAILED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt.id,
+                    payload={
+                        "error_code": "WORKER_LEASE_RETRY_LIMIT_EXHAUSTED",
+                    },
+                )
         _record_event(
             session,
             workflow.job_id,
             workflow.id,
-            "ATTEMPT_LEASE_EXPIRED",
+            (
+                "ATTEMPT_LEASE_RETRY_LIMIT_EXHAUSTED"
+                if exhausted else "ATTEMPT_LEASE_EXPIRED"
+            ),
             from_state=previous_status,
-            to_state=StageState.RETRY_WAIT.value,
+            to_state=target_stage.value,
             stage_id=stage.id,
             attempt_id=attempt.id,
-            payload={"reason": "WORKER_LEASE_EXPIRED"},
+            payload={
+                "reason": (
+                    "WORKER_LEASE_RETRY_LIMIT_EXHAUSTED"
+                    if exhausted else "WORKER_LEASE_EXPIRED"
+                ),
+                "attempt_number": attempt.attempt_number,
+                "max_attempts": retry_limit,
+            },
         )
         return True
+
+    def _recover_expired_attempt_for_stage(
+            self, job_id, stage_key, pricing=None):
+        """Commit recovery independently of a later claim's eligibility checks.
+
+        A claim can legitimately be rejected after recovery (for example while
+        a retry delay or dependency is pending). Keeping recovery in that claim
+        transaction would roll it back with the rejection.
+        """
+        with self._session.begin() as session:
+            stage = self._find_stage(
+                session, job_id, stage_key, lock=True
+            )
+            attempt = session.execute(
+                select(AttemptRecord).where(
+                    AttemptRecord.stage_id == stage.id,
+                    AttemptRecord.state == AttemptState.RUNNING.value,
+                ).order_by(AttemptRecord.attempt_number.desc())
+                .limit(1).with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None:
+                return False
+            return self._recover_expired_attempt_in_session(
+                session, stage, attempt, utcnow(), pricing
+            )
 
     def claim_attempt(
             self,
@@ -1013,7 +1940,8 @@ class WorkflowRepository:
             lease_ttl_seconds=60,
             execution_backend="celery",
             execution_ref=None,
-            pricing=None):
+            pricing=None,
+            require_dependencies=False):
         """Atomically claim a stage and return a one-time worker lease token.
 
         The raw token is returned only to the claiming process. Only its SHA-256
@@ -1025,15 +1953,50 @@ class WorkflowRepository:
                 or len(lease_owner) > 255):
             raise ValueError("lease_owner must contain 1 to 255 characters")
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
+        self._recover_expired_attempt_for_stage(
+            job_id, stage_key, pricing=pricing
+        )
         lease_token = secrets.token_urlsafe(32)
-        lease_expires_at = now + timedelta(seconds=ttl)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
         ).hexdigest()
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if (
+                    workflow.execution_backend == "durable_vod_v1"
+                    and execution_backend != "workflow_node"):
+                raise InvalidStateTransition(
+                    "Legacy task cannot claim an Attempt owned by the durable workflow executor"
+                )
+            if require_dependencies:
+                job = session.get(JobRecord, job_id)
+                if job is None or job.state in (
+                        JobState.CANCELLED.value,
+                        JobState.FAILED.value,
+                        JobState.FINISHED.value):
+                    raise InvalidStateTransition(
+                        "A terminal or missing Job cannot claim a workflow node"
+                    )
+                dependency_rows = session.execute(
+                    select(StageRecord)
+                    .join(
+                        StageDependencyRecord,
+                        StageDependencyRecord.depends_on_stage_id == StageRecord.id,
+                    )
+                    .where(
+                        StageDependencyRecord.stage_id == stage.id,
+                        StageDependencyRecord.workflow_id == stage.workflow_id,
+                    )
+                    .with_for_update()
+                ).scalars().all()
+                if any(
+                        dependency.status != StageState.FINISHED.value
+                        for dependency in dependency_rows):
+                    raise InvalidStateTransition(
+                        "Workflow node dependencies are not all finished"
+                    )
             if stage.status in (
                     StageState.PROCESSING.value,
                     StageState.VALIDATED.value,
@@ -1050,10 +2013,52 @@ class WorkflowRepository:
                         "Stage {} has an active state without a claimable attempt"
                         .format(stage_key)
                     )
-                if not self._recover_expired_attempt_in_session(
-                        session, stage, running, now, pricing):
-                    raise StageAlreadyRunning(
-                        "Stage {} already has a live attempt lease".format(stage_key)
+                # Expired leases were recovered and committed in a
+                # separate transaction before this claim. If a lease expires
+                # while this transaction waits, reject now; the next delivery
+                # will recover it without rolling back unrelated state.
+                raise StageAlreadyRunning(
+                    "Stage {} already has an active attempt lease".format(stage_key)
+                )
+
+            if (
+                    stage.status == StageState.RETRY_WAIT.value
+                    and require_dependencies
+                    and workflow.execution_backend == "durable_vod_v1"):
+                latest_attempt = session.execute(
+                    select(AttemptRecord).where(
+                        AttemptRecord.stage_id == stage.id,
+                    ).order_by(AttemptRecord.attempt_number.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                retry_not_before = _durable_retry_not_before(
+                    workflow, stage.stage_key, latest_attempt
+                )
+                if retry_not_before is not None and utcnow() < retry_not_before:
+                    raise InvalidStateTransition(
+                        "Workflow node retry delay has not elapsed"
+                    )
+
+            if stage.status == StageState.RETRY_WAIT.value:
+                validated_artifact = session.execute(
+                    select(ArtifactRecord).where(
+                        ArtifactRecord.stage_id == stage.id,
+                        ArtifactRecord.artifact_type == "validation_report",
+                        ArtifactRecord.logical_name == "validation-report",
+                        ArtifactRecord.status == "AVAILABLE",
+                    ).order_by(ArtifactRecord.created_at.desc())
+                ).scalars().first()
+                validated_report = (
+                    validated_artifact.metadata_json
+                    if validated_artifact is not None else None
+                )
+                if (
+                        isinstance(validated_report, dict)
+                        and validated_report.get("valid") is True
+                        and validated_report.get("errors") == []):
+                    raise InvalidStateTransition(
+                        "A validated output must be retried through "
+                        "claim_publication_attempt"
                     )
 
             if stage.status == StageState.RETRY_WAIT.value:
@@ -1086,6 +2091,23 @@ class WorkflowRepository:
                     )
                 )
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update().execution_options(populate_existing=True)
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal or missing Job cannot claim an Attempt"
+                )
+
+            # The Job row is the final blocking lock in this claim path.
+            # Start the lease only after it is acquired and eligibility passes.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             previous_status = stage.status
             next_number = session.execute(
                 select(func.coalesce(func.max(AttemptRecord.attempt_number), 0))
@@ -1111,7 +2133,6 @@ class WorkflowRepository:
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
@@ -1135,6 +2156,387 @@ class WorkflowRepository:
             )
             return attempt_id, next_number, lease_token, lease_expires_at
 
+    def claim_node_attempt(
+            self, job_id, stage_key, lease_owner, lease_ttl_seconds=60,
+            execution_ref=None):
+        """Claim a DAG node only after every durable dependency is FINISHED."""
+        return self.claim_attempt(
+            job_id,
+            stage_key,
+            lease_owner=lease_owner,
+            lease_ttl_seconds=lease_ttl_seconds,
+            execution_backend="workflow_node",
+            execution_ref=execution_ref,
+            require_dependencies=True,
+        )
+
+    def complete_node_attempt(
+            self, job_id, stage_key, attempt_id, validation_report,
+            lease_token, metrics=None, pricing=None, artifacts=None):
+        """Finish an internal DAG node under its current fenced lease."""
+        if not isinstance(validation_report, dict):
+            raise ValueError("validation_report must be a dictionary")
+        if (
+                validation_report.get("valid") is not True
+                or not isinstance(validation_report.get("errors"), list)
+                or validation_report.get("errors")):
+            raise ValueError("A workflow node requires a successful validation report")
+        artifacts = list(artifacts or [])
+        if len(artifacts) > 1000:
+            raise ValueError("a workflow node cannot publish more than 1000 artifacts")
+        normalized_artifacts = []
+        logical_names = set()
+        from video_streaming.workflows.artifact_store import parse_artifact_uri
+        for item in artifacts:
+            if not isinstance(item, dict):
+                raise ValueError("node artifacts must be dictionaries")
+            logical_name = item.get("logical_name")
+            artifact_type = item.get("artifact_type")
+            uri = item.get("uri")
+            media_type = item.get("media_type")
+            size_bytes = item.get("size_bytes")
+            checksum = item.get("checksum_sha256")
+            if not isinstance(logical_name, str) or not logical_name.strip() or len(logical_name) > 255:
+                raise ValueError("artifact logical_name must contain 1 to 255 characters")
+            if not isinstance(artifact_type, str) or not artifact_type.strip() or len(artifact_type) > 64:
+                raise ValueError("artifact_type must contain 1 to 64 characters")
+            parse_artifact_uri(uri)
+            if logical_name in logical_names:
+                raise ValueError("artifact logical_name values must be unique per Attempt")
+            logical_names.add(logical_name)
+            if media_type is not None and (
+                    not isinstance(media_type, str) or len(media_type) > 128):
+                raise ValueError("artifact media_type is invalid")
+            if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:
+                raise ValueError("artifact size_bytes must be a non-negative integer")
+            if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+                raise ValueError("artifact checksum_sha256 must be a lowercase SHA-256 digest")
+            normalized_artifacts.append({
+                "logical_name": logical_name,
+                "artifact_type": artifact_type,
+                "uri": uri,
+                "media_type": media_type,
+                "size_bytes": size_bytes,
+                "checksum_sha256": checksum,
+            })
+        with self._session.begin() as session:
+            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None or attempt.stage_id != stage.id:
+                raise ValueError("Attempt does not belong to workflow stage")
+            self._assert_attempt_lease(attempt, lease_token)
+            if stage.status != StageState.PROCESSING.value:
+                raise InvalidStateTransition(
+                    "Only a processing workflow node can be completed"
+                )
+            if attempt.state != AttemptState.RUNNING.value:
+                raise InvalidStateTransition("Workflow node Attempt is not running")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                # Fence a live worker after any terminal Job transition.
+                now = utcnow()
+                terminal_reason = "JOB_{}_BEFORE_NODE_COMPLETION".format(
+                    job.state
+                )
+                previous_status = stage.status
+                self._transition(stage, StageState.CANCELLED)
+                started = attempt.started_at
+                if started.tzinfo is None or started.utcoffset() is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                attempt.state = AttemptState.CANCELLED.value
+                attempt.finished_at = now
+                attempt.duration_ms = max(0, int((now - started).total_seconds() * 1000))
+                usage = dict(metrics or {})
+                usage["duration_ms"] = attempt.duration_ms
+                attempt.cpu_seconds = usage.get("cpu_seconds")
+                attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
+                attempt.input_bytes = usage.get("input_bytes")
+                attempt.output_bytes = usage.get("output_bytes")
+                self._apply_attempt_accounting(attempt, usage, pricing)
+                self._clear_attempt_lease(attempt)
+                attempt.error_code = "JOB_TERMINAL"
+                attempt.error_message = terminal_reason
+                _record_event(
+                    session, job_id, stage.workflow_id, "STAGE_CANCELLED",
+                    from_state=previous_status, to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id, attempt_id=attempt_id,
+                    payload={"reason": terminal_reason},
+                )
+                return False
+            now = utcnow()
+            previous_status = stage.status
+            self._complete_processing_attempt_in_session(
+                attempt, metrics or {}, pricing
+            )
+            attempt.artifact_count = len(normalized_artifacts) + 1
+            stage.status = StageState.FINISHED.value
+            stage.updated_at = now
+            stage.version += 1
+            # Persist only bounded, non-sensitive validation metadata. Handler
+            # payloads and arbitrary output values remain outside the control DB.
+            artifact_id = new_id()
+            safe_report = {
+                "valid": True,
+                "errors": [],
+                "operation": stage.operation,
+            }
+            session.add(ArtifactRecord(
+                id=artifact_id,
+                job_id=job_id,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                artifact_type="node_result",
+                logical_name="node-result",
+                uri="workflow://jobs/{}/stages/{}/attempts/{}/result".format(
+                    job_id, stage_key, attempt_id
+                ),
+                media_type="application/json",
+                status="AVAILABLE",
+                metadata_json=safe_report,
+            ))
+            for published in normalized_artifacts:
+                session.add(ArtifactRecord(
+                    id=new_id(),
+                    job_id=job_id,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    artifact_type=published["artifact_type"],
+                    logical_name=published["logical_name"],
+                    uri=published["uri"],
+                    media_type=published["media_type"],
+                    size_bytes=published["size_bytes"],
+                    checksum_sha256=published["checksum_sha256"],
+                    status="AVAILABLE",
+                    metadata_json={},
+                ))
+            _record_event(
+                session,
+                job_id,
+                stage.workflow_id,
+                "WORKFLOW_NODE_COMPLETED",
+                from_state=previous_status,
+                to_state=StageState.FINISHED.value,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                payload={"operation": stage.operation, "artifact_id": artifact_id},
+            )
+            unfinished = session.execute(
+                select(func.count(StageRecord.id)).where(
+                    StageRecord.workflow_id == stage.workflow_id,
+                    StageRecord.status != StageState.FINISHED.value,
+                )
+            ).scalar_one()
+            if unfinished == 0:
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                job = session.get(JobRecord, job_id)
+                workflow.state = WorkflowState.FINISHED.value
+                workflow.updated_at = now
+                job.state = JobState.FINISHED.value
+                job.updated_at = now
+                job.version += 1
+                _record_event(
+                    session,
+                    job_id,
+                    workflow.id,
+                    "JOB_FINISHED",
+                    from_state=JobState.RUNNING.value,
+                    to_state=JobState.FINISHED.value,
+                )
+            else:
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                if workflow.execution_backend == "durable_vod_v1":
+                    if not (
+                            workflow.workflow_version
+                            and workflow.execution_plan_fingerprint
+                            and workflow.execution_plan_schema_version):
+                        raise InvalidStateTransition(
+                            "Durable workflow continuation requires an immutable plan identity"
+                        )
+                    # Completion and continuation intent commit together.
+                    _enqueue_durable_dispatch(
+                        session,
+                        workflow,
+                        job_id,
+                        attempt_id,
+                        stage.id,
+                        now,
+                        reason="continue",
+                        event_type="WORKFLOW_CONTINUATION_ENQUEUED",
+                    )
+            return True
+
+    def list_jobs_with_expired_attempts(self, limit=100, now=None):
+        """List bounded durable Jobs whose worker lease has expired.
+
+        This is a recovery scan, not a claim. The subsequent node claim remains
+        the concurrency fence; duplicate scheduler deliveries are harmless.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        statement = (
+            select(JobRecord.id)
+            .join(WorkflowRecord, WorkflowRecord.job_id == JobRecord.id)
+            .join(StageRecord, StageRecord.workflow_id == WorkflowRecord.id)
+            .join(AttemptRecord, AttemptRecord.stage_id == StageRecord.id)
+            .where(
+                WorkflowRecord.execution_backend == "durable_vod_v1",
+                WorkflowRecord.execution_plan_json.is_not(None),
+                JobRecord.state.in_(
+                    (JobState.QUEUED.value, JobState.RUNNING.value)
+                ),
+                AttemptRecord.state == AttemptState.RUNNING.value,
+                AttemptRecord.lease_token_hash.is_not(None),
+                AttemptRecord.lease_expires_at.is_not(None),
+                AttemptRecord.lease_expires_at <= now,
+            )
+            .distinct()
+            .order_by(JobRecord.id)
+            .limit(limit)
+        )
+        with self._session() as session:
+            return list(session.execute(statement).scalars().all())
+
+    def get_ready_node_ids(self, job_id, now=None):
+        """Return only nodes whose dependencies are FINISHED and stage is claimable.
+
+        Expired PROCESSING leases are included so a replay can fence and recover
+        a worker that died after broker delivery. Live attempts are never
+        fanned out repeatedly.
+        """
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        snapshot = self.get_execution_plan(job_id)
+        if snapshot is None:
+            return []
+        nodes = snapshot["plan"]["nodes"]
+        node_by_id = {node["node_id"]: node for node in nodes}
+        with self._session() as session:
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one_or_none()
+            job = session.get(JobRecord, job_id)
+            if workflow is None or job is None or job.state in (
+                    JobState.CANCELLED.value, JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                return []
+            stages = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == workflow.id
+                )
+            ).scalars().all()
+            by_key = {stage.stage_key: stage for stage in stages}
+            claimable = set()
+            for stage in stages:
+                if stage.status == StageState.PENDING.value:
+                    claimable.add(stage.stage_key)
+                elif stage.status == StageState.RETRY_WAIT.value:
+                    if workflow.execution_backend != "durable_vod_v1":
+                        claimable.add(stage.stage_key)
+                    else:
+                        latest_attempt = session.execute(
+                            select(AttemptRecord).where(
+                                AttemptRecord.stage_id == stage.id,
+                            ).order_by(AttemptRecord.attempt_number.desc())
+                            .limit(1)
+                        ).scalar_one_or_none()
+                        retry_not_before = _durable_retry_not_before(
+                            workflow, stage.stage_key, latest_attempt
+                        )
+                        if retry_not_before is None or retry_not_before <= now:
+                            claimable.add(stage.stage_key)
+                elif stage.status == StageState.PROCESSING.value:
+                    running = session.execute(
+                        select(AttemptRecord).where(
+                            AttemptRecord.stage_id == stage.id,
+                            AttemptRecord.state == AttemptState.RUNNING.value,
+                        ).order_by(AttemptRecord.attempt_number.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    expiry = running.lease_expires_at if running else None
+                    if expiry is not None and (
+                            expiry.tzinfo is None or expiry.utcoffset() is None):
+                        expiry = expiry.replace(tzinfo=timezone.utc)
+                    # Claim logic can recover only a concrete RUNNING
+                    # Attempt with a hashed token and an expired lease. A
+                    # missing Attempt or lease-free RUNNING row is corrupt/
+                    # operator-owned state, not scheduler-ready work.
+                    if (
+                            running is not None
+                            and running.lease_token_hash is not None
+                            and expiry is not None
+                            and expiry <= now):
+                        claimable.add(stage.stage_key)
+
+            ready = []
+            for node in nodes:
+                stage_key = node["stage_key"]
+                if stage_key not in claimable:
+                    continue
+                dependency_keys = [
+                    node_by_id[dependency]["stage_key"]
+                    for dependency in node["depends_on"]
+                ]
+                if all(
+                    dependency_key in by_key
+                    and by_key[dependency_key].status == StageState.FINISHED.value
+                    for dependency_key in dependency_keys
+                ):
+                    ready.append(node["node_id"])
+            return ready
+
+    def get_dependency_artifacts(self, job_id, node_id):
+        """Return durable Artifact references from a node's completed parents."""
+        snapshot = self.get_execution_plan(job_id)
+        if snapshot is None:
+            raise KeyError("workflow execution plan not found")
+        nodes = {item["node_id"]: item for item in snapshot["plan"]["nodes"]}
+        node = nodes.get(node_id)
+        if node is None:
+            raise KeyError("workflow node not found")
+        dependency_keys = [
+            nodes[parent]["stage_key"] for parent in node["depends_on"]
+        ]
+        if not dependency_keys:
+            return {}
+        with self._session() as session:
+            rows = session.execute(
+                select(ArtifactRecord, StageRecord.stage_key)
+                .join(StageRecord, StageRecord.id == ArtifactRecord.stage_id)
+                .where(
+                    ArtifactRecord.job_id == job_id,
+                    StageRecord.stage_key.in_(dependency_keys),
+                    ArtifactRecord.status == "AVAILABLE",
+                    ArtifactRecord.uri.like("s3://%"),
+                ).order_by(ArtifactRecord.created_at, ArtifactRecord.id)
+            ).all()
+            result = {key: [] for key in dependency_keys}
+            for artifact, stage_key in rows:
+                result[stage_key].append({
+                    "artifact_id": artifact.id,
+                    "artifact_type": artifact.artifact_type,
+                    "logical_name": artifact.logical_name,
+                    "uri": artifact.uri,
+                    "media_type": artifact.media_type,
+                    "size_bytes": artifact.size_bytes,
+                    "checksum_sha256": artifact.checksum_sha256,
+                })
+            return result
+
     def renew_attempt_lease(
             self,
             job_id,
@@ -1144,7 +2546,6 @@ class WorkflowRepository:
             lease_ttl_seconds=60):
         """Extend a live lease; an expired or stale worker cannot resurrect it."""
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.execute(
@@ -1155,6 +2556,9 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if attempt is None:
                 raise AttemptLeaseLost("Attempt lease is no longer valid")
+            # Capture time only after both row locks are held. A transaction
+            # may have waited past expiry while acquiring either lock.
+            now = utcnow()
             self._assert_attempt_lease(attempt, lease_token, now=now)
             attempt.heartbeat_at = now
             attempt.lease_expires_at = now + timedelta(seconds=ttl)
@@ -1197,15 +2601,21 @@ class WorkflowRepository:
             attempt_scoped_object_key(package_output_key, "validation-id")
 
         ttl = self._validated_lease_ttl(lease_ttl_seconds)
-        now = utcnow()
+        self._recover_expired_attempt_for_stage(
+            job_id, stage_key, pricing=pricing
+        )
         lease_token = secrets.token_urlsafe(32)
-        lease_expires_at = now + timedelta(seconds=ttl)
         lease_token_hash = hashlib.sha256(
             lease_token.encode("utf-8")
         ).hexdigest()
 
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
+            workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if workflow.execution_backend == "durable_vod_v1":
+                raise InvalidStateTransition(
+                    "Legacy publication task cannot claim an Attempt owned by the durable workflow executor"
+                )
             if stage.status in (
                     StageState.VALIDATED.value,
                     StageState.PUBLISHING.value):
@@ -1217,12 +2627,10 @@ class WorkflowRepository:
                     .with_for_update()
                 ).scalar_one_or_none()
                 if running is not None:
-                    if not self._recover_expired_attempt_in_session(
-                            session, stage, running, now, pricing):
-                        raise StageAlreadyRunning(
-                            "Stage {} already has a live publication attempt"
-                            .format(stage_key)
-                        )
+                    raise StageAlreadyRunning(
+                        "Stage {} already has an active publication attempt"
+                        .format(stage_key)
+                    )
                 elif stage.status == StageState.PUBLISHING.value:
                     raise StageAlreadyRunning(
                         "Stage {} is publishing without an active Attempt".format(
@@ -1286,6 +2694,23 @@ class WorkflowRepository:
                     "Stage {} already has an active attempt".format(stage_key)
                 )
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal or missing Job cannot claim publication"
+                )
+
+            # Publication lease timing starts after all row locks and
+            # eligibility checks, not before a potentially blocking Job lock.
+            now = utcnow()
+            lease_expires_at = now + timedelta(seconds=ttl)
             previous_status = stage.status
             if stage.status == StageState.RETRY_WAIT.value:
                 self._transition(stage, StageState.VALIDATED)
@@ -1337,7 +2762,6 @@ class WorkflowRepository:
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
@@ -1860,6 +3284,13 @@ class WorkflowRepository:
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
             if attempt.state != AttemptState.RUNNING.value:
                 if attempt.state == AttemptState.SUCCEEDED.value and \
                         stage.status == StageState.FINISHED.value:
@@ -1928,12 +3359,23 @@ class WorkflowRepository:
                     "output_bytes": metrics.get("output_bytes"),
                 },
             )
-            if stages and all(
+            completion_stages = stages
+            if workflow.execution_backend == "legacy_celery":
+                # The legacy Celery graph still executes output pipelines as
+                # indivisible chains. Its full plan is durably recorded, but
+                # internal plan nodes are not individually claimed yet.
+                completion_stages = [
+                    item for item in stages
+                    if item.operation in (
+                        "video.output.upload_directory",
+                        "video.output.upload_file",
+                    )
+                ]
+            if completion_stages and all(
                     item.status == StageState.FINISHED.value
-                    for item in stages):
+                    for item in completion_stages):
                 workflow.state = WorkflowState.FINISHED.value
                 workflow.updated_at = finished_at
-                job = session.get(JobRecord, job_id)
                 job.state = JobState.FINISHED.value
                 job.updated_at = finished_at
                 job.version += 1
@@ -1957,7 +3399,14 @@ class WorkflowRepository:
             error_message=None,
             metrics=None,
             pricing=None,
-            lease_token=None):
+            lease_token=None,
+            retry_after_seconds=None):
+        if retry_after_seconds is not None and (
+                isinstance(retry_after_seconds, bool)
+                or not isinstance(retry_after_seconds, (int, float))
+                or not math.isfinite(float(retry_after_seconds))
+                or not 0 <= retry_after_seconds <= 86400):
+            raise ValueError("retry_after_seconds must be between 0 and 86400")
         metrics = dict(metrics or {})
         target = StageState.RETRY_WAIT if retryable else StageState.FAILED
         attempt_state = (
@@ -1975,6 +3424,45 @@ class WorkflowRepository:
                     StageState.FINISHED.value,
                     StageState.FAILED.value,
                     StageState.CANCELLED.value):
+                return False
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                # A sibling may have made the Job terminal while this worker
+                # was still running. Fence it rather than scheduling a retry.
+                now = utcnow()
+                previous_status = stage.status
+                self._transition(stage, StageState.CANCELLED)
+                attempt.state = AttemptState.CANCELLED.value
+                attempt.finished_at = now
+                started = attempt.started_at
+                if started.tzinfo is None or started.utcoffset() is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                attempt.duration_ms = max(
+                    0, int((now - started).total_seconds() * 1000)
+                )
+                metrics["duration_ms"] = attempt.duration_ms
+                self._apply_attempt_accounting(attempt, metrics, pricing)
+                self._clear_attempt_lease(attempt)
+                attempt.error_code = "JOB_TERMINAL"
+                attempt.error_message = "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE"
+                _record_event(
+                    session,
+                    job_id,
+                    stage.workflow_id,
+                    "STAGE_CANCELLED",
+                    from_state=previous_status,
+                    to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id,
+                    attempt_id=attempt_id,
+                    payload={"reason": "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE"},
+                )
                 return False
             previous_status = stage.status
             self._transition(stage, target)
@@ -1996,6 +3484,38 @@ class WorkflowRepository:
             attempt.error_code = error_code
             attempt.error_message = error_message
             workflow = session.get(WorkflowRecord, stage.workflow_id)
+            if retryable and workflow.execution_backend == "durable_vod_v1":
+                plan_delay = _durable_retry_delay(
+                    workflow, stage.stage_key, attempt.attempt_number
+                )
+                if (
+                        retry_after_seconds is not None
+                        and not math.isclose(
+                            float(retry_after_seconds),
+                            plan_delay,
+                            rel_tol=0.0,
+                            abs_tol=1e-9,
+                        )):
+                    raise ValueError(
+                        "retry_after_seconds must match the immutable plan policy"
+                    )
+                retry_not_before = _durable_retry_not_before(
+                    workflow, stage.stage_key, attempt
+                )
+                if retry_not_before is None:
+                    raise InvalidStateTransition(
+                        "Durable retry requires a persisted attempt completion time"
+                    )
+                _enqueue_durable_dispatch(
+                    session,
+                    workflow,
+                    job_id,
+                    attempt_id,
+                    stage.id,
+                    retry_not_before,
+                    reason="retry",
+                    event_type="WORKFLOW_RETRY_ENQUEUED",
+                )
             if not retryable:
                 workflow.state = WorkflowState.FAILED.value
                 workflow.updated_at = utcnow()
@@ -2045,6 +3565,13 @@ class WorkflowRepository:
             self._assert_attempt_lease(attempt, lease_token)
             if attempt.state != AttemptState.RUNNING.value:
                 return False
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
                     StageState(stage.status)]:
                 raise InvalidStateTransition(
@@ -2074,12 +3601,18 @@ class WorkflowRepository:
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason
             workflow = session.get(WorkflowRecord, stage.workflow_id)
-            workflow.state = WorkflowState.CANCELLED.value
-            workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
-            job.state = JobState.CANCELLED.value
-            job.updated_at = now
-            job.version += 1
+            # A sibling may already have failed the Job (or the workflow may
+            # have reached another terminal state). Stop this Attempt without
+            # rewriting that authoritative terminal outcome as CANCELLED.
+            if job.state not in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                workflow.state = WorkflowState.CANCELLED.value
+                workflow.updated_at = now
+                job.state = JobState.CANCELLED.value
+                job.updated_at = now
+                job.version += 1
             _record_event(
                 session,
                 job_id,
@@ -2671,7 +4204,8 @@ class WorkflowRepository:
 
 
     def list_reclaimable_package_attempts(
-            self, minimum_age_seconds=86400, limit=100, now=None):
+            self, minimum_age_seconds=86400, limit=100, now=None,
+            attempt_ids=None):
         """Return old package Attempts whose exact namespaces pass DB guards."""
         if (
                 isinstance(limit, bool)
@@ -2688,10 +4222,15 @@ class WorkflowRepository:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         cutoff = now - timedelta(seconds=float(minimum_age_seconds))
+        if attempt_ids is not None:
+            attempt_ids = tuple(attempt_ids)
+            if any(not isinstance(item, str) or not item for item in attempt_ids):
+                raise ValueError("attempt_ids must contain non-empty strings")
+            if not attempt_ids:
+                return []
 
         with self._session() as session:
-            candidates = session.execute(
-                select(AttemptRecord).where(
+            query = select(AttemptRecord).where(
                     AttemptRecord.state.in_([
                         AttemptState.FAILED.value,
                         AttemptState.CANCELLED.value,
@@ -2699,8 +4238,16 @@ class WorkflowRepository:
                     ]),
                     AttemptRecord.finished_at <= cutoff,
                     AttemptRecord.metrics_json["package_publication"].is_not(None),
-                ).order_by(AttemptRecord.finished_at.asc())
-                .limit(limit)
+                    # Exclude completed cleanup before LIMIT. Filtering only
+                    # after the SQL limit can permanently starve later rows.
+                    AttemptRecord.metrics_json["package_publication"][
+                        "cleanup_completed_at"
+                    ].as_string().is_(None),
+                )
+            if attempt_ids is not None:
+                query = query.where(AttemptRecord.id.in_(attempt_ids))
+            candidates = session.execute(
+                query.order_by(AttemptRecord.finished_at.asc()).limit(limit)
             ).scalars().all()
             metadata = []
             for attempt in candidates:
@@ -2941,10 +4488,23 @@ class WorkflowRepository:
                 stage.version += 1
                 stage.updated_at = now
 
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state in (
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "A terminal Job cannot recover a lost local package"
+                )
             workflow = session.get(WorkflowRecord, stage.workflow_id)
             workflow.state = WorkflowState.RUNNING.value
             workflow.updated_at = now
-            job = session.get(JobRecord, job_id)
             job.state = JobState.RUNNING.value
             job.updated_at = now
             job.version += 1
@@ -3005,6 +4565,7 @@ class WorkflowRepository:
                     "id": workflow.id,
                     "name": workflow.name,
                     "status": workflow.state,
+                    "execution_backend": workflow.execution_backend,
                     "version": workflow.workflow_version,
                     "execution_plan_schema_version": workflow.execution_plan_schema_version,
                     "execution_plan_fingerprint": workflow.execution_plan_fingerprint,

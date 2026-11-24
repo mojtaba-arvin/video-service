@@ -97,30 +97,44 @@ def cleanup_abandoned_packages(self, limit=100):
                 ),
             )
         )
-        if item["kind"] == "single_file":
-            result = cleanup_abandoned_single_file(
-                storage=self.s3_service,
-                bucket=item["bucket"],
-                object_key=item["object_key"],
-                attempt_id=item["attempt_id"],
-                attempt_prefix=item["prefix"],
-                is_reclaimable=reclaimable,
-            )
-        else:
-            result = cleanup_abandoned_attempt_package(
-                storage=self.s3_service,
-                bucket=item["bucket"],
-                inventory_key=item["inventory_key"],
-                attempt_prefix=item["prefix"],
-                is_reclaimable=reclaimable,
-            )
-        results.append(result)
-        if result["deleted"]:
-            repository.mark_package_attempt_cleaned(
-                item["attempt_id"], item["bucket"], item["prefix"]
-            )
+        try:
+            if item["kind"] == "single_file":
+                result = cleanup_abandoned_single_file(
+                    storage=self.s3_service,
+                    bucket=item["bucket"],
+                    object_key=item["object_key"],
+                    attempt_id=item["attempt_id"],
+                    attempt_prefix=item["prefix"],
+                    is_reclaimable=reclaimable,
+                )
+            else:
+                result = cleanup_abandoned_attempt_package(
+                    storage=self.s3_service,
+                    bucket=item["bucket"],
+                    inventory_key=item["inventory_key"],
+                    attempt_prefix=item["prefix"],
+                    is_reclaimable=reclaimable,
+                )
+            if result["deleted"]:
+                repository.mark_package_attempt_cleaned(
+                    item["attempt_id"], item["bucket"], item["prefix"]
+                )
+            results.append(result)
+        except Exception as exc:
+            # One unavailable object store or stale candidate must not starve
+            # later independent namespaces in this bounded sweep. Do not log
+            # exception text: provider errors can contain object URLs.
+            results.append({
+                "attempt_id": item["attempt_id"],
+                "deleted": False,
+                "failed": True,
+                "error_code": type(exc).__name__,
+            })
+    failed = sum(1 for result in results if result.get("failed"))
+    deleted = sum(1 for result in results if result.get("deleted"))
     return {
         "candidates": len(candidates),
-        "deleted": sum(1 for result in results if result["deleted"]),
-        "skipped": sum(1 for result in results if not result["deleted"]),
+        "deleted": deleted,
+        "failed": failed,
+        "skipped": len(candidates) - deleted - failed,
     }

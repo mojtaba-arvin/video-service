@@ -1,6 +1,6 @@
 # ADR 0008: Job-scoped encrypted secret references for outbound delivery
 
-- **Status:** Accepted design; implementation pending
+- **Status:** Accepted; core envelope persistence and worker resolution implemented; production activation gates remain open
 - **Date:** 2026-11-19
 - **Owners:** Video-service maintainers
 - **Related:** [ADR 0002 — durable workflow state](0002-durable-workflow-state-and-typed-operations.md), [ADR 0004 — transactional dispatch](0004-transactional-dispatch-outbox-and-idempotent-execution.md), [ADR 0006 — reliability and observability](0006-reliability-and-observability-as-cross-cutting-constraints.md), [ADR 0007 — immutable execution plans](0007-immutable-execution-plan-persistence.md), [Issue #71](https://github.com/mojtaba-arvin/video-service/issues/71), [Issue #73](https://github.com/mojtaba-arvin/video-service/issues/73)
@@ -11,7 +11,7 @@ The legacy gRPC request accepts a caller-provided `webhook_url`. The current Cre
 
 The immutable execution-plan contract deliberately rejects raw callback URLs and credentials. PR #106 persists validated plans atomically with Job/Workflow/Stage state, but it does not implement secret storage, resolve references, or change the live Celery dispatch path. A durable plan or future outbox message must never become a new place where plaintext credentials are copied.
 
-The current service does not yet have a complete authenticated caller and tenant-ownership contract. Therefore Job scoping alone must not be described as tenant isolation, and secret resolution must not be exposed as a public API.
+The gRPC boundary now establishes a RequestPrincipal and Job ownership. CreateJob encrypts callback material with AWS KMS and persists the envelope in the Job transaction. The worker resolves it only after STS identity verification and an exact Job/owner/purpose lookup. The production KMS/IAM policy and real cloud integration tests remain deployment gates.
 
 ## Decision
 
@@ -54,7 +54,7 @@ Introduce a narrow, provider-neutral **Job Secret Store** for sensitive delivery
 
 1. New submissions are validated and encrypted before the Job transaction commits; only the opaque reference is stored in durable and cache projections.
 2. New delivery code resolves the reference using Job and tenant/owner context.
-3. During a bounded compatibility window, delivery may read the old raw `JOB_DETAILS.webhook_url` value only for already accepted in-flight Jobs created before the cutover. This fallback is measured, redacted and expires with the old Job TTL; it is not used for new Jobs.
+3. The callback task no longer reads raw `JOB_DETAILS.webhook_url` from Redis. Existing in-flight Jobs that depended on the old plaintext cache entry require an explicit drain/reconciliation window before rollout; the new task path does not silently fall back to plaintext.
 4. Do not dual-write plaintext for new Jobs. Do not attempt to backfill an expired or missing legacy callback URL.
 5. Remove the compatibility reader after the maximum legacy Job lifetime and retry horizon have elapsed and telemetry confirms no legacy reads remain.
 6. Ensure mixed-version deployment behavior is explicit: old workers may continue to process only legacy payloads; new plan-driven work is not dispatched to old workers until their capability is known.
@@ -86,4 +86,4 @@ Do not activate secret-reference resolution in production until all gates pass:
 5. Mixed-version and legacy TTL migration tests prove old accepted Jobs still complete without allowing new plaintext writes.
 6. Delivery tests prove the resolved value is used only at the outbound boundary and is never included in Celery kwargs, events, snapshots, traces or logs.
 
-Until these gates pass, the existing legacy callback path remains a known transitional risk; the new immutable-plan path continues to reject raw callback URLs and must not dispatch plans.
+Core secret-envelope persistence, IAM worker identity verification, worker-side decryption and the no-plaintext Redis projection are implemented on the integration branch. Production activation remains gated on deployed KMS key policy, role separation, secret lifecycle/revocation operations, mixed-version legacy Job handling, and end-to-end tests against real AWS KMS/STS. Durable plan dispatch remains disabled until the complete 13-operation handler registry and infrastructure crash/replay acceptance pass.

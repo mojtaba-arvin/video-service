@@ -3,6 +3,8 @@
 import os
 import threading
 import unittest
+
+from sqlalchemy import select, func, event, text
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -13,10 +15,12 @@ from video_streaming.workflows.domain import (
     InvalidStateTransition,
     StageAlreadyRunning,
     StageState,
+    JobState,
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
-    ArtifactRecord, WorkflowEventRecord, utcnow
+    ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
+    StageDependencyRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -66,17 +70,212 @@ class WorkflowRepositoryTests(unittest.TestCase):
         return job_id
 
 
-    def make_owner_principal(self, tenant="tenant-a", subject="subject-1"):
+    def make_owner_principal(
+            self, tenant="tenant-a", subject="subject-1", scopes=None):
         from datetime import datetime, timezone
         return RequestPrincipal(
             issuer="https://issuer.example.test/",
             subject=subject,
             tenant_id=tenant,
-            scopes=frozenset(["video.jobs:read", "video.jobs:create"]),
+            scopes=frozenset(scopes or [
+                "video.jobs:read", "video.jobs:create"
+            ]),
             roles=frozenset(),
             authentication_method="bearer",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
+
+    def test_execution_plan_dependencies_are_normalized_and_same_workflow(self):
+        job_id = str(uuid4())
+        request = {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output", "key": "master.m3u8", "protocol": "hls",
+            }],
+        }
+        plan = build_vod_execution_plan(job_id, request)
+        created = self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-plan-deps-{}".format(uuid4()),
+            request_hash="b" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+        )
+        self.assertEqual(created, (job_id, True))
+
+        with self.repository._session() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=job_id
+            ).one()
+            stages = session.query(StageRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+            stage_by_key = {stage.stage_key: stage for stage in stages}
+            edges = session.query(StageDependencyRecord).filter_by(
+                workflow_id=workflow.id
+            ).all()
+
+        expected = {
+            (node["stage_key"], dependency["stage_key"])
+            for node in plan["nodes"]
+            for dependency_node_id in node["depends_on"]
+            for dependency in plan["nodes"]
+            if dependency["node_id"] == dependency_node_id
+        }
+        actual = {
+            (
+                next(stage.stage_key for stage in stages if stage.id == edge.stage_id),
+                next(
+                    stage.stage_key for stage in stages
+                    if stage.id == edge.depends_on_stage_id
+                ),
+            )
+            for edge in edges
+        }
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(
+            edge.workflow_id == workflow.id for edge in edges
+        ))
+        self.assertEqual(len(stage_by_key), len(plan["nodes"]))
+        self.assertEqual(
+            {(stage.stage_key, stage.operation) for stage in stages},
+            {(node["stage_key"], node["operation"]) for node in plan["nodes"]},
+        )
+
+    def test_durable_node_completion_atomically_enqueues_continuation(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [
+                {
+                    "node_id": "check-input",
+                    "operation": "video.input.check",
+                    "stage_key": "check-input",
+                    "depends_on": [],
+                    "parameters": {},
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "control",
+                },
+                {
+                    "node_id": "download-input",
+                    "operation": "video.input.download",
+                    "stage_key": "download-input",
+                    "depends_on": ["check-input"],
+                    "parameters": {},
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "probe",
+                },
+            ],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="durable-continuation-" + job_id,
+            request_hash="d" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+            enqueue_dispatch=True,
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="workflow-worker"
+        )
+        self.assertTrue(self.repository.complete_node_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        ))
+
+        with self.repository._session() as session:
+            rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.job_id == job_id
+                ).order_by(OutboxRecord.created_at, OutboxRecord.id)
+            ).scalars().all()
+            events = session.query(WorkflowEventRecord).filter_by(
+                job_id=job_id,
+                event_type="WORKFLOW_CONTINUATION_ENQUEUED",
+            ).all()
+        self.assertEqual(len(rows), 2)
+        continuation = next(
+            row for row in rows if row.dedupe_key.startswith("workflow.continue:")
+        )
+        self.assertEqual(continuation.state, "PENDING")
+        self.assertEqual(continuation.event_type, "WORKFLOW_PLAN_DISPATCH")
+        self.assertEqual(continuation.plan_fingerprint, execution_plan_sha256(plan))
+        self.assertEqual(continuation.payload_json["job_id"], job_id)
+        self.assertEqual(len(events), 1)
+
+    def test_legacy_celery_completes_output_stages_without_faking_internal_nodes(self):
+        job_id = str(uuid4())
+        plan = build_vod_execution_plan(job_id, {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output",
+                "key": "master.m3u8",
+                "protocol": "hls",
+                "output_id": "p0",
+            }],
+        })
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="legacy-plan-{}".format(uuid4()),
+            request_hash="c" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            execution_backend="legacy_celery",
+        )
+        output_node = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.output.upload_directory"
+        )
+        output_key = output_node["stage_key"]
+        attempt_id, _ = self.repository.start_attempt(
+            job_id, output_key, execution_backend="celery",
+            execution_ref="legacy-output-task",
+        )
+        self.repository.mark_validated(
+            job_id, output_key, attempt_id,
+            {"valid": True, "errors": []},
+        )
+        self.repository.start_publishing(job_id, output_key, attempt_id)
+        self.repository.finish_stage(
+            job_id, output_key, attempt_id, artifacts=[], metrics={},
+        )
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "FINISHED")
+        self.assertEqual(snapshot["workflow"]["status"], "FINISHED")
+        self.assertEqual(
+            snapshot["workflow"]["execution_backend"], "legacy_celery"
+        )
+        self.assertEqual(
+            next(stage for stage in snapshot["stages"]
+                 if stage["key"] == output_key)["status"],
+            "FINISHED",
+        )
+        internal = [
+            stage for stage in snapshot["stages"]
+            if stage["key"] != output_key
+        ]
+        self.assertTrue(internal)
+        self.assertTrue(all(
+            stage["status"] == "PENDING" and not stage["attempts"]
+            for stage in internal
+        ))
 
     def test_job_owner_is_persisted_and_authorized_by_tenant_and_subject(self):
         principal = self.make_owner_principal()
@@ -110,72 +309,423 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 job_id, principal, "video.jobs:cancel"
             )
 
-    def test_playback_session_authorization_uses_durable_job_owner(self):
-        def principal(tenant="tenant-a", subject="subject-1"):
-            return RequestPrincipal(
-                issuer="https://issuer.example.test/",
-                subject=subject,
-                tenant_id=tenant,
-                scopes=frozenset([
-                    "video.jobs:read",
-                    "video.jobs:create",
-                    "video.playback:write",
-                ]),
-                roles=frozenset(),
-                authentication_method="bearer",
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-            )
-
-        owner = principal()
+    def test_playback_session_access_requires_authenticated_job_owner(self):
+        principal = self.make_owner_principal(scopes=[
+            "video.jobs:create", "video.playback:write"
+        ])
         job_id = str(uuid4())
         self.repository.create_job(
-            job_id,
-            "idem-playback-owner-{}".format(uuid4()),
-            "d" * 64,
+            job_id, "idem-playback-owner-" + job_id, "a" * 64,
             stage_specs=[{
                 "stage_key": "p0",
                 "operation": "video.package_and_publish",
             }],
-            owner_principal=owner,
+            owner_principal=principal,
         )
         attempt_id, _ = self.repository.start_attempt(job_id, "p0")
         self.repository.mark_validated(
-            job_id, "p0", attempt_id,
-            {"valid": True, "errors": []},
+            job_id, "p0", attempt_id, {"valid": True, "errors": []}
         )
         self.repository.start_publishing(job_id, "p0", attempt_id)
         self.repository.finish_stage(
-            job_id, "p0", attempt_id,
-            artifacts=[{
+            job_id, "p0", attempt_id, artifacts=[{
                 "artifact_type": "streaming_manifest",
-                "logical_name": "master",
-                "uri": "s3://video/master.m3u8",
+                "logical_name": "master.m3u8",
+                "uri": "s3://vod-output/auth/master.m3u8",
                 "size_bytes": 12,
             }],
         )
         playback = self.repository.start_playback_session(job_id, "p0")
+        session_id = playback["session_id"]
 
         self.assertTrue(self.repository.authorize_playback_session_access(
-            playback["session_id"], owner, "video.playback:write"
+            session_id, principal, "video.playback:write"
         ))
         with self.assertRaises(AuthorizationError):
             self.repository.authorize_playback_session_access(
-                playback["session_id"],
-                principal(tenant="tenant-b"),
+                session_id, self.make_owner_principal(
+                    tenant="tenant-b",
+                    scopes=["video.jobs:create", "video.playback:write"],
+                ),
                 "video.playback:write",
             )
         with self.assertRaises(AuthorizationError):
             self.repository.authorize_playback_session_access(
-                playback["session_id"],
-                principal(subject="different-subject"),
+                session_id, self.make_owner_principal(
+                    subject="other-subject",
+                    scopes=["video.jobs:create", "video.playback:write"],
+                ),
                 "video.playback:write",
             )
         with self.assertRaises(AuthorizationError):
             self.repository.authorize_playback_session_access(
-                playback["session_id"],
-                owner,
-                "video.playback:admin",
+                session_id, self.make_owner_principal(), "video.playback:write"
             )
+        with self.assertRaises(AuthorizationError):
+            self.repository.authorize_playback_session_access(
+                "missing-session", principal, "video.playback:write"
+            )
+
+    def test_running_node_failure_cannot_schedule_retry_after_job_failure(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 1,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="terminal-failure-" + job_id,
+            request_hash="7" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="in-flight-worker"
+        )
+        with self.repository._session.begin() as session:
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.FAILED.value
+
+        self.assertFalse(self.repository.fail_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            retryable=True,
+            error_code="TRANSIENT",
+            error_message="TimeoutError",
+            lease_token=token,
+            retry_after_seconds=30,
+        ))
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            retry_rows = session.query(OutboxRecord).filter(
+                OutboxRecord.job_id == job_id,
+                OutboxRecord.dedupe_key.like("workflow.retry:%"),
+            ).all()
+        self.assertEqual(attempt.state, AttemptState.CANCELLED.value)
+        self.assertEqual(retry_rows, [])
+
+    def test_running_node_is_fenced_when_job_becomes_failed(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 2,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 1,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="terminal-completion-" + job_id,
+            request_hash="8" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="in-flight-worker"
+        )
+        with self.repository._session.begin() as session:
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.FAILED.value
+
+        self.assertFalse(self.repository.complete_node_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            {"valid": True, "errors": []},
+            lease_token=token,
+        ))
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.FAILED.value)
+        stage = next(item for item in snapshot["stages"] if item["key"] == "check-input")
+        self.assertEqual(stage["status"], StageState.CANCELLED.value)
+        self.assertEqual(stage["attempts"][-1]["status"], AttemptState.CANCELLED.value)
+
+    def test_scheduler_does_not_advertise_lease_free_running_attempts(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "exponential",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 30,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="lease-free-running-" + job_id,
+            request_hash="9" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="worker"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_token_hash = None
+            attempt.lease_expires_at = None
+            attempt.lease_owner = None
+            attempt.heartbeat_at = None
+
+        self.assertEqual(self.repository.get_ready_node_ids(job_id), [])
+        with self.assertRaises(StageAlreadyRunning):
+            self.repository.claim_node_attempt(
+                job_id, "check-input", lease_owner="replacement"
+            )
+
+    def test_expired_durable_attempts_are_discovered_for_scheduler_recovery(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "exponential",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 30,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="expired-scheduler-" + job_id,
+            request_hash="8" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="crashed-worker"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        self.assertIn(
+            job_id,
+            self.repository.list_jobs_with_expired_attempts(limit=1000),
+        )
+        with self.assertRaisesRegex(ValueError, "limit must be between"):
+            self.repository.list_jobs_with_expired_attempts(limit=0)
+
+    def test_durable_retry_delay_is_enforced_and_has_due_outbox(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 3,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 30,
+                    "max_delay_seconds": 30,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="durable-retry-delay-" + job_id,
+            request_hash="f" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+            enqueue_dispatch=True,
+        )
+        attempt_id, _, token, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="retry-worker"
+        )
+        self.assertTrue(self.repository.fail_attempt(
+            job_id,
+            "check-input",
+            attempt_id,
+            retryable=True,
+            error_code="TRANSIENT_IO",
+            error_message="TimeoutError",
+            lease_token=token,
+            retry_after_seconds=30,
+        ))
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            retry_due = attempt.finished_at + timedelta(seconds=30)
+            retry_rows = session.query(OutboxRecord).filter(
+                OutboxRecord.job_id == job_id,
+                OutboxRecord.dedupe_key.like("workflow.retry:%"),
+            ).all()
+        self.assertEqual(len(retry_rows), 1)
+        database_retry_due = retry_rows[0].available_at
+        if database_retry_due.tzinfo is None or database_retry_due.utcoffset() is None:
+            database_retry_due = database_retry_due.replace(tzinfo=timezone.utc)
+        if retry_due.tzinfo is None or retry_due.utcoffset() is None:
+            retry_due = retry_due.replace(tzinfo=timezone.utc)
+        self.assertEqual(database_retry_due, retry_due)
+
+        self.assertEqual(
+            self.repository.get_ready_node_ids(
+                job_id, now=retry_due - timedelta(seconds=1)
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.repository.get_ready_node_ids(job_id, now=retry_due),
+            ["check-input"],
+        )
+        with self.assertRaisesRegex(
+                InvalidStateTransition, "retry delay has not elapsed"):
+            self.repository.claim_node_attempt(
+                job_id, "check-input", lease_owner="too-early-worker"
+            )
+
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.finished_at = utcnow() - timedelta(seconds=31)
+        next_attempt_id, number, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="on-time-worker"
+        )
+        self.assertEqual(number, 2)
+        self.assertNotEqual(next_attempt_id, attempt_id)
+
+    def test_expired_durable_attempt_exhausts_persisted_retry_budget(self):
+        job_id = str(uuid4())
+        plan = {
+            "schema_version": 1,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [{
+                "node_id": "check-input",
+                "operation": "video.input.check",
+                "stage_key": "check-input",
+                "depends_on": [],
+                "parameters": {},
+                "retry_policy": {
+                    "max_attempts": 1,
+                    "backoff": "fixed",
+                    "initial_delay_seconds": 1,
+                    "max_delay_seconds": 1,
+                },
+                "resource_profile": "control",
+            }],
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="lease-budget-" + job_id,
+            request_hash="e" * 64,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        attempt_id, _, _, _ = self.repository.claim_node_attempt(
+            job_id, "check-input", lease_owner="worker-that-will-die"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_node_attempt(
+                job_id, "check-input", lease_owner="replacement-worker"
+            )
+
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.FAILED.value)
+        self.assertEqual(snapshot["workflow"]["status"], JobState.FAILED.value)
+        stage = next(
+            item for item in snapshot["stages"]
+            if item["key"] == "check-input"
+        )
+        self.assertEqual(stage["status"], StageState.FAILED.value)
+        self.assertEqual(stage["attempts"][-1]["status"], AttemptState.FAILED.value)
+
+    def test_node_claim_rejects_terminal_jobs_without_creating_attempts(self):
+        for terminal_state in (
+                JobState.FAILED.value,
+                JobState.FINISHED.value,
+                JobState.CANCELLED.value):
+            with self.subTest(job_state=terminal_state):
+                job_id = self.create_job("terminal-node")
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    job.state = terminal_state
+
+                with self.assertRaisesRegex(
+                        InvalidStateTransition, "terminal or missing Job"):
+                    self.repository.claim_node_attempt(
+                        job_id,
+                        "terminal-node",
+                        lease_owner="durable-worker",
+                    )
+
+                with self.repository._session() as session:
+                    attempts = (
+                        session.query(AttemptRecord)
+                        .join(
+                            StageRecord,
+                            StageRecord.id == AttemptRecord.stage_id,
+                        )
+                        .join(
+                            WorkflowRecord,
+                            WorkflowRecord.id == StageRecord.workflow_id,
+                        )
+                        .filter(WorkflowRecord.job_id == job_id)
+                        .count()
+                    )
+                self.assertEqual(attempts, 0)
 
     def test_attempt_lease_is_hashed_exclusive_and_renewable(self):
         job_id = self.create_job("p0")
@@ -211,6 +761,86 @@ class WorkflowRepositoryTests(unittest.TestCase):
             job_id, "p0", attempt_id, token, lease_ttl_seconds=60
         )
         self.assertGreater(renewed_expiry, expires_at)
+
+    def test_claim_leases_start_after_contended_job_lock_for_processing_and_publication(self):
+        def hold_job_lock(job_id, release_delay=0.15):
+            locked = threading.Event()
+            release = threading.Event()
+            errors = []
+
+            def hold():
+                try:
+                    with self.repository._session.begin() as session:
+                        session.execute(
+                            select(JobRecord)
+                            .where(JobRecord.id == job_id)
+                            .with_for_update()
+                        ).scalar_one()
+                        locked.set()
+                        release.wait(timeout=3)
+                except Exception as exc:
+                    errors.append(exc)
+
+            holder = threading.Thread(target=hold)
+            holder.start()
+            self.assertTrue(locked.wait(timeout=2), "Job lock was not acquired")
+
+            def release_after_ttl():
+                threading.Event().wait(release_delay)
+                release.set()
+
+            releaser = threading.Thread(target=release_after_ttl)
+            releaser.start()
+            return holder, releaser, release, errors
+
+        job_id = self.create_job("p0")
+        holder, releaser, release, errors = hold_job_lock(job_id)
+        try:
+            processing_id, _, processing_token, processing_expiry = (
+                self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="contended-processing",
+                    lease_ttl_seconds=5.0,
+                )
+            )
+        finally:
+            release.set()
+            holder.join(timeout=2)
+            releaser.join(timeout=2)
+        self.assertFalse(holder.is_alive())
+        self.assertFalse(errors)
+        self.assertGreater(processing_expiry, utcnow())
+        self.repository.renew_attempt_lease(
+            job_id, "p0", processing_id, processing_token,
+            lease_ttl_seconds=30,
+        )
+        self.repository.complete_processing_attempt(
+            job_id, "p0", processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+
+        holder, releaser, release, errors = hold_job_lock(
+            job_id, release_delay=0.75
+        )
+        try:
+            publication_id, _, publication_token, publication_expiry = (
+                self.repository.claim_publication_attempt(
+                    job_id, "p0", lease_owner="contended-publication",
+                    lease_ttl_seconds=0.5,
+                    processing_attempt_id=processing_id,
+                )
+            )
+        finally:
+            release.set()
+            holder.join(timeout=2)
+            releaser.join(timeout=2)
+        self.assertFalse(holder.is_alive())
+        self.assertFalse(errors)
+        self.assertGreater(publication_expiry, utcnow())
+        self.repository.renew_attempt_lease(
+            job_id, "p0", publication_id, publication_token,
+            lease_ttl_seconds=30,
+        )
 
     def test_expired_attempt_lease_is_recovered_and_old_worker_is_fenced(self):
         from unittest.mock import patch
@@ -269,6 +899,230 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.repository.finish_stage(
             job_id, "p0", new_id, lease_token=new_token
         )
+
+    def test_expired_recovery_commits_when_retry_claim_is_rejected(self):
+        from unittest.mock import patch
+
+        job_id = str(uuid4())
+        plan = build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": "source", "key": "input.mp4"},
+                "playlists": [{
+                    "bucket": "output",
+                    "key": "master.m3u8",
+                    "protocol": "hls",
+                }],
+            },
+        )
+        first_node = plan["nodes"][0]
+        first_node["retry_policy"] = {
+            "max_attempts": 3,
+            "backoff": "fixed",
+            "initial_delay_seconds": 60,
+            "max_delay_seconds": 60,
+        }
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-recovery-{}".format(uuid4()),
+            request_hash="c" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+        )
+        stage_key = first_node["stage_key"]
+        attempt_id, _, _, expiry = self.repository.claim_node_attempt(
+            job_id, stage_key, lease_owner="worker-before-crash"
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            with self.assertRaisesRegex(
+                    InvalidStateTransition, "retry delay has not elapsed"):
+                self.repository.claim_node_attempt(
+                    job_id, stage_key, lease_owner="worker-retry-too-early"
+                )
+
+        with self.repository._session() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            stage = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == session.execute(
+                        select(WorkflowRecord.id).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one(),
+                    StageRecord.stage_key == stage_key,
+                )
+            ).scalar_one()
+            outbox = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.job_id == job_id,
+                    OutboxRecord.event_type == "WORKFLOW_PLAN_DISPATCH",
+                )
+            ).scalar_one()
+            self.assertEqual(attempt.state, AttemptState.RETRYABLE.value)
+            self.assertEqual(stage.status, StageState.RETRY_WAIT.value)
+            self.assertEqual(
+                outbox.available_at,
+                attempt.finished_at + timedelta(seconds=60),
+            )
+            retry_not_before = outbox.available_at
+
+        # Eligibility and the durable wake-up use the exact same timestamp.
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=retry_not_before + timedelta(seconds=1)):
+            next_attempt = self.repository.claim_node_attempt(
+                job_id, stage_key, lease_owner="worker-retry-after-delay"
+            )
+        self.assertEqual(next_attempt[1], 2)
+
+    def test_expired_recovery_never_retries_or_rewrites_terminal_jobs(self):
+        from unittest.mock import patch
+
+        for terminal_state in (
+                JobState.CANCELLED,
+                JobState.FAILED,
+                JobState.FINISHED):
+            with self.subTest(job_state=terminal_state.value):
+                job_id = self.create_job("p0")
+                attempt_id, _, _, expiry = self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="worker-terminal-recovery"
+                )
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    job.state = terminal_state.value
+                    job.version += 1
+
+                recovery_time = expiry + timedelta(seconds=1)
+                with patch(
+                        "video_streaming.workflows.repository.utcnow",
+                        return_value=recovery_time):
+                    with self.assertRaises(InvalidStateTransition):
+                        self.repository.claim_attempt(
+                            job_id, "p0", lease_owner="claim-after-terminal"
+                        )
+
+                with self.repository._session() as session:
+                    job = session.get(JobRecord, job_id)
+                    attempt = session.get(AttemptRecord, attempt_id)
+                    workflow = session.execute(
+                        select(WorkflowRecord).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one()
+                    stage = session.execute(
+                        select(StageRecord).where(
+                            StageRecord.workflow_id == workflow.id
+                        )
+                    ).scalar_one()
+                    retry_count = session.execute(
+                        select(func.count()).select_from(OutboxRecord).where(
+                            OutboxRecord.job_id == job_id,
+                            OutboxRecord.event_type == "WORKFLOW_PLAN_DISPATCH",
+                        )
+                    ).scalar_one()
+                    self.assertEqual(job.state, terminal_state.value)
+                    self.assertEqual(attempt.state, AttemptState.CANCELLED.value)
+                    self.assertEqual(stage.status, StageState.CANCELLED.value)
+                    self.assertEqual(retry_count, 0)
+
+    def test_expired_processing_attempt_invalidates_its_validation_report(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, expiry = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-validation-interrupted"
+        )
+        self.repository.mark_validated(
+            job_id,
+            "p0",
+            processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+            complete_attempt=False,
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            replacement = self.repository.claim_attempt(
+                job_id, "p0", lease_owner="worker-reprocessing"
+            )
+
+        with self.repository._session() as session:
+            report = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.stage_id == session.execute(
+                        select(StageRecord.id).join(
+                            WorkflowRecord,
+                            StageRecord.workflow_id == WorkflowRecord.id,
+                        ).where(
+                            WorkflowRecord.job_id == job_id,
+                            StageRecord.stage_key == "p0",
+                        )
+                    ).scalar_one(),
+                    ArtifactRecord.attempt_id == processing_id,
+                    ArtifactRecord.logical_name == "validation-report",
+                )
+            ).scalar_one()
+            old_attempt = session.get(AttemptRecord, processing_id)
+            self.assertEqual(report.status, "INVALIDATED")
+            self.assertEqual(old_attempt.state, AttemptState.RETRYABLE.value)
+        self.assertNotEqual(replacement[0], processing_id)
+
+    def test_expired_publication_attempt_preserves_successful_processing_report(self):
+        from unittest.mock import patch
+
+        job_id = self.create_job("p0")
+        processing_id, _, processing_token, _ = self.repository.claim_attempt(
+            job_id, "p0", lease_owner="worker-processing-complete"
+        )
+        self.repository.complete_processing_attempt(
+            job_id,
+            "p0",
+            processing_id,
+            {"valid": True, "errors": []},
+            lease_token=processing_token,
+        )
+        publication_id, _, publication_token, expiry = (
+            self.repository.claim_publication_attempt(
+                job_id, "p0", lease_owner="worker-publication-interrupted",
+                processing_attempt_id=processing_id,
+            )
+        )
+        self.repository.start_publishing(
+            job_id, "p0", publication_id, lease_token=publication_token
+        )
+        recovery_time = expiry + timedelta(seconds=1)
+
+        with patch(
+                "video_streaming.workflows.repository.utcnow",
+                return_value=recovery_time):
+            replacement = self.repository.claim_publication_attempt(
+                job_id,
+                "p0",
+                lease_owner="worker-publication-retry",
+                processing_attempt_id=processing_id,
+            )
+
+        with self.repository._session() as session:
+            report = session.execute(
+                select(ArtifactRecord).where(
+                    ArtifactRecord.attempt_id == processing_id,
+                    ArtifactRecord.logical_name == "validation-report",
+                )
+            ).scalar_one()
+            expired_publication = session.get(AttemptRecord, publication_id)
+            self.assertEqual(report.status, "AVAILABLE")
+            self.assertEqual(
+                expired_publication.state, AttemptState.RETRYABLE.value
+            )
+        self.assertNotEqual(replacement[0], publication_id)
 
     def test_age_based_recovery_never_expires_a_live_leased_attempt(self):
         job_id = self.create_job("p0")
@@ -1885,7 +2739,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         with self.repository._session.begin() as session:
             attempt = session.get(AttemptRecord, publication_id)
-            attempt.finished_at = utcnow() - timedelta(days=2)
+            attempt.finished_at = utcnow() - timedelta(days=10)
             self.assertEqual(
                 attempt.metrics_json["package_publication"]["prefix"],
                 "vod/.attempts/{}".format(publication_id),
@@ -1929,6 +2783,52 @@ class WorkflowRepositoryTests(unittest.TestCase):
                     limit=100,
                 )
             ],
+        )
+
+        # A cleaned old row must not consume the SQL work limit and starve
+        # the next eligible Attempt.
+        next_job_id = self.create_job("p0")
+        next_processing_id, _, next_processing_token, _ = (
+            self.repository.claim_attempt(
+                next_job_id, "p0", lease_owner="processing-next"
+            )
+        )
+        self.repository.complete_processing_attempt(
+            next_job_id, "p0", next_processing_id,
+            {"valid": True, "errors": []},
+            lease_token=next_processing_token,
+        )
+        next_publication_id, _, next_publication_token, _ = (
+            self.repository.claim_publication_attempt(
+                next_job_id, "p0",
+                lease_owner="package-publisher-next",
+                processing_attempt_id=next_processing_id,
+                package_output_key="vod/next.m3u8",
+                package_output_bucket="vod-output",
+            )
+        )
+        self.repository.fail_attempt(
+            next_job_id, "p0", next_publication_id,
+            retryable=False,
+            error_code="PACKAGE_UPLOAD_FAILED",
+            error_message="synthetic failure",
+            lease_token=next_publication_token,
+        )
+        with self.repository._session.begin() as session:
+            next_attempt = session.get(AttemptRecord, next_publication_id)
+            next_attempt.finished_at = utcnow() - timedelta(days=9)
+
+        limited = self.repository.list_reclaimable_package_attempts(
+            minimum_age_seconds=86400,
+            limit=1,
+            # This test shares its PostgreSQL database with the full suite.
+            # Scope the limit assertion to its two own candidates so older
+            # eligible fixtures from previous tests cannot starve the query.
+            attempt_ids=[publication_id, next_publication_id],
+        )
+        self.assertEqual(
+            [item["attempt_id"] for item in limited],
+            [next_publication_id],
         )
 
     def test_single_file_publication_namespace_is_registered_for_janitor(self):
@@ -2073,6 +2973,120 @@ class WorkflowRepositoryTests(unittest.TestCase):
         )
         self.assertNotEqual(processing_id, replacement_id)
         self.assertTrue(replacement_token)
+
+    def test_claim_refreshes_previously_loaded_job_under_final_lock(self):
+        job_id = self.create_job("p0")
+        updated = {"value": False}
+
+        def mark_job_failed_before_locked_read(
+                connection, cursor, statement, parameters, context, executemany):
+            normalized = statement.upper()
+            if (
+                    not updated["value"]
+                    and "FROM WORKFLOW_JOBS" in normalized
+                    and "FOR UPDATE" in normalized):
+                # require_dependencies has already loaded this Job in the
+                # claiming Session. Commit a concurrent terminal transition
+                # immediately before the final row-locking SELECT.
+                with self.repository.engine.begin() as updater:
+                    updater.execute(
+                        text(
+                            "UPDATE workflow_jobs SET state = 'FAILED' "
+                            "WHERE id = :job_id"
+                        ),
+                        {"job_id": job_id},
+                    )
+                updated["value"] = True
+
+        event.listen(
+            self.repository.engine,
+            "before_cursor_execute",
+            mark_job_failed_before_locked_read,
+        )
+        try:
+            with self.assertRaisesRegex(
+                    InvalidStateTransition, "terminal or missing Job"):
+                self.repository.claim_node_attempt(
+                    job_id, "p0", lease_owner="claim-after-concurrent-failure"
+                )
+        finally:
+            event.remove(
+                self.repository.engine,
+                "before_cursor_execute",
+                mark_job_failed_before_locked_read,
+            )
+
+        self.assertTrue(updated["value"], "final Job lock query was not observed")
+        with self.repository._session() as session:
+            job = session.get(JobRecord, job_id)
+            self.assertEqual(job.state, JobState.FAILED.value)
+            self.assertEqual(
+                session.execute(
+                    select(func.count()).select_from(AttemptRecord).join(
+                        StageRecord, AttemptRecord.stage_id == StageRecord.id
+                    ).join(
+                        WorkflowRecord,
+                        StageRecord.workflow_id == WorkflowRecord.id,
+                    ).where(WorkflowRecord.job_id == job_id)
+                ).scalar_one(),
+                0,
+            )
+
+    def test_lost_package_recovery_rejects_terminal_jobs_and_rolls_back(self):
+        for terminal_state in (
+                JobState.CANCELLED, JobState.FAILED, JobState.FINISHED):
+            with self.subTest(job_state=terminal_state.value):
+                job_id = self.create_job("p0")
+                processing_id, _, token, _ = self.repository.claim_attempt(
+                    job_id, "p0", lease_owner="terminal-package-worker"
+                )
+                self.repository.complete_processing_attempt(
+                    job_id, "p0", processing_id,
+                    {"valid": True, "errors": []},
+                    lease_token=token,
+                    metrics={
+                        "local_package": {
+                            "directory": "/missing/package",
+                            "manifest_path": "/missing/package/master.m3u8",
+                            "expected_renditions": ["master_144p.m3u8"],
+                            "package_type": "hls",
+                        },
+                    },
+                )
+                with self.repository._session.begin() as session:
+                    job = session.get(JobRecord, job_id)
+                    workflow = session.execute(
+                        select(WorkflowRecord).where(
+                            WorkflowRecord.job_id == job_id
+                        )
+                    ).scalar_one()
+                    job.state = terminal_state.value
+                    workflow.state = terminal_state.value
+
+                with self.assertRaisesRegex(
+                        InvalidStateTransition, "terminal Job"):
+                    self.repository.requeue_processing_after_local_package_loss(
+                        job_id,
+                        "p0",
+                        processing_id,
+                        reason="terminal-state-recovery-regression",
+                    )
+
+                snapshot = self.repository.get_job_snapshot(job_id)
+                self.assertEqual(snapshot["status"], terminal_state.value)
+                self.assertEqual(
+                    snapshot["workflow"]["status"], terminal_state.value
+                )
+                stage = snapshot["stages"][0]
+                self.assertEqual(stage["status"], "VALIDATED")
+                validation = next(
+                    item for item in stage["artifacts"]
+                    if item["type"] == "validation_report"
+                )
+                self.assertEqual(validation["status"], "AVAILABLE")
+                self.assertNotIn(
+                    "invalidated_reason", validation["metadata"]
+                )
 
     def test_expired_publication_claim_recovers_before_publishing_transition(self):
         from unittest.mock import patch

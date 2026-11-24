@@ -193,6 +193,53 @@ class SettingsEnvironmentTests(unittest.TestCase):
         self.assertEqual(pricing["model_version"], "1")
         self.assertEqual(pricing["currency"], "RUNIT")
 
+    def test_workflow_tasks_are_discovered_but_dispatch_is_disabled_by_default(self):
+        settings = load_settings({})
+        self.assertIn("video_streaming.workflows", settings.AUTO_DISCOVER_TASKS)
+        self.assertFalse(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
+        self.assertEqual(
+            settings.WORKFLOW_HANDLER_FACTORY,
+            "video_streaming.workflows.handler_factory:build_workflow_handlers",
+        )
+
+    def test_outbox_relay_is_not_scheduled_when_durable_dispatch_is_disabled(self):
+        settings = load_settings({})
+        self.assertNotIn(
+            "relay-durable-workflow-outbox", settings.CELERY_BEAT_SCHEDULE
+        )
+
+    def test_outbox_relay_is_scheduled_only_when_durable_dispatch_is_enabled(self):
+        settings = load_settings({
+            "WORKFLOW_DURABLE_DISPATCH_ENABLED": "True",
+        })
+        relay = settings.CELERY_BEAT_SCHEDULE[
+            "relay-durable-workflow-outbox"
+        ]
+        self.assertEqual(
+            relay["task"], "video_streaming.workflows.relay_outbox"
+        )
+        self.assertEqual(relay["schedule"], 5.0)
+        self.assertEqual(relay["options"]["expires"], 4)
+        recovery = settings.CELERY_BEAT_SCHEDULE[
+            "reconcile-expired-durable-workflows"
+        ]
+        self.assertEqual(
+            recovery["task"],
+            "video_streaming.workflows.reconcile_expired_attempts",
+        )
+        self.assertEqual(recovery["schedule"], 15.0)
+        self.assertEqual(recovery["options"]["expires"], 14)
+
+    def test_workflow_dispatch_can_be_enabled_only_by_explicit_configuration(self):
+        settings = load_settings({
+            "WORKFLOW_DURABLE_DISPATCH_ENABLED": "True",
+            "WORKFLOW_HANDLER_FACTORY": "my_handlers:build_handlers",
+        })
+        self.assertTrue(settings.WORKFLOW_DURABLE_DISPATCH_ENABLED)
+        self.assertEqual(
+            settings.WORKFLOW_HANDLER_FACTORY, "my_handlers:build_handlers"
+        )
+
     def test_playlist_setting_defaults_to_hls(self):
         settings = load_settings({})
 

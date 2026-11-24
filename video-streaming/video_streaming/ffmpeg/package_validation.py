@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from video_streaming.execution.process_control import run_cancellable_process
+from video_streaming.workflows.domain import AttemptLeaseLost
 
 
 class StreamingPackageValidationError(ValueError):
@@ -418,6 +419,39 @@ def _dash_timeline_points(timeline, timescale, start_number):
     return points
 
 
+def _is_video_representation(representation, adaptation):
+    """Classify a DASH Representation using its inherited media type."""
+    content_type = (
+        representation.attrib.get("contentType")
+        or adaptation.attrib.get("contentType")
+        or ""
+    ).lower()
+    if content_type:
+        return content_type == "video"
+    mime_type = (
+        representation.attrib.get("mimeType")
+        or adaptation.attrib.get("mimeType")
+        or ""
+    ).lower()
+    if mime_type:
+        return mime_type.startswith("video/")
+    codecs = (
+        representation.attrib.get("codecs")
+        or adaptation.attrib.get("codecs")
+        or ""
+    )
+    audio_codecs = {
+        "aac", "mp4a", "ac3", "eac3", "opus", "vorbis", "flac",
+        "alac", "mp3", "dts", "truehd",
+    }
+    families = {
+        _codec_family(value.strip())
+        for value in codecs.split(",")
+        if value.strip()
+    }
+    return not families or not families.issubset(audio_codecs)
+
+
 def _validate_dash_representation(root, representation, inherited,
                                   period_duration):
     elements = inherited + [representation]
@@ -519,6 +553,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
         raise StreamingPackageValidationError("DASH MPD contains no Period")
 
     total_representations = 0
+    total_video_representations = 0
     total_segments = 0
     representation_ids = []
     mpd_duration = mpd.attrib.get("mediaPresentationDuration")
@@ -556,10 +591,12 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
                     root, representation, inherited, period_duration
                 )
                 total_segments += segment_count
-                representation_ids.append(representation_id)
+                if _is_video_representation(representation, adaptation):
+                    representation_ids.append(representation_id)
+                    total_video_representations += 1
                 total_representations += 1
 
-    if total_representations == 0 or total_segments == 0:
+    if total_video_representations == 0 or total_segments == 0:
         raise StreamingPackageValidationError(
             "DASH MPD contains no complete representations"
         )
@@ -567,7 +604,7 @@ def validate_dash_package(root: Path, manifest: Path) -> dict:
     return {
         "protocol": "dash",
         "manifest": manifest.name,
-        "renditions": total_representations,
+        "renditions": total_video_representations,
         "rendition_ids": sorted(representation_ids),
         "segments": total_segments,
     }
@@ -655,7 +692,8 @@ def validate_package(
         manifest_path: str = None,
         ffprobe_bin_path: str = None,
         metadata_probe_timeout_seconds: int = 10,
-        should_cancel=None) -> PackageValidationReport:
+        should_cancel=None,
+        on_usage=None) -> PackageValidationReport:
     """Return a structured reusable validation report for a VOD package.
 
     expected_renditions is a list of HLS rendition playlist paths relative
@@ -714,7 +752,11 @@ def validate_package(
                 ffprobe_bin_path=ffprobe_bin_path,
                 timeout_seconds=metadata_probe_timeout_seconds,
                 should_cancel=should_cancel,
+                on_usage=on_usage,
             ))
+    except AttemptLeaseLost:
+        # Lease loss is an ownership failure, not a media-validation result.
+        raise
     except Exception as exc:
         message = str(exc)
         report.errors.append(PackageValidationIssue(
@@ -958,7 +1000,9 @@ def reset_package_directory(directory: str, expected_parent: str):
 
 
 
-def _probe_media(path, ffprobe_bin_path, timeout_seconds, should_cancel=None):
+def _probe_media(
+        path, ffprobe_bin_path, timeout_seconds, should_cancel=None,
+        on_usage=None):
     command = [
         ffprobe_bin_path,
         "-v", "error",
@@ -972,6 +1016,7 @@ def _probe_media(path, ffprobe_bin_path, timeout_seconds, should_cancel=None):
         command,
         timeout_seconds=timeout_seconds,
         should_cancel=should_cancel,
+        on_usage=on_usage,
     )
     return json.loads(stdout.decode("utf-8") or "{}")
 
@@ -1073,7 +1118,8 @@ def _hls_segment_paths(playlist):
 
 
 def _probe_hls_media_duration(
-        playlist, ffprobe_bin_path, timeout_seconds, should_cancel=None):
+        playlist, ffprobe_bin_path, timeout_seconds, should_cancel=None,
+        on_usage=None):
     """Derive media duration from actual packet timestamps, not EXTINF tags.
 
     Fragmented MP4 media fragments require their initialization section and are
@@ -1110,6 +1156,7 @@ def _probe_hls_media_duration(
             command,
             timeout_seconds=timeout_seconds,
             should_cancel=should_cancel,
+            on_usage=on_usage,
         )
         first_pts = None
         last_packet_end = None
@@ -1142,7 +1189,8 @@ def _probe_package_metadata(
         manifest_path,
         ffprobe_bin_path,
         timeout_seconds,
-        should_cancel=None):
+        should_cancel=None,
+        on_usage=None):
     """Probe headers/metadata only; never decode or re-encode media."""
     root = Path(directory).resolve()
     manifest = Path(manifest_path).resolve()
@@ -1159,6 +1207,7 @@ def _probe_package_metadata(
                 metadata = _probe_media(
                     local_path, ffprobe_bin_path, timeout_seconds,
                     should_cancel=should_cancel,
+                    on_usage=on_usage,
                 )
                 streams = metadata.get("streams", [])
                 video_stream = next(
@@ -1229,6 +1278,7 @@ def _probe_package_metadata(
                     ffprobe_bin_path,
                     timeout_seconds,
                     should_cancel=should_cancel,
+                    on_usage=on_usage,
                 )
                 if durations and measured_duration:
                     manifest_duration = sum(durations)
@@ -1250,6 +1300,7 @@ def _probe_package_metadata(
             metadata = _probe_media(
                 manifest, ffprobe_bin_path, timeout_seconds,
                 should_cancel=should_cancel,
+                on_usage=on_usage,
             )
             streams = [
                 stream for stream in metadata.get("streams", [])
@@ -1264,7 +1315,14 @@ def _probe_package_metadata(
                             adaptation, "Representation"):
                         item = dict(representation.attrib)
                         item.setdefault("codecs", inherited_codecs)
-                        representations.append(item)
+                        item.setdefault(
+                            "contentType", adaptation.attrib.get("contentType")
+                        )
+                        item.setdefault(
+                            "mimeType", adaptation.attrib.get("mimeType")
+                        )
+                        if _is_video_representation(representation, adaptation):
+                            representations.append(item)
 
             if streams and len(streams) != len(representations):
                 add(

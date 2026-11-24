@@ -32,7 +32,8 @@ CELERY_BROKER_HEARTBEAT = 60
 AUTO_DISCOVER_TASKS = [
     f'{PROJECT_NAME}.core',
     f'{PROJECT_NAME}.grpc',
-    f'{PROJECT_NAME}.ffmpeg'
+    f'{PROJECT_NAME}.ffmpeg',
+    f'{PROJECT_NAME}.workflows',
 ]
 
 BASE_TASK_CLASS = 'video_streaming.core.tasks:BaseTask'
@@ -410,3 +411,43 @@ CELERY_BEAT_SCHEDULE = {
         "options": {"expires": 1800},
     },
 }
+
+
+##################################################
+#    Durable workflow secret envelope             #
+##################################################
+
+# Durable callback secrets are disabled unless a KMS key and an exact
+# workload-role ARN prefix are configured. No local/static fallback exists.
+WORKFLOW_SECRET_KMS_KEY_ID = env_config.get(
+    "WORKFLOW_SECRET_KMS_KEY_ID", default="", cast=str)
+WORKFLOW_SECRET_KMS_REGION = env_config.get(
+    "WORKFLOW_SECRET_KMS_REGION", default=S3_REGION_NAME, cast=str)
+WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX = env_config.get(
+    "WORKFLOW_SECRET_WORKER_ROLE_ARN_PREFIX", default="", cast=str)
+
+
+# Durable workflow dispatch remains opt-in until the complete production
+# operation registry and real infrastructure acceptance suite are installed.
+WORKFLOW_DURABLE_DISPATCH_ENABLED = env_config.get(
+    "WORKFLOW_DURABLE_DISPATCH_ENABLED", default=False, cast=bool)
+WORKFLOW_HANDLER_FACTORY = env_config.get(
+    "WORKFLOW_HANDLER_FACTORY",
+    default="video_streaming.workflows.handler_factory:build_workflow_handlers",
+    cast=str)
+
+
+# Start the transactional outbox relay only when the durable backend has been
+# explicitly enabled. The relay itself validates the complete handler registry
+# before claiming rows.
+if WORKFLOW_DURABLE_DISPATCH_ENABLED:
+    CELERY_BEAT_SCHEDULE["relay-durable-workflow-outbox"] = {
+        "task": "video_streaming.workflows.relay_outbox",
+        "schedule": 5.0,
+        "options": {"expires": 4},
+    }
+    CELERY_BEAT_SCHEDULE["reconcile-expired-durable-workflows"] = {
+        "task": "video_streaming.workflows.reconcile_expired_attempts",
+        "schedule": 15.0,
+        "options": {"expires": 14},
+    }

@@ -5,6 +5,10 @@ This documentation describes both the **verified current implementation** and th
 ## Start here
 
 - [Reliability and observability engineering standard](engineering/reliability-observability-standard.md) — mandatory failure, telemetry, SLO, test and operational-readiness requirements.
+- [Durable VOD release and rollback runbook](operations/durable-vod-release-runbook.md) — evidence-based migration, legacy Job reconciliation, AWS/KMS/S3 validation, broker recovery, staged activation and rollback gates.
+- [Workflow outbox relay operations](operations/workflow-outbox-relay.md) — relay semantics, operator CLI, failure handling and activation boundary.
+- [Workflow callback secret envelopes](operations/workflow-secret-envelope.md) — KMS envelope trust boundaries, IAM separation and operational constraints.
+- [Transactional outbox foundation](operations/transactional-outbox-foundation.md) — persistence and production-dispatch boundary.
 - [ADR 0006: Reliability and observability](decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md) — accepted cross-cutting architecture constraints.
 - [ADR 0008: Job-scoped encrypted secret references](decisions/0008-job-scoped-encrypted-secret-references.md) — opaque references, envelope encryption, authorization, rotation, retention and legacy webhook migration.
 - [ADR 0009: Provider-neutral gRPC identity and resource authorization](decisions/0009-provider-neutral-grpc-identity-and-resource-authorization.md) — OIDC/JWT trust configuration, immutable principal, tenant ownership, fail-closed rollout and legacy Job policy.
@@ -28,7 +32,7 @@ This documentation describes both the **verified current implementation** and th
 ## Documentation rules
 
 - **Evidence before claims:** distinguish repository facts, measured results, assumptions, and proposals.
-- **No roadmap-as-feature:** planned capabilities must not be described as supported capabilities in README/API docs.
+- **No roadmap-as-feature:** planned capabilities must not be described as supported features in README/API docs.
 - **Contract before implementation:** public API, job state, retry, cancellation, and event semantics must be specified before replacing internals.
 - **Reliability before optimization:** correctness, isolation, durable state, and observability precede GPU scheduling, edge execution, and distributed inference.
 - **Portable by design:** keep provider-specific behavior behind replaceable adapters; avoid coupling the core domain to one cloud.

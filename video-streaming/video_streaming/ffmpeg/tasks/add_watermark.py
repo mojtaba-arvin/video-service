@@ -18,7 +18,10 @@ from video_streaming.workflows.metrics import (
     child_cpu_seconds_since,
     configured_pricing,
 )
-from video_streaming.execution.process_control import run_streaming_process
+from video_streaming.execution.process_control import (
+    ProcessUsageAccumulator,
+    run_streaming_process,
+)
 from video_streaming.execution.media_probe import probe_media
 from .base import BaseStreamingTask
 from .mixins import AddWatermarkMixin
@@ -104,27 +107,29 @@ def add_watermark(
         lease_token,
         lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
-    process_usage = {}
+    process_usage = ProcessUsageAccumulator()
+
+    def aggregate_process_usage():
+        return process_usage.aggregate()
 
     def measured_cpu_seconds():
+        sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
         return max(
             child_cpu_seconds_since(cpu_started),
-            float(process_usage.get("cpu_seconds") or 0.0),
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
         )
 
     def process_resource_metrics():
-        peak_memory_bytes = process_usage.get("peak_memory_bytes")
+        aggregate = aggregate_process_usage()
         return {
-            "peak_memory_bytes": (
-                int(peak_memory_bytes) if peak_memory_bytes else None
-            ),
-            "memory_duration_ms": process_usage.get("memory_duration_ms"),
+            "peak_memory_bytes": aggregate["peak_memory_bytes"],
+            "memory_duration_ms": aggregate["memory_duration_ms"],
         }
 
     output_path = None
 
     def capture_process_usage(metrics):
-        process_usage.update(metrics)
+        process_usage.record(metrics)
         lease_heartbeat.on_usage(metrics)
 
     try:
@@ -197,6 +202,7 @@ def add_watermark(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=capture_process_usage,
         )
         video_stream = next(
             (item for item in probe.get("streams", [])
@@ -291,7 +297,7 @@ def add_watermark(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=child_cpu_seconds_since(cpu_started),
+        cpu_seconds=measured_cpu_seconds(),
         **process_resource_metrics(),
         validation_report=validation_report,
         artifact_type="video_file",

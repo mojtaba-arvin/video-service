@@ -19,12 +19,14 @@ class MediaProbeTests(unittest.TestCase):
             b"",
         )
         cancelled = lambda: False
+        usage = lambda metrics: None
 
         result = probe_media(
             "/tmp/output.mp4",
             "/usr/bin/ffprobe",
             timeout_seconds=7,
             should_cancel=cancelled,
+            on_usage=usage,
         )
 
         self.assertEqual(result["streams"][0]["width"], 320)
@@ -39,6 +41,7 @@ class MediaProbeTests(unittest.TestCase):
             ],
             timeout_seconds=7,
             should_cancel=cancelled,
+            on_usage=usage,
         )
 
     @patch("video_streaming.execution.media_probe.run_cancellable_process")
@@ -98,6 +101,7 @@ class MediaProbeTests(unittest.TestCase):
             output = Path(directory) / "thumbnail.png"
             output.write_bytes(b"image")
             cancelled = lambda: False
+            usage = lambda metrics: None
 
             result = validate_thumbnail_output(
                 str(output),
@@ -106,6 +110,7 @@ class MediaProbeTests(unittest.TestCase):
                 expected_height=180,
                 timeout_seconds=4,
                 should_cancel=cancelled,
+                on_usage=usage,
             )
 
         self.assertEqual(result, {"width": 320, "height": 180})
@@ -114,6 +119,7 @@ class MediaProbeTests(unittest.TestCase):
             ffprobe_bin_path="/usr/bin/ffprobe",
             timeout_seconds=4,
             should_cancel=cancelled,
+            on_usage=usage,
         )
 
 

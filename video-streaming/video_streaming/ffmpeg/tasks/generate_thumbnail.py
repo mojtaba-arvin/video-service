@@ -14,6 +14,7 @@ from video_streaming.ffmpeg.thumbnail import (
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.domain import AttemptLeaseLost
 from video_streaming.workflows.lease import AttemptLeaseHeartbeat
+from video_streaming.execution.process_control import ProcessUsageAccumulator
 from video_streaming.workflows.metrics import (
     capture_child_cpu_seconds,
     child_cpu_seconds_since,
@@ -117,12 +118,26 @@ def generate_thumbnail(
         lease_token,
         lease_ttl_seconds=settings.WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS,
     )
+    # Keep the caller's explicit location for resolution. The actual file
+    # written by this Attempt is tracked separately below so cleanup never
+    # removes a caller-owned path from an earlier or concurrent execution.
+    requested_output_path = output_path
     output_path = None
-    usage_metrics = {}
+    usage_metrics = ProcessUsageAccumulator()
 
     def capture_usage(metrics):
-        usage_metrics.update(metrics)
+        usage_metrics.record(metrics)
         lease_heartbeat.on_usage(metrics)
+
+    def aggregate_process_usage():
+        return usage_metrics.aggregate()
+
+    def measured_cpu_seconds():
+        sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
+        return max(
+            child_cpu_seconds_since(cpu_started),
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
+        )
 
     try:
         # Redis status is a projection; the PostgreSQL lease remains authoritative.
@@ -138,7 +153,7 @@ def generate_thumbnail(
         output_path, directory = self.ensure_set_output_location(
             request_id,
             output_id,
-            output_path=output_path,
+            output_path=requested_output_path,
             s3_output_key=s3_output_key,
         )
         directory = os.path.join(directory, ".attempts", attempt_id)
@@ -173,6 +188,7 @@ def generate_thumbnail(
                 self.is_forced_to_stop(request_id)
                 or self.is_output_forced_to_stop(request_id, output_id)
             ),
+            on_usage=capture_usage,
         )
         lease_heartbeat.assert_owned()
         validation_report = {
@@ -194,11 +210,13 @@ def generate_thumbnail(
                 "input_bytes": input_bytes,
                 # The publisher owns the storage charge for the final object.
                 "output_bytes": 0,
-                "cpu_seconds": usage_metrics.get(
-                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
-                ),
-                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
-                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                "cpu_seconds": measured_cpu_seconds(),
+                "peak_memory_bytes": aggregate_process_usage()[
+                    "peak_memory_bytes"
+                ],
+                "memory_duration_ms": aggregate_process_usage()[
+                    "memory_duration_ms"
+                ],
             },
             pricing=configured_pricing(settings),
         )
@@ -219,11 +237,13 @@ def generate_thumbnail(
                 reason="CANCELLED_DURING_THUMBNAIL_GENERATION",
                 metrics={
                     "input_bytes": input_bytes,
-                    "cpu_seconds": usage_metrics.get(
-                        "cpu_seconds", child_cpu_seconds_since(cpu_started)
-                    ),
-                    "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
-                    "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                    "cpu_seconds": measured_cpu_seconds(),
+                    "peak_memory_bytes": aggregate_process_usage()[
+                        "peak_memory_bytes"
+                    ],
+                    "memory_duration_ms": aggregate_process_usage()[
+                        "memory_duration_ms"
+                    ],
                 },
                 pricing=configured_pricing(settings),
                 lease_token=lease_token,
@@ -244,11 +264,13 @@ def generate_thumbnail(
             error_message=str(exc),
             metrics={
                 "input_bytes": input_bytes,
-                "cpu_seconds": usage_metrics.get(
-                    "cpu_seconds", child_cpu_seconds_since(cpu_started)
-                ),
-                "peak_memory_bytes": usage_metrics.get("peak_memory_bytes"),
-                "memory_duration_ms": usage_metrics.get("memory_duration_ms"),
+                "cpu_seconds": measured_cpu_seconds(),
+                "peak_memory_bytes": aggregate_process_usage()[
+                    "peak_memory_bytes"
+                ],
+                "memory_duration_ms": aggregate_process_usage()[
+                    "memory_duration_ms"
+                ],
             },
             pricing=configured_pricing(settings),
             lease_token=lease_token,
@@ -265,11 +287,9 @@ def generate_thumbnail(
         attempt_id=attempt_id,
         attempt_number=attempt_number,
         input_bytes=input_bytes,
-        cpu_seconds=usage_metrics.get(
-            "cpu_seconds", child_cpu_seconds_since(cpu_started)
-        ),
-        peak_memory_bytes=usage_metrics.get("peak_memory_bytes"),
-        memory_duration_ms=usage_metrics.get("memory_duration_ms"),
+        cpu_seconds=measured_cpu_seconds(),
+        peak_memory_bytes=aggregate_process_usage()["peak_memory_bytes"],
+        memory_duration_ms=aggregate_process_usage()["memory_duration_ms"],
         validation_report=validation_report,
         artifact_type="image_thumbnail",
         media_type="image/{}".format(

@@ -5,6 +5,7 @@ must not import protobuf, Celery, storage SDKs, or FFmpeg task signatures.
 """
 
 import math
+import re
 from copy import deepcopy
 
 from video_streaming.workflows.execution_plan import (
@@ -75,16 +76,75 @@ def _node(
         dependencies,
         parameters,
         retry_policy,
-        resource_profile):
+        resource_profile,
+        stage_key=None):
     return {
         "node_id": node_id,
         "operation": operation,
-        "stage_key": node_id,
+        "stage_key": stage_key or node_id,
         "depends_on": list(dependencies),
         "parameters": parameters,
         "retry_policy": deepcopy(DEFAULT_RETRY_POLICIES[retry_policy]),
         "resource_profile": resource_profile,
     }
+
+
+def _normalize_custom_qualities(value, field):
+    if not isinstance(value, list):
+        raise VODPlanBuildError("{} must be a list".format(field))
+    normalized = []
+    for index, item in enumerate(value):
+        item_field = "{}[{}]".format(field, index)
+        if not isinstance(item, dict) or set(item) != {"size", "bitrate"}:
+            raise VODPlanBuildError(
+                "{} must contain exactly size and bitrate".format(item_field)
+            )
+        size = item["size"]
+        if size is not None and (
+            not isinstance(size, list)
+            or len(size) != 2
+            or any(
+                isinstance(dimension, bool)
+                or not isinstance(dimension, int)
+                or dimension <= 0
+                for dimension in size
+            )
+        ):
+            raise VODPlanBuildError(
+                "{}.size must be two positive integers or null".format(item_field)
+            )
+        bitrate = item["bitrate"]
+        if bitrate is not None and (
+            not isinstance(bitrate, list)
+            or len(bitrate) != 3
+            or any(
+                component is not None and (
+                    isinstance(component, bool)
+                    or not isinstance(component, int)
+                    or component <= 0
+                )
+                for component in bitrate
+            )
+            or not any(component is not None for component in bitrate)
+        ):
+            raise VODPlanBuildError(
+                "{}.bitrate must contain three positive integers or nulls".format(
+                    item_field
+                )
+            )
+        if size is None and bitrate is None:
+            raise VODPlanBuildError(
+                "{} must define a size or bitrate".format(item_field)
+            )
+        if (size is None) != (bitrate is None):
+            raise VODPlanBuildError(
+                "{} must define both size and bitrate".format(item_field)
+            )
+        normalized.append({
+            "size": list(size) if size is not None else None,
+            "bitrate": list(bitrate) if bitrate is not None else None,
+        })
+    return normalized
 
 
 def _normalize_output(output, kind, index):
@@ -106,9 +166,19 @@ def _normalize_output(output, kind, index):
         output.get("create_bucket", False),
         "{}[{}].create_bucket".format(kind, index),
     )
+    output_id = output.get("output_id")
+    if output_id is not None:
+        output_id = _required_text(
+            output_id, "{}[{}].output_id".format(kind, index)
+        )
+        if len(output_id) > 128:
+            raise VODPlanBuildError(
+                "{}[{}].output_id exceeds 128 characters".format(kind, index)
+            )
     normalized = {
         "bucket": bucket,
         "key": key,
+        "output_id": output_id,
         "use_watermark": use_watermark,
         "dont_replace": dont_replace,
         "create_bucket": create_bucket,
@@ -136,21 +206,33 @@ def _normalize_output(output, kind, index):
             "video_codec": output.get("video_codec"),
             "audio_codec": output.get("audio_codec"),
             "fragmented": _as_bool(output.get("fragmented", False), "{}[{}].fragmented".format(kind, index)),
-            "custom_qualities": deepcopy(
-                output.get("custom_qualities", [])
+            "custom_qualities": _normalize_custom_qualities(
+                output.get("custom_qualities", []),
+                "{}[{}].custom_qualities".format(kind, index),
             ),
         })
     else:
         thumbnail_time = output.get("thumbnail_time")
-        if (
-            isinstance(thumbnail_time, bool)
-            or not isinstance(thumbnail_time, (int, float))
-            or not math.isfinite(thumbnail_time)
-            or thumbnail_time < 0
-        ):
+        numeric_time = (
+            not isinstance(thumbnail_time, bool)
+            and isinstance(thumbnail_time, (int, float))
+            and math.isfinite(thumbnail_time)
+            and thumbnail_time >= 0
+        )
+        timestamp_time = (
+            isinstance(thumbnail_time, str)
+            and bool(re.fullmatch(
+                r"(?:[0-9]{1,3}:)?[0-5]?[0-9]:[0-5]?[0-9](?:\.[0-9]{1,3})?",
+                thumbnail_time.strip(),
+            ))
+        )
+        if not (numeric_time or timestamp_time):
             raise VODPlanBuildError(
-                "{}[{}].thumbnail_time must be non-negative".format(kind, index)
+                "{}[{}].thumbnail_time must be non-negative and either a "
+                "number or an FFmpeg timestamp".format(kind, index)
             )
+        if isinstance(thumbnail_time, str):
+            thumbnail_time = thumbnail_time.strip()
         for field in ("scale_width", "scale_height"):
             value = output.get(field, 0)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -244,6 +326,9 @@ def build_vod_execution_plan(
             "create_bucket": _as_bool(
                 watermark.get("create_bucket", False),
                 "watermark.create_bucket",
+            ),
+            "output_id": _optional_text(
+                watermark.get("output_id"), "watermark.output_id"
             ),
         })
     if not outputs:
@@ -416,7 +501,9 @@ def build_vod_execution_plan(
                 "key": item["key"],
                 "output_id": prefix,
                 "protocol": item["protocol"],
+                "dont_replace": item["dont_replace"],
             }, "upload", "upload",
+            stage_key=item.get("output_id") or upload_id,
         ))
         append_callback(prefix, upload_id)
 
@@ -442,7 +529,9 @@ def build_vod_execution_plan(
                 "bucket": item["bucket"],
                 "key": item["key"],
                 "output_id": prefix,
+                "dont_replace": item["dont_replace"],
             }, "upload", "upload",
+            stage_key=item.get("output_id") or upload_id,
         ))
         append_callback(prefix, upload_id)
 
@@ -453,7 +542,9 @@ def build_vod_execution_plan(
                 "bucket": watermark_output_bucket,
                 "key": watermark_output_key,
                 "output_id": "watermarked-video",
+                "dont_replace": watermark.get("dont_replace", False),
             }, "upload", "upload",
+            stage_key=watermark.get("output_id") or upload_id,
         ))
         append_callback("watermarked-video", upload_id)
 

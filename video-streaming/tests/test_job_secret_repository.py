@@ -1,5 +1,6 @@
 """SQLite-backed contract tests for atomic Job secret persistence."""
 
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -13,11 +14,16 @@ from video_streaming.security.secret_store import (
     prepare_secret,
     resolve_secret,
 )
+from video_streaming.workflows.domain import IdempotencyConflict
 from video_streaming.workflows.repository import (
     JobRecord,
     JobSecretRecord,
+    WorkflowEventRecord,
     WorkflowRepository,
     utcnow,
+)
+from video_streaming.workflows.worker_identity import (
+    WorkflowWorkerIdentity,
 )
 
 
@@ -39,17 +45,25 @@ class FakeKeyProvider:
 
 class JobSecretRepositoryTests(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            future=True,
-        )
+        database_url = os.environ.get("WORKFLOW_DATABASE_URL")
+        if database_url:
+            self.engine = create_engine(
+                database_url,
+                pool_pre_ping=True,
+                future=True,
+            )
+        else:
+            self.engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                future=True,
+            )
 
-        @event.listens_for(self.engine, "connect")
-        def enable_foreign_keys(connection, _record):
-            cursor = connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+            @event.listens_for(self.engine, "connect")
+            def enable_foreign_keys(connection, _record):
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
         self.repository = WorkflowRepository(
             None, engine=self.engine, create_schema=True
@@ -189,6 +203,126 @@ class JobSecretRepositoryTests(unittest.TestCase):
             resolve_secret(persisted, original.context, self.provider),
             "https://first.invalid/hook",
         )
+
+    def test_iam_worker_can_fetch_only_job_scoped_encrypted_envelope(self):
+        job_id = str(uuid4())
+        original = self.envelope(job_id)
+        self.create_owned_job(job_id, envelope=original)
+        worker = WorkflowWorkerIdentity(
+            account_id="123456789012",
+            arn=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/worker-1"
+            ),
+            role_arn_prefix=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/"
+            ),
+        )
+        stored = self.repository.get_job_secret_envelope_for_worker(
+            job_id, worker, "webhook.callback", original.secret_id
+        )
+        self.assertEqual(stored.secret_id, original.secret_id)
+        self.assertEqual(
+            resolve_secret(stored, original.context, self.provider),
+            "https://callback.invalid/hook",
+        )
+        with self.repository._session() as session:
+            audit = session.query(WorkflowEventRecord).filter_by(
+                job_id=job_id,
+                event_type="JOB_SECRET_RESOLVE_AUTHORIZED",
+            ).one()
+            self.assertEqual(
+                audit.payload_json["worker_arn"], worker.arn
+            )
+            self.assertNotIn("callback.invalid", repr(audit.payload_json))
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope_for_worker(
+                job_id, object(), "webhook.callback", original.secret_id
+            )
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_job_secret_envelope_for_worker(
+                job_id, worker, "webhook.callback", "not-the-plan-secret"
+            )
+
+    def test_concurrent_idempotent_plan_reuses_accepted_secret_reference(self):
+        accepted_job_id = str(uuid4())
+        candidate_job_id = str(uuid4())
+        key = "idem-plan-secret-{}".format(uuid4())
+        accepted = self.envelope(
+            accepted_job_id, value="https://first.invalid/callback"
+        )
+        candidate = self.envelope(
+            candidate_job_id, value="https://first.invalid/callback"
+        )
+
+        def plan(job_id, secret_id):
+            return {
+                "schema_version": 1,
+                "workflow_name": "video.vod",
+                "workflow_version": "1",
+                "job_id": job_id,
+                "nodes": [{
+                    "node_id": "callback",
+                    "operation": "video.webhook.deliver",
+                    "stage_key": "callback",
+                    "depends_on": [],
+                    "parameters": {
+                        "enabled": True,
+                        "webhook_secret_ref": secret_id,
+                    },
+                    "retry_policy": {
+                        "max_attempts": 3,
+                        "backoff": "exponential",
+                        "initial_delay_seconds": 1,
+                        "max_delay_seconds": 30,
+                    },
+                    "resource_profile": "control",
+                }],
+            }
+
+        self.repository.create_job(
+            job_id=accepted_job_id,
+            idempotency_key=key,
+            request_hash="f" * 64,
+            execution_plan=plan(accepted_job_id, accepted.secret_id),
+            owner_principal=self.principal,
+            secret_envelopes=[accepted],
+        )
+        replay_id, created = self.repository.create_job(
+            job_id=candidate_job_id,
+            idempotency_key=key,
+            request_hash="f" * 64,
+            execution_plan=plan(candidate_job_id, candidate.secret_id),
+            owner_principal=self.principal,
+            secret_envelopes=[candidate],
+        )
+        self.assertEqual((replay_id, created), (accepted_job_id, False))
+        stored = self.repository.get_job_secret_envelope(
+            accepted_job_id, self.principal, "webhook.callback"
+        )
+        self.assertEqual(stored.secret_id, accepted.secret_id)
+        self.assertEqual(
+            self.repository.get_execution_plan(accepted_job_id)["plan"]
+            ["nodes"][0]["parameters"]["webhook_secret_ref"],
+            accepted.secret_id,
+        )
+
+    def test_idempotency_lookup_returns_existing_job_without_secret_rotation(self):
+        job_id = str(uuid4())
+        key = "idem-lookup-{}".format(uuid4())
+        envelope = self.envelope(job_id)
+        self.create_owned_job(job_id, key=key, envelope=envelope)
+        self.assertEqual(
+            self.repository.find_idempotent_job(
+                key, "a" * 64, owner_principal=self.principal
+            ),
+            job_id,
+        )
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.find_idempotent_job(
+                key, "b" * 64, owner_principal=self.principal
+            )
 
     def test_job_creation_failure_rolls_back_secret_and_parent_rows(self):
         job_id = str(uuid4())

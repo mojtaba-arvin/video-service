@@ -344,6 +344,52 @@ class StreamingPackageValidationTests(unittest.TestCase):
                 str(directory), str(directory / "master.m3u8"), "hls"
             )
 
+    def test_dash_rendition_validation_excludes_audio_representations(self):
+        from unittest.mock import patch
+
+        directory = self.root / "dash-audio-and-video"
+        directory.mkdir()
+        for name in (
+            "video-init.mp4", "video-0.m4s",
+            "audio-init.mp4", "audio-0.m4s",
+        ):
+            (directory / name).write_bytes(b"segment-data")
+        manifest = directory / "video.mpd"
+        manifest.write_text(
+            '<MPD type="static" mediaPresentationDuration="PT1S">'
+            '<Period>'
+            '<AdaptationSet id="0" contentType="video" mimeType="video/mp4">'
+            '<Representation id="0" width="320" height="180" '
+            'bandwidth="100000" codecs="avc1.64000a">'
+            '<SegmentList><Initialization sourceURL="video-init.mp4"/>'
+            '<SegmentURL media="video-0.m4s"/></SegmentList>'
+            '</Representation></AdaptationSet>'
+            '<AdaptationSet id="1" contentType="audio" mimeType="audio/mp4">'
+            '<Representation id="1" bandwidth="64000" codecs="mp4a.40.2">'
+            '<SegmentList><Initialization sourceURL="audio-init.mp4"/>'
+            '<SegmentURL media="audio-0.m4s"/></SegmentList>'
+            '</Representation></AdaptationSet>'
+            '</Period></MPD>',
+            encoding="utf-8",
+        )
+        metadata = {
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "width": 320, "height": 180, "bit_rate": "90000",
+            }],
+            "format": {"duration": "1"},
+        }
+        with patch(
+            "video_streaming.ffmpeg.package_validation._probe_media",
+            return_value=metadata,
+        ):
+            report = validate_package(
+                str(directory), "dash", ["0"], str(manifest),
+                ffprobe_bin_path="/usr/bin/ffprobe",
+            )
+        self.assertTrue(report.valid, report.errors)
+        self.assertEqual(report.actual_renditions, ["0"])
+
     def test_rejects_unsupported_dash_template_repeat(self):
         directory = self.root / "dash-negative-repeat"
         manifest = self.make_dash_package(directory)

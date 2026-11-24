@@ -5,12 +5,74 @@ import selectors
 import signal
 import subprocess
 import time
+import uuid
 
 import psutil
 
 
 class ProcessTreeTerminationError(RuntimeError):
     """Raised when one or more descendants survive forced termination."""
+
+
+class ProcessUsageAccumulator:
+    """Aggregate cumulative usage samples without treating unknown as zero.
+
+    Each supervisor emits cumulative samples for one opaque subprocess ID.
+    Keep the greatest known value per process; a later partial sample must not
+    erase an earlier observation. Across processes, CPU and lifetime are
+    additive while peak process-tree RSS is the maximum observed value.
+    """
+
+    _FIELDS = (
+        "cpu_seconds",
+        "peak_memory_bytes",
+        "memory_duration_ms",
+    )
+
+    def __init__(self):
+        self._samples = {}
+
+    def record(self, metrics):
+        if not isinstance(metrics, dict):
+            raise TypeError("process usage metrics must be a mapping")
+        process_id = str(metrics.get("process_id") or "legacy")
+        sample = dict(self._samples.get(process_id, {}))
+        for field in self._FIELDS:
+            value = metrics.get(field)
+            if value is None:
+                continue
+            previous = sample.get(field)
+            sample[field] = (
+                max(previous, value) if previous is not None else value
+            )
+        process_pid = metrics.get("process_pid")
+        if process_pid is not None:
+            sample["process_pid"] = process_pid
+        self._samples[process_id] = sample
+
+    def aggregate(self):
+        values = {
+            field: [
+                sample[field]
+                for sample in self._samples.values()
+                if sample.get(field) is not None
+            ]
+            for field in self._FIELDS
+        }
+        return {
+            "cpu_seconds": (
+                sum(float(value) for value in values["cpu_seconds"])
+                if values["cpu_seconds"] else None
+            ),
+            "peak_memory_bytes": (
+                max(int(value) for value in values["peak_memory_bytes"])
+                if values["peak_memory_bytes"] else None
+            ),
+            "memory_duration_ms": (
+                sum(int(value) for value in values["memory_duration_ms"])
+                if values["memory_duration_ms"] else None
+            ),
+        }
 
 
 def _active_process_group_members(process_group_id):
@@ -171,8 +233,14 @@ def run_cancellable_process(
     Both stdout and stderr are drained while polling. Dedicated process groups
     ensure that descendants are terminated even if the root process has exited
     but a child still holds an inherited pipe open. When requested, usage
-    callbacks receive sampled process-tree CPU, peak RSS and elapsed execution
-    time; elapsed time is distinct from the enclosing durable attempt duration.
+    callbacks receive cumulative per-process CPU, peak RSS and elapsed time.
+    Each callback sample supersedes the prior sample with the same process_id.
+    memory_duration_ms is the subprocess wall-clock lifetime (not an RSS
+    integral); attempt aggregators sum each process's latest duration, while
+    peak_memory_bytes is the maximum observed process-tree RSS. Cost accounting
+    therefore uses peak RSS multiplied by cumulative subprocess wall time as
+    an explicitly approximate memory-duration measure, not as measured
+    byte-milliseconds. This is distinct from the enclosing Attempt duration.
 
     Raises:
         ProcessExecutionCancelled: when should_cancel returns True.
@@ -191,6 +259,9 @@ def run_cancellable_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    # A PID is not a durable identity: the OS may reuse it for a later FFprobe.
+    # Keep one opaque identity for every callback emitted by this subprocess.
+    process_id = uuid.uuid4().hex
     started_at = time.monotonic()
     terminated = False
     peak_memory_bytes = 0
@@ -199,6 +270,8 @@ def run_cancellable_process(
     def emit_usage():
         if on_usage is not None:
             on_usage({
+                "process_id": process_id,
+                "process_pid": process.pid,
                 "cpu_seconds": sampled_cpu_seconds,
                 "peak_memory_bytes": peak_memory_bytes or None,
                 "memory_duration_ms": max(
@@ -300,7 +373,8 @@ def run_streaming_process(
     deadlines and cancellation are checked even when FFmpeg stops emitting
     output. Both CR and LF delimit progress records, matching FFmpeg console
     output. The process runs in a dedicated session so orphaned descendants are
-    still covered by timeout/cancellation.
+    still covered by timeout/cancellation. Usage callbacks follow the same
+    per-process cumulative-sample contract as run_cancellable_process().
 
     Raises:
         ProcessExecutionCancelled: when should_cancel returns True.
@@ -321,6 +395,8 @@ def run_streaming_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    # Do not use PID as the key: sequential subprocesses can reuse a PID.
+    process_id = uuid.uuid4().hex
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     pending = bytearray()
@@ -338,6 +414,8 @@ def run_streaming_process(
         peak_memory_bytes = max(peak_memory_bytes, resident_bytes)
         if on_usage is not None:
             on_usage({
+                "process_id": process_id,
+                "process_pid": process.pid,
                 "cpu_seconds": sampled_cpu_seconds,
                 "peak_memory_bytes": peak_memory_bytes or None,
                 "memory_duration_ms": max(

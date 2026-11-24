@@ -5,6 +5,7 @@ on:
     branches: [develop]
   push:
     branches: [develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -269,6 +270,47 @@ jobs:
       - name: Prepare safe environment for runtime logging tests
         run: cp video-streaming/video_streaming/.env.example video-streaming/video_streaming/.env
 
+      - name: Run required durable VOD request adapter tests
+        env:
+          PYTHONPATH: video-streaming
+          VIDEO_STREAMING_REQUIRE_GRPC_TESTS: "1"
+        run: |
+          python - <<'PY'
+          import sys
+          import unittest
+
+          loader = unittest.TestLoader()
+          suite = loader.discover(
+              "video-streaming/tests",
+              pattern="test_durable_vod_request_adapter.py",
+          )
+          if loader.errors:
+              raise SystemExit(
+                  "Required gRPC adapter test discovery failed:\\n"
+                  + "\\n".join(loader.errors)
+              )
+          discovered = suite.countTestCases()
+          if discovered < 1:
+              raise SystemExit("Required gRPC adapter lane discovered zero tests")
+
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          skipped = len(result.skipped)
+          print(
+              "adapter tests: discovered={}, executed={}, skipped={}, "
+              "failures={}, errors={}".format(
+                  discovered, result.testsRun, skipped,
+                  len(result.failures), len(result.errors)
+              )
+          )
+          if (
+              result.testsRun != discovered
+              or skipped != 0
+              or result.failures
+              or result.errors
+          ):
+              raise SystemExit("Required gRPC adapter acceptance failed")
+          PY
+
       - name: Run sensitive logging regression tests
         env:
           PYTHONPATH: video-streaming
@@ -294,6 +336,16 @@ jobs:
             -p 'test_workflow_repository.py' \
             -v
 
+      - name: Run transactional outbox tests (Python 3.9)
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_outbox.py' \
+            -v
+
       - name: Run full VOD integration test
         env:
           PYTHONPATH: video-streaming
@@ -306,6 +358,108 @@ jobs:
           python -m unittest discover \
             -s video-streaming/tests \
             -p 'test_vod_pipeline_e2e.py' \
+            -v
+
+      - name: Run durable workflow Celery consumer tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_tasks.py' \
+            -v
+
+      - name: Run required real Redis/Celery durable recovery acceptance tests
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+          WORKFLOW_TEST_BROKER_URL: redis://127.0.0.1:6379/5
+          WORKFLOW_TEST_RESULT_BACKEND: redis://127.0.0.1:6379/6
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/5
+          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/6
+        run: |
+          python - <<'PY'
+          import unittest
+
+          loader = unittest.TestLoader()
+          suite = loader.discover(
+              "video-streaming/tests",
+              pattern="test_workflow_redis_celery.py",
+          )
+          if loader.errors:
+              raise SystemExit(
+                  "Redis/Celery acceptance discovery failed:\\n"
+                  + "\\n".join(loader.errors)
+              )
+          discovered = suite.countTestCases()
+          if discovered < 5:
+              raise SystemExit(
+                  "Expected at least five broker-backed recovery tests; got {}".format(
+                      discovered
+                  )
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          skipped = len(result.skipped)
+          print(
+              "Redis/Celery tests: discovered={}, executed={}, skipped={}, "
+              "failures={}, errors={}".format(
+                  discovered, result.testsRun, skipped,
+                  len(result.failures), len(result.errors)
+              )
+          )
+          if (
+              result.testsRun != discovered
+              or skipped
+              or result.failures
+              or result.errors
+          ):
+              raise SystemExit("Required Redis/Celery recovery acceptance failed")
+          PY
+
+      - name: Run real OS-process worker kill/restart recovery test
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+          WORKFLOW_TEST_BROKER_URL: redis://127.0.0.1:6379/5
+          WORKFLOW_TEST_RESULT_BACKEND: redis://127.0.0.1:6379/6
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/5
+          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/6
+        run: |
+          # Keep this as a real, guarded Python file: multiprocessing spawn
+          # cannot re-import a stdin/heredoc __main__ module.
+          python video-streaming/scripts/run_required_unittest.py \
+            video-streaming/tests \
+            test_workflow_worker_process_recovery.py \
+            1
+
+      - name: Run durable S3 publication and webhook retry contract tests
+        env:
+          PYTHONPATH: video-streaming
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_publication_handlers.py' \
+            -v
+
+      - name: Run S3 artifact store and KMS envelope contract tests
+        env:
+          PYTHONPATH: video-streaming
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_artifact_store.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_secret_store.py' \
             -v
 
   durable-workflow-state:
@@ -356,6 +510,44 @@ jobs:
           python -m unittest discover \
             -s video-streaming/tests \
             -p 'test_workflow_repository.py' \
+            -v
+
+      - name: Run transactional outbox tests
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_outbox.py' \
+            -v
+
+      - name: Run atomic secret-envelope repository tests (PostgreSQL)
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_job_secret_repository.py' \
+            -v
+
+      - name: Run durable executor and artifact handoff tests (PostgreSQL)
+        env:
+          PYTHONPATH: video-streaming
+          WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_executor.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_artifact_store.py' \
+            -v
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_workflow_worker_identity.py' \
             -v
 
   container-runtime:
