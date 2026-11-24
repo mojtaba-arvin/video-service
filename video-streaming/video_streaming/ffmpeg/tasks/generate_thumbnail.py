@@ -137,12 +137,11 @@ def generate_thumbnail(
         sampled_cpu_seconds = aggregate_process_usage()["cpu_seconds"]
         return max(
             child_cpu_seconds_since(cpu_started),
-            sam    try:
-        with attempt_cgroup_scope(attempt_id):
-    seconds if sampled_cpu_seconds is not None else 0.0,
-            )
+            sampled_cpu_seconds if sampled_cpu_seconds is not None else 0.0,
+        )
 
-        try:
+    try:
+        with attempt_cgroup_scope(attempt_id):
             # Redis status is a projection; the PostgreSQL lease remains authoritative.
             lease_heartbeat.assert_owned()
             self.save_primary_status(
@@ -221,8 +220,8 @@ def generate_thumbnail(
                         "memory_duration_ms"
                     ],
                 },
-            pricing=configured_pricing(settings),
-        )
+                pricing=configured_pricing(settings),
+            )
     except Exception as exc:
         if output_path:
             try:
