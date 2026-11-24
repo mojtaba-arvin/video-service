@@ -45,7 +45,7 @@ class WorkloadClassificationTests(unittest.TestCase):
             "video.watermark.apply": WorkloadClass.MEDIA_TRANSFORM,
             "video.output.upload_file": WorkloadClass.STORAGE_IO,
             "video.output.upload_directory": WorkloadClass.STORAGE_IO,
-            "video.webhook.deliver": WorkloadClass.STORAGE_IO,
+            "video.webhook.deliver": WorkloadClass.NETWORK_IO,
         }
 
         self.assertEqual(set(expected), set(PLAN_OPERATIONS))
