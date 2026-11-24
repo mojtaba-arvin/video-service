@@ -252,6 +252,32 @@ FFMPEG_BIN_PATH = env_config.get(
     default="/usr/local/bin/ffmpeg",
     cast=str)
 
+# Attempt-scoped cgroup v2 enforcement is opt-in until Linux runtime
+# acceptance has verified delegated controllers and production limits.
+ATTEMPT_CGROUP_V2_ENABLED = env_config.get(
+    "ATTEMPT_CGROUP_V2_ENABLED", default=False, cast=bool)
+ATTEMPT_CGROUP_V2_ROOT = env_config.get(
+    "ATTEMPT_CGROUP_V2_ROOT", default="", cast=str)
+ATTEMPT_CGROUP_V2_CPU_MAX = env_config.get(
+    "ATTEMPT_CGROUP_V2_CPU_MAX", default="100000 100000", cast=str)
+ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES = env_config.get(
+    "ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES",
+    default=2 * 1024 * 1024 * 1024, cast=int)
+ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS = env_config.get(
+    "ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS", default=5.0, cast=float)
+
+if ATTEMPT_CGROUP_V2_ENABLED:
+    if not ATTEMPT_CGROUP_V2_ROOT:
+        raise ValueError(
+            "ATTEMPT_CGROUP_V2_ROOT is required when cgroup v2 is enabled"
+        )
+    if ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES <= 0:
+        raise ValueError("ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES must be positive")
+    if ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS <= 0:
+        raise ValueError(
+            "ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS must be positive"
+        )
+
 # Maximum wall time for one thumbnail render command.
 FFMPEG_THUMBNAIL_TIMEOUT_SECONDS = env_config.get(
     "FFMPEG_THUMBNAIL_TIMEOUT_SECONDS",
