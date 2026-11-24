@@ -5,8 +5,9 @@ ffmpeg-python==0.2.0
 # Process-tree termination regression tests
 psutil==5.9.8
 
-# gRPC server import path loads the Redis cache adapter
-redis==5.2.1
+# Kombu 5.6 requires redis-py >=6.1 for its Redis transport.
+# Keep the test runtime aligned with the installed Kombu transport API.
+redis==6.1.0
 
 # S3 conditional PutObject/CompleteMultipartUpload writes require a recent
 # botocore service model. Keep this aligned with the integration environment.
