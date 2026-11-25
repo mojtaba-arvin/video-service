@@ -646,12 +646,16 @@ class CreateJobMixin(object):
         webhook_secret_ref = None
         webhook_signing_secret_ref = None
         if request.webhook_signing_secret and not request.webhook_url.strip():
-            raise ValueError("webhook_signing_secret requires webhook_url")
+            raise exceptions.WebhookSigningSecretInvalidException(
+                message="webhook_signing_secret requires webhook_url"
+            )
         if request.webhook_signing_secret:
             signing_bytes = request.webhook_signing_secret.encode("utf-8")
             if not 32 <= len(signing_bytes) <= 16 * 1024:
-                raise ValueError(
-                    "webhook_signing_secret must contain 32 to 16384 UTF-8 bytes"
+                raise exceptions.WebhookSigningSecretInvalidException(
+                    message=(
+                        "webhook_signing_secret must contain 32 to 16384 UTF-8 bytes"
+                    )
                 )
         if request.webhook_url and request.webhook_url.strip():
             from video_streaming.security.secret_store import (
