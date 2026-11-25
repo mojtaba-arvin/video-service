@@ -1805,6 +1805,8 @@ class WorkflowRepository:
                     artifact is None or job is None
                     or artifact.job_id != asset.source_job_id
                     or job.owner_tenant_id != principal.tenant_id
+                    or job.project_id != asset.project_id
+                    or job.project_revision_id != revision.id
                     or artifact.status != "AVAILABLE"
                     or artifact.checksum_sha256 != asset.content_sha256):
                 raise AuthorizationError("Resource not found or access denied")
@@ -2437,12 +2439,6 @@ class WorkflowRepository:
                         raise AuthorizationError(
                             "Resource not found or access denied"
                         )
-                    if (
-                            existing.project_id != project_id
-                            or existing.project_revision_id != project_revision_id):
-                        raise IdempotencyConflict(
-                            "Idempotency key resolves to a different ProjectRevision pin"
-                        )
                     if owner_principal is not None and (
                             existing.owner_tenant_id != owner_principal.tenant_id
                             or existing.owner_issuer != owner_principal.issuer
@@ -2450,6 +2446,12 @@ class WorkflowRepository:
                         from video_streaming.security import AuthorizationError
                         raise AuthorizationError(
                             "Resource not found or access denied"
+                        )
+                    if (
+                            existing.project_id != project_id
+                            or existing.project_revision_id != project_revision_id):
+                        raise IdempotencyConflict(
+                            "Idempotency key resolves to a different ProjectRevision pin"
                         )
                     existing_workflow = session.execute(
                         select(WorkflowRecord).where(
