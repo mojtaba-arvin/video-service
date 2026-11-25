@@ -108,6 +108,13 @@ class FakeRepository:
             "size_bytes": 100,
         }, *args, **kwargs)
 
+    def update_creative_project_entity(self, *args, **kwargs):
+        return self._record("update_entity", {
+            "id": args[2], "project_id": args[1],
+            "tenant_id": args[3].tenant_id, "name": kwargs.get("name") or "Asset",
+            "sort_order": kwargs.get("sort_order") or 0,
+        }, *args, **kwargs)
+
     def list_creative_project_entities(self, project_id, principal):
         return self._record("list_entities", {
             "scenes": [{"id": "scene-1", "project_id": project_id,
@@ -234,6 +241,18 @@ class CreativeProjectsRpcTests(unittest.TestCase):
             self.assertEqual(asset.entity.artifact_id, "artifact-1")
             self.assertEqual(asset.entity.content_sha256, "b" * 64)
             self.assertEqual(self.repository.calls[-1][0], "create_asset")
+
+            updated = self.service.update_creative_project_entity(
+                streaming_pb2.UpdateCreativeProjectEntityRequest(
+                    project_id="project-1", entity_type="asset",
+                    entity_id="asset-1", name="Final cut", sort_order=3,
+                    update_name=True, update_sort_order=True,
+                ),
+                self.context,
+            )
+            self.assertEqual(updated.entity.name, "Final cut")
+            self.assertEqual(self.repository.calls[-1][0], "update_entity")
+            self.assertEqual(self.repository.calls[-1][2]["name"], "Final cut")
 
             entities = self.service.list_creative_project_entities(
                 streaming_pb2.ListCreativeProjectEntitiesRequest(
