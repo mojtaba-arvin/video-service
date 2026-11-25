@@ -720,6 +720,9 @@ class CreateJobMixin(object):
                 ),
                 owner_principal=principal,
                 secret_envelopes=webhook_envelopes,
+                quota_enforcement_enabled=(
+                    settings.TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED
+                ),
                 metadata={
                     "reference_id": request.reference_id,
                     "output_count": sum(
