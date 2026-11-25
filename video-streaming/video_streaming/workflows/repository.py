@@ -1377,17 +1377,25 @@ class WorkflowRepository:
                 raise ValueError(
                     "creative assets require an available content-addressed artifact"
                 )
+            artifact_values = {
+                "artifact_id": artifact.id,
+                "source_job_id": artifact.job_id,
+                "content_sha256": artifact.checksum_sha256,
+                "media_type": artifact.media_type,
+                "size_bytes": artifact.size_bytes,
+            }
+            if (
+                    not isinstance(artifact.checksum_sha256, str)
+                    or len(artifact.checksum_sha256) != 64
+                    or any(char not in "0123456789abcdef" for char in artifact.checksum_sha256.lower())):
+                raise ValueError("source artifact must have a valid SHA-256 checksum")
             session.add(CreativeAssetRecord(
                 id=asset_id,
                 project_id=project_id,
                 tenant_id=principal.tenant_id,
-                artifact_id=artifact.id,
-                source_job_id=artifact.job_id,
+                **artifact_values,
                 name=name,
                 asset_type=asset_type,
-                content_sha256=artifact.checksum_sha256,
-                media_type=artifact.media_type,
-                size_bytes=artifact.size_bytes,
                 sort_order=sort_order,
                 created_by_issuer=principal.issuer,
                 created_by_subject=principal.subject,
@@ -1397,10 +1405,8 @@ class WorkflowRepository:
             project.updated_at = now
         return {
             "id": asset_id, "project_id": project_id,
-            "tenant_id": principal.tenant_id, "artifact_id": artifact.id,
-            "source_job_id": artifact.job_id, "name": name,
-            "asset_type": asset_type, "content_sha256": artifact.checksum_sha256,
-            "media_type": artifact.media_type, "size_bytes": artifact.size_bytes,
+            "tenant_id": principal.tenant_id, **artifact_values,
+            "name": name, "asset_type": asset_type,
             "sort_order": sort_order, "created_at": now,
         }
 
@@ -1497,11 +1503,12 @@ class WorkflowRepository:
             if sort_order is not None:
                 row.sort_order = sort_order
             row.updated_at = now
-        return {
-            "id": entity_id, "project_id": project_id,
-            "tenant_id": principal.tenant_id, "name": row.name,
-            "sort_order": row.sort_order, "updated_at": now,
-        }
+            result = {
+                "id": entity_id, "project_id": project_id,
+                "tenant_id": principal.tenant_id, "name": row.name,
+                "sort_order": row.sort_order, "updated_at": now,
+            }
+        return result
 
     def record_webhook_delivery_event(
             self, job_id, attempt_id, event_type, payload):
