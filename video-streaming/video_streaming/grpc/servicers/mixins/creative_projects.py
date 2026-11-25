@@ -222,6 +222,26 @@ class CreativeProjectsMixin:
             entity=self._entity_response(item)
         )
 
+    def update_creative_project_entity(self, request, context):
+        principal = self._principal(context, "video.projects:write")
+        repository = get_workflow_repository(required=True)
+        try:
+            item = repository.update_creative_project_entity(
+                request.entity_type,
+                request.project_id,
+                request.entity_id,
+                principal,
+                name=request.name if request.update_name else None,
+                sort_order=request.sort_order if request.update_sort_order else None,
+            )
+        except AuthorizationError:
+            self._not_found(context)
+        except ValueError as exc:
+            self._invalid(context, exc)
+        return self.pb2.CreativeProjectEntityResponse(
+            entity=self._entity_response(item)
+        )
+
     def list_creative_project_entities(self, request, context):
         principal = self._principal(context, "video.projects:read")
         repository = get_workflow_repository(required=True)
