@@ -1387,7 +1387,10 @@ class WorkflowRepository:
             if (
                     not isinstance(artifact.checksum_sha256, str)
                     or len(artifact.checksum_sha256) != 64
-                    or any(char not in "0123456789abcdef" for char in artifact.checksum_sha256.lower())):
+                    or any(
+                        char not in "0123456789abcdef"
+                        for char in artifact.checksum_sha256.lower()
+                    )):
                 raise ValueError("source artifact must have a valid SHA-256 checksum")
             session.add(CreativeAssetRecord(
                 id=asset_id,
