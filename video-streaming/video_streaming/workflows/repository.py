@@ -1296,6 +1296,11 @@ class WorkflowRepository:
         name = name.strip()
         if len(name) > 255:
             raise ValueError("project name must contain at most 255 characters")
+        if project_id is not None and (
+                not isinstance(project_id, str)
+                or not project_id.strip()
+                or len(project_id) > 36):
+            raise ValueError("project_id must be a non-empty opaque identifier of at most 36 characters")
         project_id = project_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -1312,6 +1317,92 @@ class WorkflowRepository:
             "id": project_id, "tenant_id": principal.tenant_id,
             "name": name, "created_at": now,
         }
+
+    def get_creative_project(self, project_id, principal):
+        """Read a tenant-owned Project without revealing foreign identifiers."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            latest_revision = session.execute(
+                select(func.max(CreativeProjectRevisionRecord.revision_number))
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one()
+            return {
+                "id": project.id,
+                "tenant_id": project.tenant_id,
+                "name": project.name,
+                "created_at": project.created_at,
+                "updated_at": project.updated_at,
+                "latest_revision_number": latest_revision or 0,
+            }
+
+    def list_creative_projects(self, principal, limit=100):
+        """Return a bounded list of Projects owned by the authenticated tenant."""
+        from video_streaming.security import require_scope
+
+        require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("project limit must be between 1 and 1000")
+        with self._session() as session:
+            rows = session.execute(
+                select(CreativeProjectRecord)
+                .where(CreativeProjectRecord.tenant_id == principal.tenant_id)
+                .order_by(CreativeProjectRecord.updated_at.desc(), CreativeProjectRecord.id)
+                .limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "tenant_id": row.tenant_id,
+                "name": row.name,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            } for row in rows]
+
+    def list_creative_project_revisions(self, project_id, principal, limit=100):
+        """Return a bounded revision history for one owned Project."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("revision limit must be between 1 and 1000")
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            rows = session.execute(
+                select(CreativeProjectRevisionRecord)
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+                .order_by(CreativeProjectRevisionRecord.revision_number.desc())
+                .limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "project_id": row.project_id,
+                "tenant_id": row.tenant_id,
+                "revision_number": row.revision_number,
+                "content_sha256": row.content_sha256,
+                "created_at": row.created_at,
+            } for row in rows]
 
     @staticmethod
     def _parse_creative_project_revision_references(snapshot):
@@ -1497,6 +1588,11 @@ class WorkflowRepository:
 
         require_scope(principal, "video.projects:write")
         name = self._validate_creative_entity_fields(name, sort_order)
+        if entity_id is not None and (
+                not isinstance(entity_id, str)
+                or not entity_id.strip()
+                or len(entity_id) > 36):
+            raise ValueError("entity ID must be a non-empty opaque identifier of at most 36 characters")
         entity_id = entity_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -1579,6 +1675,11 @@ class WorkflowRepository:
             raise ValueError("asset_type must contain at most 64 characters")
         if not isinstance(artifact_id, str) or not artifact_id.strip():
             raise ValueError("artifact_id is required")
+        if asset_id is not None and (
+                not isinstance(asset_id, str)
+                or not asset_id.strip()
+                or len(asset_id) > 36):
+            raise ValueError("asset_id must be a non-empty opaque identifier of at most 36 characters")
         asset_id = asset_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -1638,10 +1739,12 @@ class WorkflowRepository:
             "sort_order": sort_order, "created_at": now,
         }
 
-    def list_creative_project_entities(self, project_id, principal):
+    def list_creative_project_entities(self, project_id, principal, limit=500):
         from video_streaming.security import AuthorizationError, require_scope
 
         require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("entity limit must be between 1 and 1000")
         models = {
             "scenes": CreativeSceneRecord,
             "shots": CreativeShotRecord,
@@ -1664,6 +1767,7 @@ class WorkflowRepository:
                         model.project_id == project_id,
                         model.tenant_id == principal.tenant_id,
                     ).order_by(model.sort_order, model.created_at, model.id)
+                    .limit(limit)
                 ).scalars().all()
                 result[key] = [{
                     "id": row.id,
