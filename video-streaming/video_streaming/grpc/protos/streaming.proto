@@ -23,6 +23,7 @@ service Streaming{
   rpc create_creative_shot(CreateCreativeShotRequest) returns (CreativeProjectEntityResponse) {}
   rpc create_creative_character(CreateCreativeCharacterRequest) returns (CreativeProjectEntityResponse) {}
   rpc create_creative_asset(CreateCreativeAssetRequest) returns (CreativeProjectEntityResponse) {}
+  rpc update_creative_project_entity(UpdateCreativeProjectEntityRequest) returns (CreativeProjectEntityResponse) {}
   rpc list_creative_project_entities(ListCreativeProjectEntitiesRequest) returns (ListCreativeProjectEntitiesResponse) {}
 }
 
@@ -673,4 +674,15 @@ message ListCreativeProjectEntitiesResponse {
   repeated CreativeProjectEntity shots = 2;
   repeated CreativeProjectEntity characters = 3;
   repeated CreativeProjectEntity assets = 4;
+}
+
+message UpdateCreativeProjectEntityRequest {
+  string project_id = 1;
+  // One of: scene, shot, character, asset.
+  string entity_type = 2;
+  string entity_id = 3;
+  string name = 4;
+  int32 sort_order = 5;
+  bool update_name = 6;
+  bool update_sort_order = 7;
 }
