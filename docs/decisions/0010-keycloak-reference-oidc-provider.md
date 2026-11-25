@@ -22,7 +22,7 @@ Configure the Organization Membership mapper to add the immutable organization I
 
 Map the API permissions to the service's existing claims:
 - **sub**: stable Keycloak subject;
-- **tenant_id**: selected immutable organization ID, emitted as a top-level string;
+- **tenant source**: the native `organization` claim; the verifier derives its top-level principal `tenant_id` from the selected organization's immutable `id`;
 - **scope**: space-delimited OAuth scopes; the quota-admin RPC checks the exact **video.tenant.quota.admin** scope, so grant it through a dedicated Keycloak client scope only to named operator identities;
 - **roles**: optional informational application roles; the current quota-admin authorization path does not consult this claim.
 
