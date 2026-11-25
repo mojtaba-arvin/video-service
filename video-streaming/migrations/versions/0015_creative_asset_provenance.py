@@ -1,0 +1,329 @@
+"""Persist immutable, attempt-bound creative Asset provenance.
+
+Revision ID: 0015_asset_provenance
+Revises: 0014_project_refs
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "0015_asset_provenance"
+down_revision = "0014_project_refs"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "workflow_stages",
+        sa.Column(
+            "operation_contract_version",
+            sa.Integer(),
+            nullable=False,
+            server_default="1",
+        ),
+    )
+    op.create_unique_constraint(
+        "uq_workflow_workflow_job_identity",
+        "workflow_workflows",
+        ["id", "job_id"],
+    )
+    op.create_unique_constraint(
+        "uq_workflow_attempt_stage_identity",
+        "workflow_attempts",
+        ["id", "stage_id"],
+    )
+    op.create_unique_constraint(
+        "uq_workflow_artifact_execution_identity",
+        "workflow_artifacts",
+        ["id", "job_id", "stage_id", "attempt_id"],
+    )
+    op.create_unique_constraint(
+        "uq_workflow_creative_asset_source_identity",
+        "workflow_creative_assets",
+        ["id", "project_id", "tenant_id", "artifact_id", "source_job_id"],
+    )
+    op.create_unique_constraint(
+        "uq_workflow_creative_asset_content_identity",
+        "workflow_creative_assets",
+        ["id", "project_id", "tenant_id", "content_sha256"],
+    )
+
+    op.create_table(
+        "workflow_creative_asset_provenance",
+        sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("asset_id", sa.String(length=36), nullable=False),
+        sa.Column("project_id", sa.String(length=36), nullable=False),
+        sa.Column("tenant_id", sa.String(length=255), nullable=False),
+        sa.Column("artifact_id", sa.String(length=36), nullable=False),
+        sa.Column("job_id", sa.String(length=36), nullable=False),
+        sa.Column("workflow_id", sa.String(length=36), nullable=False),
+        sa.Column("stage_id", sa.String(length=36), nullable=False),
+        sa.Column("attempt_id", sa.String(length=36), nullable=False),
+        sa.Column("project_revision_id", sa.String(length=36), nullable=False),
+        sa.Column("operation_id", sa.String(length=128), nullable=False),
+        sa.Column("operation_contract_version", sa.Integer(), nullable=False),
+        sa.Column("workflow_version", sa.String(length=64), nullable=False),
+        sa.Column("execution_plan_schema_version", sa.Integer(), nullable=False),
+        sa.Column("execution_plan_fingerprint", sa.String(length=64), nullable=False),
+        sa.Column("prompt_config_revision_id", sa.String(length=128), nullable=False),
+        sa.Column("validation_evidence_json", sa.JSON(), nullable=False),
+        sa.Column("validation_evidence_sha256", sa.String(length=64), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.ForeignKeyConstraint(
+            ["asset_id", "project_id", "tenant_id", "artifact_id", "job_id"],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.artifact_id",
+                "workflow_creative_assets.source_job_id",
+            ],
+            name="fk_workflow_creative_provenance_asset",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_revision_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            name="fk_workflow_creative_provenance_revision",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["job_id", "tenant_id"],
+            ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
+            name="fk_workflow_creative_provenance_job_tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workflow_id", "job_id"],
+            ["workflow_workflows.id", "workflow_workflows.job_id"],
+            name="fk_workflow_creative_provenance_workflow_job",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            name="fk_workflow_creative_provenance_stage_workflow",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["attempt_id", "stage_id"],
+            ["workflow_attempts.id", "workflow_attempts.stage_id"],
+            name="fk_workflow_creative_provenance_attempt_stage",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["artifact_id", "job_id", "stage_id", "attempt_id"],
+            [
+                "workflow_artifacts.id",
+                "workflow_artifacts.job_id",
+                "workflow_artifacts.stage_id",
+                "workflow_artifacts.attempt_id",
+            ],
+            name="fk_workflow_creative_provenance_artifact_execution",
+            ondelete="RESTRICT",
+        ),
+        sa.CheckConstraint(
+            "operation_contract_version >= 1",
+            name="ck_workflow_creative_provenance_operation_version",
+        ),
+        sa.CheckConstraint(
+            "execution_plan_schema_version >= 1",
+            name="ck_workflow_creative_provenance_plan_schema_version",
+        ),
+        sa.CheckConstraint(
+            "length(execution_plan_fingerprint) = 64",
+            name="ck_workflow_creative_provenance_plan_fingerprint",
+        ),
+        sa.CheckConstraint(
+            "length(validation_evidence_sha256) = 64",
+            name="ck_workflow_creative_provenance_validation_hash",
+        ),
+        sa.CheckConstraint(
+            "validation_evidence_json->>'status' = 'PASSED'",
+            name="ck_workflow_creative_provenance_validation_passed",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "asset_id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_asset",
+        ),
+        sa.UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_identity",
+        ),
+    )
+    op.create_index(
+        "ix_workflow_creative_asset_provenance_project_created",
+        "workflow_creative_asset_provenance",
+        ["project_id", "tenant_id", "created_at"],
+    )
+
+    op.create_table(
+        "workflow_creative_asset_provenance_parents",
+        sa.Column("provenance_id", sa.String(length=36), nullable=False),
+        sa.Column("project_id", sa.String(length=36), nullable=False),
+        sa.Column("tenant_id", sa.String(length=255), nullable=False),
+        sa.Column("parent_asset_id", sa.String(length=36), nullable=False),
+        sa.Column("parent_content_sha256", sa.String(length=64), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.ForeignKeyConstraint(
+            ["provenance_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_asset_provenance.id",
+                "workflow_creative_asset_provenance.project_id",
+                "workflow_creative_asset_provenance.tenant_id",
+            ],
+            name="fk_workflow_creative_provenance_parent_provenance",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "parent_asset_id", "project_id", "tenant_id",
+                "parent_content_sha256",
+            ],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.content_sha256",
+            ],
+            name="fk_workflow_creative_provenance_parent_asset_hash",
+            ondelete="RESTRICT",
+        ),
+        sa.CheckConstraint(
+            "length(parent_content_sha256) = 64",
+            name="ck_workflow_creative_provenance_parent_hash",
+        ),
+        sa.PrimaryKeyConstraint("provenance_id", "parent_asset_id"),
+    )
+    op.create_index(
+        "ix_workflow_creative_provenance_parents_project",
+        "workflow_creative_asset_provenance_parents",
+        ["project_id", "tenant_id", "parent_asset_id"],
+    )
+
+    op.execute("""
+        CREATE FUNCTION workflow_reject_creative_provenance_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'creative asset provenance is immutable';
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_workflow_creative_asset_provenance_immutable
+        BEFORE UPDATE OR DELETE ON workflow_creative_asset_provenance
+        FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_mutation()
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_workflow_creative_asset_provenance_parents_immutable
+        BEFORE UPDATE OR DELETE ON workflow_creative_asset_provenance_parents
+        FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_mutation()
+    """)
+    op.execute("""
+        CREATE FUNCTION workflow_reject_stage_operation_contract_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            IF NEW.operation IS DISTINCT FROM OLD.operation
+               OR NEW.operation_contract_version
+                  IS DISTINCT FROM OLD.operation_contract_version THEN
+                RAISE EXCEPTION 'stage operation contract identity is immutable';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_workflow_stage_operation_contract_immutable
+        BEFORE UPDATE ON workflow_stages
+        FOR EACH ROW EXECUTE FUNCTION workflow_reject_stage_operation_contract_mutation()
+    """)
+
+
+def downgrade():
+    for table, description in (
+        ("workflow_creative_asset_provenance_parents", "asset provenance parents"),
+        ("workflow_creative_asset_provenance", "asset provenance"),
+    ):
+        count = op.get_bind().execute(sa.text(
+            "SELECT COUNT(*) FROM {}".format(table)
+        )).scalar_one()
+        if count:
+            raise RuntimeError(
+                "Refusing to drop {} while records exist".format(description)
+            )
+    versioned_stages = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_stages "
+        "WHERE operation_contract_version <> 1"
+    )).scalar_one()
+    if versioned_stages:
+        raise RuntimeError(
+            "Refusing to drop operation contract versions after they have advanced"
+        )
+
+    op.execute(
+        "DROP TRIGGER trg_workflow_stage_operation_contract_immutable "
+        "ON workflow_stages"
+    )
+    op.execute(
+        "DROP FUNCTION workflow_reject_stage_operation_contract_mutation()"
+    )
+    op.execute(
+        "DROP TRIGGER trg_workflow_creative_asset_provenance_parents_immutable "
+        "ON workflow_creative_asset_provenance_parents"
+    )
+    op.execute(
+        "DROP TRIGGER trg_workflow_creative_asset_provenance_immutable "
+        "ON workflow_creative_asset_provenance"
+    )
+    op.execute(
+        "DROP FUNCTION workflow_reject_creative_provenance_mutation()"
+    )
+
+    op.drop_index(
+        "ix_workflow_creative_provenance_parents_project",
+        table_name="workflow_creative_asset_provenance_parents",
+    )
+    op.drop_table("workflow_creative_asset_provenance_parents")
+    op.drop_index(
+        "ix_workflow_creative_asset_provenance_project_created",
+        table_name="workflow_creative_asset_provenance",
+    )
+    op.drop_table("workflow_creative_asset_provenance")
+    op.drop_constraint(
+        "uq_workflow_creative_asset_content_identity",
+        "workflow_creative_assets",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_workflow_creative_asset_source_identity",
+        "workflow_creative_assets",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_workflow_artifact_execution_identity",
+        "workflow_artifacts",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_workflow_attempt_stage_identity",
+        "workflow_attempts",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_workflow_workflow_job_identity",
+        "workflow_workflows",
+        type_="unique",
+    )
+    op.drop_column("workflow_stages", "operation_contract_version")
