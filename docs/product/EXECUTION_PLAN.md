@@ -196,11 +196,19 @@ This plan is intentionally outcome- and gate-based. The roadmap is adjusted when
 
 ## 7. Creative project continuity increment (Issue #79)
 
-The first persistence slice is implemented on the active project-revisions branch:
-- Tenant-owned Project roots record the authenticated creator identity; caller-provided tenant IDs are never accepted.
-- ProjectRevision snapshots are canonical JSON with SHA-256 content identity and monotonically increasing per-project revision numbers.
-- Composite `(project_id, tenant_id)` foreign keys prevent cross-tenant revision attachment; PostgreSQL triggers reject revision UPDATE and DELETE.
-- Repository reads and writes require explicit `video.projects:*` scopes and hide foreign-project existence behind the normal authorization denial.
-- Workflow-definition versions and execution-plan fingerprints remain independent of project revision. Job revision pinning, typed Scene/Shot/Character/Asset references and artifact provenance are later increments.
+**Merged:** PR #176, squash commit `f9d7f9959cb4baaa8ec30bb451787f67d547cac6` (2026-11-25). The full required CI matrix passed on head `878a76bf657e584950a038e7918d457e763d239e`, including PostgreSQL repository integration, migration downgrade safety, both Python 3.9/3.12 VOD paths, cgroup v2 acceptance, regression, documentation links and Dependency Review.
 
-The new migration follows `0012_tenant_quota_audit` as `0013_creative_project_revisions`. Downgrade is intentionally blocked while any project or revision exists. No retention duration or automated deletion is introduced without customer/legal policy. The PostgreSQL integration lane must validate cross-tenant rejection, canonical hashing, monotonic numbering and database-level immutability before merge.
+Delivered:
+- Tenant-owned Project roots derive tenant and creator identity from the verified principal.
+- ProjectRevision snapshots use canonical JSON, recursive string-key validation, SHA-256 identity and monotonic per-project revision numbers.
+- Composite `(project_id, tenant_id)` constraints prevent cross-tenant revision attachment; PostgreSQL triggers reject revision UPDATE and DELETE.
+- Reads/writes require explicit `video.projects:*` scopes and foreign-tenant access is denied without revealing resource existence.
+- Migration `0013_creative_project_revisions` follows `0012_tenant_quota_audit`; downgrade refuses to discard project/revision history.
+
+Next #79 increments, in order:
+1. Typed, tenant-constrained Scene/Shot/Character/Asset references that point to a Project and, where required, an exact ProjectRevision.
+2. Append-only provenance for derived artifacts (source artifact IDs/hashes, operation/version, redacted prompt/config revision, validation evidence and Attempt).
+3. Pin each Job to an exact ProjectRevision and verify that pin during retry/resume; keep workflow-definition and execution-plan versions separate.
+4. Define customer/legal retention policy before any retention automation or deletion path.
+
+Do not add model-provider payloads to the domain schema, mutable revision updates, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
