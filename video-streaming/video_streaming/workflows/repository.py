@@ -1687,7 +1687,9 @@ class WorkflowRepository:
                 raise ValueError("validation metric name is invalid")
             if isinstance(value, bool):
                 normalized_metrics[key] = value
-            elif isinstance(value, (int, float)) and math.isfinite(value):
+            elif isinstance(value, int) and abs(value) <= 9223372036854775807:
+                normalized_metrics[key] = value
+            elif isinstance(value, float) and math.isfinite(value):
                 normalized_metrics[key] = value
             else:
                 raise ValueError("validation metrics must be finite numbers or booleans")
@@ -1779,6 +1781,7 @@ class WorkflowRepository:
             if (
                     stage is None or attempt is None or workflow is None
                     or attempt.stage_id != stage.id
+                    or attempt.state != "SUCCEEDED"
                     or workflow.job_id != job.id
                     or stage.workflow_id != workflow.id):
                 raise AuthorizationError("Resource not found or access denied")
@@ -1803,7 +1806,11 @@ class WorkflowRepository:
                 revision_references.get("assets", [])
                 if isinstance(revision_references, dict) else []
             )
-            if any(parent_id not in revision_asset_ids for parent_id in parent_asset_ids):
+            if not isinstance(revision_asset_ids, list):
+                raise ValueError("ProjectRevision asset references are invalid")
+            if any(
+                    parent_id not in revision_asset_ids
+                    for parent_id in parent_asset_ids):
                 raise ValueError(
                     "every parent Asset must be included in the pinned ProjectRevision"
                 )
@@ -1852,31 +1859,32 @@ class WorkflowRepository:
                     created_at=now,
                 ))
 
-        return {
-            "id": provenance_id,
-            "asset_id": asset_id,
-            "project_id": asset.project_id,
-            "tenant_id": principal.tenant_id,
-            "artifact_id": artifact.id,
-            "job_id": job.id,
-            "workflow_id": workflow.id,
-            "stage_id": stage.id,
-            "attempt_id": attempt.id,
-            "project_revision_id": revision.id,
-            "operation_id": stage.operation,
-            "operation_contract_version": stage.operation_contract_version,
-            "workflow_version": workflow.workflow_version,
-            "execution_plan_schema_version": workflow.execution_plan_schema_version,
-            "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
-            "prompt_config_revision_id": prompt_config_revision_id,
-            "validation_evidence": evidence,
-            "validation_evidence_sha256": evidence_digest,
-            "parents": [{
-                "asset_id": parent.id,
-                "content_sha256": parent.content_sha256,
-            } for parent in parent_rows],
-            "created_at": now,
-        }
+            result = {
+                "id": provenance_id,
+                "asset_id": asset_id,
+                "project_id": asset.project_id,
+                "tenant_id": principal.tenant_id,
+                "artifact_id": artifact.id,
+                "job_id": job.id,
+                "workflow_id": workflow.id,
+                "stage_id": stage.id,
+                "attempt_id": attempt.id,
+                "project_revision_id": revision.id,
+                "operation_id": stage.operation,
+                "operation_contract_version": stage.operation_contract_version,
+                "workflow_version": workflow.workflow_version,
+                "execution_plan_schema_version": workflow.execution_plan_schema_version,
+                "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
+                "prompt_config_revision_id": prompt_config_revision_id,
+                "validation_evidence": evidence,
+                "validation_evidence_sha256": evidence_digest,
+                "parents": [{
+                    "asset_id": parent.id,
+                    "content_sha256": parent.content_sha256,
+                } for parent in parent_rows],
+                "created_at": now,
+            }
+        return result
 
     def get_creative_asset_provenance(self, asset_id, project_id, principal):
         from video_streaming.security import AuthorizationError, require_scope
