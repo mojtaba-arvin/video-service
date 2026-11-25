@@ -83,6 +83,7 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
         ("0013_creative_project_revisions.py", "workflow_creative_project_revisions", "immutable creative project revision history"),
         ("0014_creative_project_typed_references.py", "workflow_creative_project_revision_references", "creative project revision references"),
         ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
+        ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
     )
 
     def test_downgrade_refuses_to_discard_existing_state(self):
