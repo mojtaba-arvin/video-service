@@ -27,6 +27,9 @@ class OperationContract:
     attempt_owner: str = "workflow_executor"
     legacy_task_may_claim_attempt: bool = False
     outputs_must_be_durable_artifacts: bool = True
+    # Increment when this operation's input/output semantics change. The
+    # accepted Stage persists this value for later provenance inspection.
+    version: int = 1
 
     @property
     def inputs(self):

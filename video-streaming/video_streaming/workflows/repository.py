@@ -11,8 +11,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
-    ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
+    JSON, BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    ForeignKeyConstraint, Index, Integer, Numeric, PrimaryKeyConstraint, String, Text,
     UniqueConstraint, create_engine, and_, or_,
     select, func,
 )
@@ -66,6 +66,35 @@ class JobRecord(Base):
             "id", "owner_tenant_id",
             name="uq_workflow_jobs_tenant_identity",
         ),
+        ForeignKeyConstraint(
+            ["project_id", "owner_tenant_id"],
+            [
+                "workflow_creative_projects.id",
+                "workflow_creative_projects.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_job_project_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["project_revision_id", "project_id", "owner_tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_job_project_revision_tenant",
+        ),
+        CheckConstraint(
+            "(project_id IS NULL AND project_revision_id IS NULL) OR "
+            "(project_id IS NOT NULL AND project_revision_id IS NOT NULL "
+            "AND owner_tenant_id IS NOT NULL)",
+            name="ck_workflow_job_project_revision_pin_complete",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "project_revision_id", "owner_tenant_id",
+            name="uq_workflow_job_project_revision_pin",
+        ),
         Index(
             "ix_workflow_jobs_owner_tenant_created",
             "owner_tenant_id",
@@ -78,6 +107,8 @@ class JobRecord(Base):
     request_hash = Column(String(64), nullable=False)
     reference_id = Column(String(255), nullable=False, default="")
     owner_tenant_id = Column(String(255), nullable=True)
+    project_id = Column(String(36), nullable=True)
+    project_revision_id = Column(String(36), nullable=True)
     owner_issuer = Column(String(512), nullable=True)
     owner_subject = Column(String(255), nullable=True)
     state = Column(String(24), nullable=False, default=JobState.QUEUED.value)
@@ -333,6 +364,14 @@ class CreativeAssetRecord(Base):
             "artifact_id", "project_id", "tenant_id",
             name="uq_workflow_creative_asset_artifact_project",
         ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id", "artifact_id", "source_job_id",
+            name="uq_workflow_creative_asset_source_identity",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id", "content_sha256",
+            name="uq_workflow_creative_asset_content_identity",
+        ),
         CheckConstraint("sort_order >= 0", name="ck_workflow_creative_asset_order"),
         CheckConstraint(
             "length(content_sha256) = 64",
@@ -460,6 +499,183 @@ class CreativeProjectRevisionReferenceRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class CreativeAssetProvenanceRecord(Base):
+    """Immutable lineage for one committed project Asset."""
+
+    __tablename__ = "workflow_creative_asset_provenance"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["asset_id", "project_id", "tenant_id", "artifact_id", "job_id"],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.artifact_id",
+                "workflow_creative_assets.source_job_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_asset",
+        ),
+        ForeignKeyConstraint(
+            ["project_revision_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_revision",
+        ),
+        ForeignKeyConstraint(
+            ["job_id", "tenant_id"],
+            ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_job_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["job_id", "project_id", "project_revision_id", "tenant_id"],
+            [
+                "workflow_jobs.id",
+                "workflow_jobs.project_id",
+                "workflow_jobs.project_revision_id",
+                "workflow_jobs.owner_tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_job_revision_pin",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "job_id"],
+            ["workflow_workflows.id", "workflow_workflows.job_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_workflow_job",
+        ),
+        ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_stage_workflow",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id", "stage_id"],
+            ["workflow_attempts.id", "workflow_attempts.stage_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_attempt_stage",
+        ),
+        ForeignKeyConstraint(
+            ["artifact_id", "job_id", "stage_id", "attempt_id"],
+            [
+                "workflow_artifacts.id",
+                "workflow_artifacts.job_id",
+                "workflow_artifacts.stage_id",
+                "workflow_artifacts.attempt_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_artifact_execution",
+        ),
+        CheckConstraint(
+            "operation_contract_version >= 1",
+            name="ck_workflow_creative_provenance_operation_version",
+        ),
+        CheckConstraint(
+            "execution_plan_schema_version >= 1",
+            name="ck_workflow_creative_provenance_plan_schema_version",
+        ),
+        CheckConstraint(
+            "length(execution_plan_fingerprint) = 64",
+            name="ck_workflow_creative_provenance_plan_fingerprint",
+        ),
+        CheckConstraint(
+            "length(validation_evidence_sha256) = 64",
+            name="ck_workflow_creative_provenance_validation_hash",
+        ),
+        CheckConstraint(
+            "(validation_evidence_json->>'status' = 'PASSED') IS TRUE",
+            name="ck_workflow_creative_provenance_validation_passed",
+        ),
+        UniqueConstraint(
+            "asset_id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_asset",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_identity",
+        ),
+        Index(
+            "ix_workflow_creative_asset_provenance_project_created",
+            "project_id", "tenant_id", "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    asset_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    artifact_id = Column(String(36), nullable=False)
+    job_id = Column(String(36), nullable=False)
+    workflow_id = Column(String(36), nullable=False)
+    stage_id = Column(String(36), nullable=False)
+    attempt_id = Column(String(36), nullable=False)
+    project_revision_id = Column(String(36), nullable=False)
+    operation_id = Column(String(128), nullable=False)
+    operation_contract_version = Column(Integer, nullable=False)
+    workflow_version = Column(String(64), nullable=False)
+    execution_plan_schema_version = Column(Integer, nullable=False)
+    execution_plan_fingerprint = Column(String(64), nullable=False)
+    prompt_config_revision_id = Column(String(128), nullable=False)
+    validation_evidence_json = Column(JSON, nullable=False)
+    validation_evidence_sha256 = Column(String(64), nullable=False)
+    is_sealed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeAssetProvenanceParentRecord(Base):
+    """Immutable input Asset IDs and content hashes for one lineage record."""
+
+    __tablename__ = "workflow_creative_asset_provenance_parents"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["provenance_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_asset_provenance.id",
+                "workflow_creative_asset_provenance.project_id",
+                "workflow_creative_asset_provenance.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_parent_provenance",
+        ),
+        ForeignKeyConstraint(
+            [
+                "parent_asset_id", "project_id", "tenant_id",
+                "parent_content_sha256",
+            ],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.content_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_parent_asset_hash",
+        ),
+        CheckConstraint(
+            "length(parent_content_sha256) = 64",
+            name="ck_workflow_creative_provenance_parent_hash",
+        ),
+        PrimaryKeyConstraint("provenance_id", "parent_asset_id"),
+        Index(
+            "ix_workflow_creative_provenance_parents_project",
+            "project_id", "tenant_id", "parent_asset_id",
+        ),
+    )
+
+    provenance_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    parent_asset_id = Column(String(36), nullable=False)
+    parent_content_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class JobSecretRecord(Base):
     """Encrypted callback material bound to the exact durable Job owner."""
 
@@ -521,6 +737,9 @@ class WorkflowRecord(Base):
             "execution_plan_schema_version IS NOT NULL AND workflow_version IS NOT NULL)",
             name="ck_workflow_execution_plan_snapshot_complete",
         ),
+        UniqueConstraint(
+            "id", "job_id", name="uq_workflow_workflow_job_identity"
+        ),
     )
 
     id = Column(String(36), primary_key=True)
@@ -561,6 +780,7 @@ class StageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+    operation_contract_version = Column(Integer, nullable=False, default=1)
 
 
 class StageDependencyRecord(Base):
@@ -599,6 +819,7 @@ class AttemptRecord(Base):
     __tablename__ = "workflow_attempts"
     __table_args__ = (
         UniqueConstraint("stage_id", "attempt_number", name="uq_stage_attempt_number"),
+        UniqueConstraint("id", "stage_id", name="uq_workflow_attempt_stage_identity"),
         CheckConstraint(
             "(lease_owner IS NULL AND lease_token_hash IS NULL AND "
             "lease_expires_at IS NULL AND heartbeat_at IS NULL) OR "
@@ -650,6 +871,10 @@ class ArtifactRecord(Base):
         ),
         UniqueConstraint(
             "id", "job_id", name="uq_workflow_artifact_job_identity"
+        ),
+        UniqueConstraint(
+            "id", "job_id", "stage_id", "attempt_id",
+            name="uq_workflow_artifact_execution_identity",
         ),
         Index("ix_workflow_artifacts_job_type", "job_id", "artifact_type"),
     )
@@ -1462,6 +1687,319 @@ class WorkflowRepository:
                 } for row in rows]
             return result
 
+    @staticmethod
+    def _canonical_provenance_validation_evidence(evidence):
+        allowed = {
+            "validator_id", "validator_version", "status",
+            "evidence_ids", "metrics",
+        }
+        if not isinstance(evidence, dict) or set(evidence) - allowed:
+            raise ValueError("validation evidence contains unsupported fields")
+        validator_id = evidence.get("validator_id")
+        validator_version = evidence.get("validator_version")
+        if (
+                not isinstance(validator_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", validator_id)):
+            raise ValueError("validation evidence validator_id is invalid")
+        if (
+                not isinstance(validator_version, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", validator_version)):
+            raise ValueError("validation evidence validator_version is invalid")
+        if evidence.get("status") != "PASSED":
+            raise ValueError("only passed validation evidence can be committed")
+
+        evidence_ids = evidence.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list) or len(evidence_ids) > 50:
+            raise ValueError("validation evidence_ids must contain at most 50 IDs")
+        if any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value)
+                for value in evidence_ids):
+            raise ValueError("validation evidence contains an invalid evidence ID")
+        if len(set(evidence_ids)) != len(evidence_ids):
+            raise ValueError("validation evidence IDs must be unique")
+
+        metrics = evidence.get("metrics", {})
+        if not isinstance(metrics, dict) or len(metrics) > 50:
+            raise ValueError("validation metrics must be a bounded object")
+        normalized_metrics = {}
+        for key, value in metrics.items():
+            if (
+                    not isinstance(key, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", key)):
+                raise ValueError("validation metric name is invalid")
+            if isinstance(value, bool):
+                normalized_metrics[key] = value
+            elif isinstance(value, int) and abs(value) <= 9223372036854775807:
+                normalized_metrics[key] = value
+            elif isinstance(value, float) and math.isfinite(value):
+                normalized_metrics[key] = value
+            else:
+                raise ValueError("validation metrics must be finite numbers or booleans")
+
+        normalized = {
+            "validator_id": validator_id,
+            "validator_version": validator_version,
+            "status": "PASSED",
+            "evidence_ids": list(evidence_ids),
+            "metrics": normalized_metrics,
+        }
+        return WorkflowRepository._canonical_project_content(normalized)
+
+    def create_creative_asset_provenance(
+            self, asset_id, project_revision_id, prompt_config_revision_id,
+            parent_asset_ids, validation_evidence, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        if (
+                not isinstance(prompt_config_revision_id, str)
+                or not re.fullmatch(
+                    r"[A-Za-z0-9._:-]{1,128}", prompt_config_revision_id
+                )):
+            raise ValueError("prompt_config_revision_id must be an opaque identifier")
+        if not isinstance(parent_asset_ids, list) or len(parent_asset_ids) > 100:
+            raise ValueError("parent_asset_ids must contain at most 100 IDs")
+        if any(
+                not isinstance(parent_id, str)
+                or not parent_id.strip()
+                or len(parent_id) > 36
+                for parent_id in parent_asset_ids):
+            raise ValueError("parent_asset_ids contains an invalid ID")
+        if len(set(parent_asset_ids)) != len(parent_asset_ids):
+            raise ValueError("parent_asset_ids must be unique")
+        evidence, evidence_digest = (
+            self._canonical_provenance_validation_evidence(validation_evidence)
+        )
+        now = utcnow()
+        provenance_id = new_id()
+
+        with self._session.begin() as session:
+            asset = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id == asset_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if asset is None:
+                raise AuthorizationError("Resource not found or access denied")
+            revision = session.execute(
+                select(CreativeProjectRevisionRecord).where(
+                    CreativeProjectRevisionRecord.id == project_revision_id,
+                    CreativeProjectRevisionRecord.project_id == asset.project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if revision is None:
+                raise AuthorizationError("Resource not found or access denied")
+            existing = session.execute(
+                select(CreativeAssetProvenanceRecord.id).where(
+                    CreativeAssetProvenanceRecord.asset_id == asset_id,
+                    CreativeAssetProvenanceRecord.project_id == asset.project_id,
+                    CreativeAssetProvenanceRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise ValueError("asset provenance is immutable and already exists")
+
+            artifact = session.get(ArtifactRecord, asset.artifact_id)
+            job = session.get(JobRecord, asset.source_job_id)
+            if (
+                    artifact is None or job is None
+                    or artifact.job_id != asset.source_job_id
+                    or job.owner_tenant_id != principal.tenant_id
+                    or job.project_id != asset.project_id
+                    or job.project_revision_id != revision.id
+                    or artifact.status != "AVAILABLE"
+                    or artifact.checksum_sha256 != asset.content_sha256):
+                raise AuthorizationError("Resource not found or access denied")
+            if not artifact.stage_id or not artifact.attempt_id:
+                raise ValueError(
+                    "derived asset provenance requires an Attempt-bound Artifact"
+                )
+
+            stage = session.get(StageRecord, artifact.stage_id)
+            attempt = session.get(AttemptRecord, artifact.attempt_id)
+            workflow = (
+                session.get(WorkflowRecord, stage.workflow_id)
+                if stage is not None else None
+            )
+            if (
+                    stage is None or attempt is None or workflow is None
+                    or attempt.stage_id != stage.id
+                    or attempt.state != "SUCCEEDED"
+                    or workflow.job_id != job.id
+                    or stage.workflow_id != workflow.id):
+                raise AuthorizationError("Resource not found or access denied")
+            if workflow.execution_plan_json is None:
+                raise ValueError(
+                    "provenance requires a persisted execution plan snapshot"
+                )
+            self._verify_execution_plan_snapshot(workflow, job.id)
+            if (
+                    not workflow.workflow_version
+                    or not workflow.execution_plan_schema_version
+                    or not workflow.execution_plan_fingerprint
+                    or not re.fullmatch(
+                        r"[0-9a-fA-F]{64}", workflow.execution_plan_fingerprint
+                    )
+                    or isinstance(stage.operation_contract_version, bool)
+                    or stage.operation_contract_version < 1):
+                raise ValueError(
+                    "provenance requires a pinned workflow and operation contract"
+                )
+
+            revision_references = (
+                revision.content_json.get("references", {})
+                if isinstance(revision.content_json, dict) else {}
+            )
+            revision_asset_ids = (
+                revision_references.get("assets", [])
+                if isinstance(revision_references, dict) else []
+            )
+            if not isinstance(revision_asset_ids, list):
+                raise ValueError("ProjectRevision asset references are invalid")
+            if any(
+                    parent_id not in revision_asset_ids
+                    for parent_id in parent_asset_ids):
+                raise ValueError(
+                    "every parent Asset must be included in the pinned ProjectRevision"
+                )
+            if asset_id in parent_asset_ids:
+                raise ValueError("an Asset cannot be its own provenance parent")
+
+            parent_rows = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id.in_(parent_asset_ids),
+                    CreativeAssetRecord.project_id == asset.project_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalars().all() if parent_asset_ids else []
+            if len(parent_rows) != len(parent_asset_ids):
+                raise AuthorizationError("Resource not found or access denied")
+
+            provenance = CreativeAssetProvenanceRecord(
+                id=provenance_id,
+                asset_id=asset.id,
+                project_id=asset.project_id,
+                tenant_id=principal.tenant_id,
+                artifact_id=artifact.id,
+                job_id=job.id,
+                workflow_id=workflow.id,
+                stage_id=stage.id,
+                attempt_id=attempt.id,
+                project_revision_id=revision.id,
+                operation_id=stage.operation,
+                operation_contract_version=stage.operation_contract_version,
+                workflow_version=workflow.workflow_version,
+                execution_plan_schema_version=workflow.execution_plan_schema_version,
+                execution_plan_fingerprint=workflow.execution_plan_fingerprint,
+                prompt_config_revision_id=prompt_config_revision_id,
+                validation_evidence_json=evidence,
+                validation_evidence_sha256=evidence_digest,
+                created_at=now,
+                is_sealed=False,
+            )
+            session.add(provenance)
+            # The parent table has an immediate composite FK to this header.
+            # Flush the header explicitly before inserting its parent rows;
+            # ORM unit-of-work ordering is not a dependency guarantee here.
+            session.flush()
+            for parent in parent_rows:
+                session.add(CreativeAssetProvenanceParentRecord(
+                    provenance_id=provenance_id,
+                    project_id=asset.project_id,
+                    tenant_id=principal.tenant_id,
+                    parent_asset_id=parent.id,
+                    parent_content_sha256=parent.content_sha256,
+                    created_at=now,
+                ))
+            session.flush()
+            provenance.is_sealed = True
+
+            result = {
+                "id": provenance_id,
+                "asset_id": asset_id,
+                "project_id": asset.project_id,
+                "tenant_id": principal.tenant_id,
+                "artifact_id": artifact.id,
+                "job_id": job.id,
+                "workflow_id": workflow.id,
+                "stage_id": stage.id,
+                "attempt_id": attempt.id,
+                "project_revision_id": revision.id,
+                "operation_id": stage.operation,
+                "operation_contract_version": stage.operation_contract_version,
+                "workflow_version": workflow.workflow_version,
+                "execution_plan_schema_version": workflow.execution_plan_schema_version,
+                "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
+                "prompt_config_revision_id": prompt_config_revision_id,
+                "validation_evidence": evidence,
+                "validation_evidence_sha256": evidence_digest,
+                "parents": [{
+                    "asset_id": parent.id,
+                    "content_sha256": parent.content_sha256,
+                } for parent in parent_rows],
+                "created_at": now,
+            }
+        return result
+
+    def get_creative_asset_provenance(self, asset_id, project_id, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        with self._session() as session:
+            asset = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id == asset_id,
+                    CreativeAssetRecord.project_id == project_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if asset is None:
+                raise AuthorizationError("Resource not found or access denied")
+            row = session.execute(
+                select(CreativeAssetProvenanceRecord).where(
+                    CreativeAssetProvenanceRecord.asset_id == asset_id,
+                    CreativeAssetProvenanceRecord.project_id == project_id,
+                    CreativeAssetProvenanceRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            parents = session.execute(
+                select(CreativeAssetProvenanceParentRecord).where(
+                    CreativeAssetProvenanceParentRecord.provenance_id == row.id,
+                    CreativeAssetProvenanceParentRecord.project_id == project_id,
+                    CreativeAssetProvenanceParentRecord.tenant_id == principal.tenant_id,
+                ).order_by(CreativeAssetProvenanceParentRecord.parent_asset_id)
+            ).scalars().all()
+            return {
+                "id": row.id,
+                "asset_id": row.asset_id,
+                "project_id": row.project_id,
+                "tenant_id": row.tenant_id,
+                "artifact_id": row.artifact_id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "stage_id": row.stage_id,
+                "attempt_id": row.attempt_id,
+                "project_revision_id": row.project_revision_id,
+                "operation_id": row.operation_id,
+                "operation_contract_version": row.operation_contract_version,
+                "workflow_version": row.workflow_version,
+                "execution_plan_schema_version": row.execution_plan_schema_version,
+                "execution_plan_fingerprint": row.execution_plan_fingerprint,
+                "prompt_config_revision_id": row.prompt_config_revision_id,
+                "validation_evidence": deepcopy(row.validation_evidence_json),
+                "validation_evidence_sha256": row.validation_evidence_sha256,
+                "parents": [{
+                    "asset_id": parent.parent_asset_id,
+                    "content_sha256": parent.parent_content_sha256,
+                } for parent in parents],
+                "created_at": row.created_at,
+            }
+
     def update_creative_project_entity(
             self, entity_type, project_id, entity_id, principal,
             name=None, sort_order=None):
@@ -1777,7 +2315,9 @@ class WorkflowRepository:
             enqueue_dispatch=False,
             outbox_dedupe_key=None,
             execution_backend=None,
-            quota_enforcement_enabled=False):
+            quota_enforcement_enabled=False,
+            project_id=None,
+            project_revision_id=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -1792,6 +2332,16 @@ class WorkflowRepository:
                 raise TypeError("owner_principal must be a RequestPrincipal")
             if owner_principal.is_expired():
                 raise AuthorizationError("Resource not found or access denied")
+
+        if (project_id is None) != (project_revision_id is None):
+            raise ValueError(
+                "project_id and project_revision_id must be supplied together"
+            )
+        if project_revision_id is not None:
+            if owner_principal is None:
+                raise ValueError("ProjectRevision pinning requires an authenticated Job owner")
+            from video_streaming.security import require_scope
+            require_scope(owner_principal, "video.projects:read")
 
         from video_streaming.security.secret_store import SecretEnvelope
 
@@ -1912,6 +2462,12 @@ class WorkflowRepository:
                         raise AuthorizationError(
                             "Resource not found or access denied"
                         )
+                    if (
+                            existing.project_id != project_id
+                            or existing.project_revision_id != project_revision_id):
+                        raise IdempotencyConflict(
+                            "Idempotency key resolves to a different ProjectRevision pin"
+                        )
                     existing_workflow = session.execute(
                         select(WorkflowRecord).where(
                             WorkflowRecord.job_id == existing.id
@@ -1991,6 +2547,13 @@ class WorkflowRepository:
                         if concurrent_existing.request_hash != request_hash:
                             raise IdempotencyConflict(
                                 "Idempotency key was already used with a different request"
+                            )
+                        if (
+                                concurrent_existing.project_id != project_id
+                                or concurrent_existing.project_revision_id
+                                != project_revision_id):
+                            raise IdempotencyConflict(
+                                "Idempotency key resolves to a different ProjectRevision pin"
                             )
                         if (
                                 concurrent_existing.owner_tenant_id
@@ -2073,6 +2636,29 @@ class WorkflowRepository:
                         for envelope in secret_envelopes):
                     raise ValueError("secret envelope job_id must match job_id")
 
+                if project_revision_id is not None:
+                    project = session.execute(
+                        select(CreativeProjectRecord).where(
+                            CreativeProjectRecord.id == project_id,
+                            CreativeProjectRecord.tenant_id
+                            == owner_principal.tenant_id,
+                        )
+                    ).scalar_one_or_none()
+                    revision = session.execute(
+                        select(CreativeProjectRevisionRecord).where(
+                            CreativeProjectRevisionRecord.id
+                            == project_revision_id,
+                            CreativeProjectRevisionRecord.project_id == project_id,
+                            CreativeProjectRevisionRecord.tenant_id
+                            == owner_principal.tenant_id,
+                        )
+                    ).scalar_one_or_none()
+                    if project is None or revision is None:
+                        from video_streaming.security import AuthorizationError
+                        raise AuthorizationError(
+                            "Resource not found or access denied"
+                        )
+
                 job = JobRecord(
                     id=job_id,
                     idempotency_key=idempotency_key,
@@ -2081,6 +2667,8 @@ class WorkflowRepository:
                     owner_tenant_id=(
                         owner_principal.tenant_id if owner_principal else None
                     ),
+                    project_id=project_id,
+                    project_revision_id=project_revision_id,
                     owner_issuer=(
                         owner_principal.issuer if owner_principal else None
                     ),
@@ -2121,13 +2709,23 @@ class WorkflowRepository:
                         "execution_plan_fingerprint": plan_fingerprint,
                     },
                 )
+                from video_streaming.workflows.operation_contracts import (
+                    OPERATION_CONTRACTS,
+                )
+
                 stage_records = {}
                 for index, spec in enumerate(stage_specs):
+                    operation_contract = OPERATION_CONTRACTS.get(
+                        spec["operation"]
+                    )
                     stage_record = StageRecord(
                         id=new_id(),
                         workflow_id=workflow_id,
                         stage_key=spec["stage_key"],
                         operation=spec["operation"],
+                        operation_contract_version=(
+                            operation_contract.version if operation_contract else 1
+                        ),
                         ordinal=spec.get("ordinal", index),
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
@@ -2236,6 +2834,12 @@ class WorkflowRepository:
                     from video_streaming.security import AuthorizationError
                     raise AuthorizationError(
                         "Resource not found or access denied"
+                    )
+                if (
+                        existing.project_id != project_id
+                        or existing.project_revision_id != project_revision_id):
+                    raise IdempotencyConflict(
+                        "Idempotency key resolves to a different ProjectRevision pin"
                     )
                 existing_workflow = session.execute(
                     select(WorkflowRecord).where(
@@ -5769,6 +6373,8 @@ class WorkflowRepository:
                 "idempotency_key": job.idempotency_key,
                 "request_hash": job.request_hash,
                 "reference_id": job.reference_id,
+                "project_id": job.project_id,
+                "project_revision_id": job.project_revision_id,
                 "metadata": job.metadata_json,
                 "status": job.state,
                 "workflow": {
@@ -5807,6 +6413,7 @@ class WorkflowRepository:
                     "id": stage.id,
                     "key": stage.stage_key,
                     "operation": stage.operation,
+                    "operation_contract_version": stage.operation_contract_version,
                     "status": stage.status,
                     "version": stage.version,
                     "input": stage.input_contract_json,

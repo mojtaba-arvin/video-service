@@ -25,7 +25,8 @@ from video_streaming.workflows.repository import (
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
     StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord,
     CreativeSceneRecord, CreativeAssetRecord,
-    CreativeProjectRevisionReferenceRecord, utcnow
+    CreativeProjectRevisionReferenceRecord,
+    CreativeAssetProvenanceRecord, CreativeAssetProvenanceParentRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -221,6 +222,257 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "delivery_id", "http_status", "failure_code",
             }) for event in events
         ))
+
+    def test_creative_asset_provenance_is_attempt_bound_and_append_only(self):
+        tenant = "creative-provenance-" + str(uuid4())
+        owner = self.make_owner_principal(
+            tenant=tenant,
+            scopes=["video.projects:create", "video.projects:write",
+                    "video.projects:read", "video.jobs:create", "video.jobs:read"],
+        )
+        project = self.repository.create_creative_project("Provenance", owner)
+
+        # A same-tenant source Asset is included in the immutable ProjectRevision.
+        parent_job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=parent_job_id,
+            idempotency_key="provenance-parent-" + parent_job_id,
+            request_hash="1" * 64,
+            owner_principal=owner,
+        )
+        parent_artifact_id = str(uuid4())
+        with self.repository._session.begin() as session:
+            session.add(ArtifactRecord(
+                id=parent_artifact_id,
+                job_id=parent_job_id,
+                artifact_type="image",
+                logical_name="source-frame.png",
+                uri="s3://test-bucket/source-frame",
+                media_type="image/png",
+                size_bytes=1024,
+                checksum_sha256="a" * 64,
+                status="AVAILABLE",
+                metadata_json={},
+                created_at=utcnow(),
+            ))
+        parent_asset = self.repository.create_creative_asset(
+            project["id"], parent_artifact_id, "Source frame", "image", owner,
+            asset_id="source-frame",
+        )
+        revision = self.repository.create_creative_project_revision(
+            project["id"],
+            {
+                "title": "Derived shot",
+                "references": {"assets": [parent_asset["id"]]},
+            },
+            owner,
+        )
+
+        # The output Artifact is tied to a successful durable Attempt and plan.
+        output_job_id = str(uuid4())
+        plan = build_vod_execution_plan(output_job_id, {
+            "video": {"bucket": "source", "key": "input.mp4"},
+            "playlists": [{
+                "bucket": "output", "key": "master.m3u8", "protocol": "hls",
+            }],
+        })
+        self.repository.create_job(
+            job_id=output_job_id,
+            idempotency_key="provenance-output-" + output_job_id,
+            request_hash="2" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            owner_principal=owner,
+            project_id=project["id"],
+            project_revision_id=revision["id"],
+        )
+        stage_key = plan["nodes"][0]["stage_key"]
+        attempt_id, _, lease_token, _ = self.repository.claim_node_attempt(
+            output_job_id, stage_key, lease_owner="provenance-test-worker"
+        )
+        self.assertTrue(self.repository.complete_node_attempt(
+            output_job_id,
+            stage_key,
+            attempt_id,
+            {"valid": True, "errors": []},
+            lease_token=lease_token,
+        ))
+        with self.repository._session() as session:
+            workflow = session.query(WorkflowRecord).filter_by(
+                job_id=output_job_id
+            ).one()
+            stage = session.query(StageRecord).filter_by(
+                workflow_id=workflow.id, stage_key=stage_key
+            ).one()
+            attempt = session.get(AttemptRecord, attempt_id)
+            self.assertEqual(attempt.state, "SUCCEEDED")
+            self.assertGreaterEqual(stage.operation_contract_version, 1)
+        output_artifact_id = str(uuid4())
+        with self.repository._session.begin() as session:
+            session.add(ArtifactRecord(
+                id=output_artifact_id,
+                job_id=output_job_id,
+                stage_id=stage.id,
+                attempt_id=attempt_id,
+                artifact_type="video",
+                logical_name="derived-output.mp4",
+                uri="s3://test-bucket/derived-output",
+                media_type="video/mp4",
+                size_bytes=8192,
+                checksum_sha256="b" * 64,
+                status="AVAILABLE",
+                metadata_json={},
+                created_at=utcnow(),
+            ))
+        output_asset = self.repository.create_creative_asset(
+            project["id"], output_artifact_id, "Derived output", "video", owner
+        )
+
+        provenance = self.repository.create_creative_asset_provenance(
+            output_asset["id"],
+            revision["id"],
+            "prompt-config-v3",
+            [parent_asset["id"]],
+            {
+                "validator_id": "video-qc",
+                "validator_version": "2.1",
+                "status": "PASSED",
+                "evidence_ids": ["qc-run-123"],
+                "metrics": {"duration_seconds": 12.5, "passed": True},
+            },
+            owner,
+        )
+        snapshot = self.repository.get_job_snapshot(output_job_id)
+        self.assertEqual(snapshot["project_id"], project["id"])
+        self.assertEqual(snapshot["project_revision_id"], revision["id"])
+        self.assertEqual(
+            snapshot["stages"][0]["operation_contract_version"],
+            stage.operation_contract_version,
+        )
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key="provenance-output-" + output_job_id,
+                request_hash="2" * 64,
+                workflow_name="video.vod",
+                execution_plan=plan,
+                owner_principal=owner,
+                project_id=project["id"],
+                project_revision_id=str(uuid4()),
+            )
+        second_revision = self.repository.create_creative_project_revision(
+            project["id"],
+            {"title": "Second valid pin", "references": {"assets": [parent_asset["id"]]}},
+            owner,
+        )
+        pin_test_job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=pin_test_job_id,
+            idempotency_key="provenance-pin-trigger-" + pin_test_job_id,
+            request_hash="3" * 64,
+            workflow_name="video.vod",
+            owner_principal=owner,
+            project_id=project["id"],
+            project_revision_id=revision["id"],
+        )
+        with self.assertRaisesRegex(DBAPIError, "Job ProjectRevision pin is immutable"):
+            with self.repository._session.begin() as session:
+                job_row = session.get(JobRecord, pin_test_job_id)
+                job_row.project_revision_id = second_revision["id"]
+
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                stage_row = session.get(StageRecord, stage.id)
+                stage_row.operation_contract_version += 1
+
+        self.assertEqual(provenance["asset_id"], output_asset["id"])
+        self.assertEqual(provenance["project_revision_id"], revision["id"])
+        self.assertEqual(provenance["attempt_id"], attempt_id)
+        self.assertEqual(provenance["operation_id"], stage.operation)
+        self.assertEqual(
+            provenance["operation_contract_version"],
+            stage.operation_contract_version,
+        )
+        self.assertEqual(
+            provenance["parents"],
+            [{
+                "asset_id": parent_asset["id"],
+                "content_sha256": "a" * 64,
+            }],
+        )
+        fetched = self.repository.get_creative_asset_provenance(
+            output_asset["id"], project["id"], owner
+        )
+        self.assertEqual(fetched["validation_evidence"]["status"], "PASSED")
+        self.assertEqual(fetched["validation_evidence_sha256"],
+                         provenance["validation_evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "validation metrics must be finite numbers or booleans"):
+            self.repository.create_creative_asset_provenance(
+                output_asset["id"], revision["id"], "prompt-config-v3",
+                [parent_asset["id"]],
+                {
+                    "validator_id": "video-qc",
+                    "validator_version": "2.1",
+                    "status": "PASSED",
+                    "metrics": {"raw_log": "secret text must not be stored"},
+                },
+                owner,
+            )
+        with self.assertRaisesRegex(ValueError, "only passed validation evidence can be committed"):
+            self.repository.create_creative_asset_provenance(
+                output_asset["id"], revision["id"], "prompt-config-v3",
+                [parent_asset["id"]],
+                {
+                    "validator_id": "video-qc",
+                    "validator_version": "2.1",
+                    "status": "FAILED",
+                },
+                owner,
+            )
+        with self.assertRaisesRegex(ValueError, "prompt_config_revision_id must be an opaque identifier"):
+            self.repository.create_creative_asset_provenance(
+                output_asset["id"], revision["id"], "prompt config raw text",
+                [parent_asset["id"]],
+                {
+                    "validator_id": "video-qc",
+                    "validator_version": "2.1",
+                    "status": "PASSED",
+                },
+                owner,
+            )
+
+        with self.repository._session() as session:
+            parent_key = session.execute(
+                select(CreativeAssetProvenanceParentRecord.provenance_id).where(
+                    CreativeAssetProvenanceParentRecord.provenance_id
+                    == provenance["id"]
+                )
+            ).scalar_one()
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                row = session.get(CreativeAssetProvenanceRecord, provenance["id"])
+                row.prompt_config_revision_id = "tampered"
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                row = session.get(
+                    CreativeAssetProvenanceParentRecord,
+                    (parent_key, parent_asset["id"]),
+                )
+                session.delete(row)
+        with self.assertRaisesRegex(DBAPIError, "parent set is sealed"):
+            with self.repository._session.begin() as session:
+                session.execute(text(
+                    "INSERT INTO workflow_creative_asset_provenance_parents "
+                    "(provenance_id, project_id, tenant_id, parent_asset_id, "
+                    "parent_content_sha256) VALUES (:provenance_id, :project_id, "
+                    ":tenant_id, :parent_asset_id, :content_hash)"
+                ), {
+                    "provenance_id": provenance["id"],
+                    "project_id": project["id"],
+                    "tenant_id": tenant,
+                    "parent_asset_id": parent_asset["id"],
+                    "content_hash": "a" * 64,
+                })
 
     def test_typed_project_entities_are_tenant_scoped_and_revision_pinned(self):
         tenant = "creative-entities-" + str(uuid4())

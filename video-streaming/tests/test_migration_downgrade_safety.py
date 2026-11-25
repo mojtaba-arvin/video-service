@@ -44,6 +44,24 @@ class _Operations:
         return record
 
 
+class _SelectiveConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, statement):
+        sql = str(statement)
+        self.statements.append(sql)
+        if "FROM workflow_jobs" in sql:
+            return _ScalarResult(1)
+        return _ScalarResult(0)
+
+
+class _SelectiveOperations(_Operations):
+    def __init__(self):
+        self.connection = _SelectiveConnection()
+        self.calls = []
+
+
 def _load_migration(filename):
     path = os.path.join(MIGRATION_DIR, filename)
     spec = importlib.util.spec_from_file_location(
@@ -64,6 +82,8 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
         ("0011_tenant_job_quotas.py", "workflow_tenant_job_quota_policies", "tenant quota policies"),
         ("0013_creative_project_revisions.py", "workflow_creative_project_revisions", "immutable creative project revision history"),
         ("0014_creative_project_typed_references.py", "workflow_creative_project_revision_references", "creative project revision references"),
+        ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
+        ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
     )
 
     def test_downgrade_refuses_to_discard_existing_state(self):
@@ -76,7 +96,24 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
                         migration.downgrade()
                 self.assertTrue(operations.connection.statements)
                 self.assertIn(table, operations.connection.statements[0])
-                self.assertEqual(operations.calls, [])
+                if filename == "0015_creative_asset_provenance.py":
+                    self.assertEqual(len(operations.calls), 1)
+                    self.assertEqual(operations.calls[0][0], "execute")
+                    self.assertIn("LOCK TABLE", operations.calls[0][1][0])
+                else:
+                    self.assertEqual(operations.calls, [])
+
+    def test_provenance_downgrade_refuses_pinned_jobs(self):
+        migration = _load_migration("0015_creative_asset_provenance.py")
+        operations = _SelectiveOperations()
+        with patch.object(migration, "op", operations):
+            with self.assertRaisesRegex(RuntimeError, "ProjectRevision pins"):
+                migration.downgrade()
+        self.assertEqual(len(operations.connection.statements), 2)
+        self.assertIn("workflow_jobs", operations.connection.statements[1])
+        self.assertEqual(len(operations.calls), 1)
+        self.assertEqual(operations.calls[0][0], "execute")
+        self.assertIn("LOCK TABLE", operations.calls[0][1][0])
 
     def test_empty_state_preserves_normal_downgrade_path(self):
         for filename, table, _ in self.CASES:
