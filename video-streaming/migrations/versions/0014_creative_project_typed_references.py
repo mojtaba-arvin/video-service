@@ -31,23 +31,24 @@ def upgrade():
         name=name,
         ondelete="RESTRICT",
     )
-    entity_columns = [
-        sa.Column("id", sa.String(length=36), nullable=False),
-        sa.Column("project_id", sa.String(length=36), nullable=False),
-        sa.Column("tenant_id", sa.String(length=255), nullable=False),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_by_issuer", sa.String(length=512), nullable=False),
-        sa.Column("created_by_subject", sa.String(length=255), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), nullable=False,
-            server_default=sa.func.now(),
-        ),
-    ]
+    def entity_columns():
+        return [
+            sa.Column("id", sa.String(length=36), nullable=False),
+            sa.Column("project_id", sa.String(length=36), nullable=False),
+            sa.Column("tenant_id", sa.String(length=255), nullable=False),
+            sa.Column("name", sa.String(length=255), nullable=False),
+            sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("created_by_issuer", sa.String(length=512), nullable=False),
+            sa.Column("created_by_subject", sa.String(length=255), nullable=False),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), nullable=False,
+                server_default=sa.func.now(),
+            ),
+        ]
 
     op.create_table(
         "workflow_creative_scenes",
