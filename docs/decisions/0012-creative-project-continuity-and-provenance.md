@@ -1,6 +1,6 @@
 # ADR 0012: Tenant-owned creative project continuity and asset provenance
 
-- **Status:** Accepted domain constraints; persistence implementation remains open
+- **Status:** Accepted; Project/ProjectRevision and typed entity/reference persistence implemented; provenance and Job revision pinning remain open
 - **Date:** 2026-11-25
 - **Related:** [Issue #79](https://github.com/mojtaba-arvin/video-service/issues/79), [ADR 0002](0002-durable-workflow-state-and-typed-operations.md), [ADR 0007](0007-immutable-execution-plan-persistence.md)
 
@@ -67,13 +67,13 @@ Provenance records are append-only. A retry may create a new physical artifact, 
 
 ## Consequences and implementation sequence
 
-This ADR defines domain boundaries; it does not claim the Project/Scene/Shot/Character persistence schema or APIs already exist.
+This ADR defines domain boundaries. PR #176 implements tenant-owned Project and immutable ProjectRevision persistence. PR #181 implements tenant/project-scoped Scene, Shot, Character and Asset records plus immutable revision membership references; public project gRPC APIs, artifact provenance and Job revision pinning remain open.
 
 Implement in narrow increments:
-1. Add tenant-owned Project and immutable ProjectRevision persistence with authorization and migration tests.
-2. Add typed Scene/Shot/Character/Asset references and composite tenant/project constraints.
+1. **Implemented (PR #176):** tenant-owned Project and immutable ProjectRevision persistence with authorization and migration tests.
+2. **Implemented (PR #181):** typed Scene/Shot/Character/Asset references, composite tenant/project constraints, immutable revision membership and same-tenant content-addressed Artifact linkage. Asset registration requires an existing AVAILABLE Artifact; source ingestion remains a separate increment.
 3. Add append-only provenance linked to existing Artifact and Attempt records.
-4. Add revision pinning to Job acceptance and resumable stage checks.
+4. Add exact revision pinning to Job acceptance and resumable stage checks.
 5. Add retention policy and deletion workflow only after customer/legal data classes and retention requirements are explicit.
 
 Keep MCP exposure and model-provider integrations out of this increment. They must consume the same application services and authorization contracts after the domain persistence is proven.
