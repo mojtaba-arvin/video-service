@@ -132,11 +132,13 @@ class WorkflowNodeExecutor:
             raise ValueError("workflow operation is not allow-listed")
         stage_key = node["stage_key"]
         stage = self.repository.get_stage_snapshot(job_id, stage_key)
+        if stage is None or stage.get("operation") != operation:
+            raise ValueError("persisted Stage does not match the execution plan")
+        if stage.get("status") == "FINISHED":
+            return {"status": "already_completed", "node_id": node_id}
         contract = OPERATION_CONTRACTS.get(operation)
         if (
-                stage is None
-                or stage.get("operation") != operation
-                or contract is None
+                contract is None
                 or stage.get("operation_contract_version") != contract.version):
             raise ValueError(
                 "persisted Stage operation contract version is not supported by this worker"
