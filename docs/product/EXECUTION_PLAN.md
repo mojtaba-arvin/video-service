@@ -166,7 +166,7 @@ Baseline on `develop` as verified on 2026-11-25 (post-merge state):
 - **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
 - **PR #170 merged** as `6c375c52dc28d181c9d5ea69c291ceecd640044b`: atomic per-tenant active-Job admission uses the authenticated tenant for both legacy and durable CreateJob paths. The flag remains off until every tenant has an explicit policy; operator provisioning and policy-change audit history are not yet delivered.
 - **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Issue #148 is closed; PR #171 demonstrated the required `Quality gates` check on a PR targeting `develop`.
-- **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection, sensitive-log redaction, HMAC callback signing and atomic tenant quotas are merged. PR #175 added audited quota-policy provisioning/inventory repository primitives; PR #178 added redacted sender-side webhook attempt history; PR #180 now exposes quota provisioning, policy inventory, quota audit inspection and Job-owner-scoped webhook history over authenticated gRPC. Still open: production issuer/audience/JWKS and admin-scope issuance, receiver-side atomic Delivery-ID replay suppression, provisioning every active tenant and legacy-resource reconciliation.
+- **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection, sensitive-log redaction, HMAC callback signing and atomic tenant quotas are merged. PR #175 added audited quota-policy provisioning/inventory repository primitives; PR #178 added redacted sender-side webhook attempt history; PR #180 exposes quota provisioning, policy inventory, quota audit inspection and Job-owner-scoped webhook history over authenticated gRPC; PR #185 adds the production OIDC/operator/tenant reconciliation and receiver-side atomic replay runbook. Still open: production issuer/audience/JWKS and admin-scope issuance, receiver-side implementation and replay evidence, provisioning every active tenant and legacy-resource reconciliation.
 - **Durable dispatch rollout remains disabled**: CI does not establish production KMS/STS/IAM policy, live S3 behavior, legacy callback migration or automatic broker redelivery in the deployed topology.
 
 Next execution order:
@@ -174,7 +174,7 @@ Next execution order:
 1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. ADR 0011 records the disk-isolation constraints. Implement a real per-Attempt filesystem quota backend only after worker mount/quota capability evidence; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
 2. **#73 — complete security operations.** Configure the production OIDC issuer/audience/JWKS and ensure only the operator identity receives `video.tenant.quota.admin`; provision and reconcile an explicit policy for every active tenant through the new RPCs. Keep `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until that inventory is complete and legacy ownership is reconciled. Document and test the receiver's atomic Delivery-ID dedup transaction in the receiving system; sender-side history is already merged in PR #178.
 3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; rehearse migrations and the complete broker-backed VOD path inside the exact Python 3.12 production image, then verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
-4. **#79 — complete the P0 long-running workflow contract.** PR #153 already provides reusable versioned creative definitions and canonical fingerprints; ADR 0012 now defines the missing tenant-owned Project/Revision/Scene/Shot/Character/Asset and immutable provenance boundaries. Implement persistence and revision pinning in stages, then retention/deletion only after customer/legal policy is explicit.
+4. **#79 — complete the remaining P0 long-running workflow surface.** PR #176/#181 provide tenant-owned Projects/Revisions and typed references; PR #184 now adds attempt-bound immutable Asset provenance and exact Job ProjectRevision pinning. Next expose those operations through the authenticated application/gRPC boundary. Retention/deletion remains blocked on explicit customer/legal policy; do not invent a retention period or automate deletion.
 5. **#80 — implement deterministic CPU admission and tenant fairness** after quota provisioning/audit and resource metrics are operational; defer GPU/Spot policies.
 6. **#75/#82 — prepare licensed benchmark corpus and CDN telemetry correlation in parallel**, with privacy/retention controls.
 7. **#76 — implement MCP only after shared authorization, quota and audit contracts are complete.**
@@ -207,13 +207,13 @@ Delivered:
 
 **Implemented:** PR #181, squash commit `f219f95937d799f9858fd98c1622a6b865e8813c` (2026-11-25), migration `0014_project_refs`. The typed Scene/Shot/Character/Asset tables are tenant/project scoped; Shot→Scene and Asset→same-tenant Job→Artifact relationships use composite foreign keys. ProjectRevision typed membership is stored in an immutable reference table with one-of typed IDs and composite project/tenant/revision FKs. Entity IDs, ownership, Shot parent and Asset source/content identity are DB-protected; names/order remain mutable presentation fields. Tests cover cross-project/tenant rejection, revision reference immutability, identity triggers and downgrade safety.
 
-Next #79 increments, in order:
-1. Append-only provenance for derived artifacts (source artifact IDs/hashes, operation/version, redacted prompt/config revision, validation evidence and Attempt).
-2. Pin each Job to an exact ProjectRevision and verify that pin during retry/resume; keep workflow-definition and execution-plan versions separate.
-3. Expose project entity/revision operations through the authenticated application/gRPC boundary without duplicating domain authorization.
-4. Define customer/legal retention policy before any retention automation or deletion path.
+**Delivered by PR #184:** append-only provenance for derived Assets, including source Asset IDs/content hashes, operation and contract version, workflow/plan snapshot identity, prompt/config revision ID, validation evidence and source Attempt; exact ProjectRevision pins on Jobs; pin checks on all idempotency replay paths; and database-enforced immutable/sealed parent lineage. The provenance header and all parent rows must be committed as one sealed transaction. Direct SQL cannot append parents after commit; recursive lineage checks reject cycles. Worker contract-version mismatch records a non-retryable failed Attempt before handler execution, while completed Stages remain idempotently readable.
 
-Asset registration currently requires an existing AVAILABLE content-addressed Artifact; source ingestion remains #84. Do not add model-provider payloads to the domain schema, mutable revision identity/relationships, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
+Remaining #79 increments:
+1. Expose Project, ProjectRevision and typed Scene/Shot/Character/Asset operations through the authenticated application/gRPC boundary without duplicating domain authorization.
+2. Define customer/legal retention policy before any retention automation or deletion path.
+
+Asset registration still requires an existing AVAILABLE content-addressed Artifact; source ingestion remains #84. Do not add model-provider payloads to the domain schema, mutable revision identity/relationships, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
 
 
 ## 8. Webhook delivery history increment (Issue #73)
@@ -237,3 +237,30 @@ Quota administration derives operator issuer/subject from the verified OIDC Requ
 **Merged:** PR #181, squash commit `f219f95937d799f9858fd98c1622a6b865e8813c` (2026-11-25). Migration `0014_project_refs` adds tenant/project-scoped Scene, Shot, Character and Asset identities. Shot→Scene, Asset→same-tenant Job→Artifact and ProjectRevision→typed-entity membership are enforced with composite foreign keys. The revision membership table is immutable and stores exactly one typed entity reference per row. PostgreSQL triggers preserve entity identity and Asset source/content identity while allowing name/order presentation edits.
 
 Asset registration requires an existing AVAILABLE Artifact with a valid SHA-256 checksum owned by a Job in the same tenant. It does not implement source ingestion, public gRPC project APIs, artifact provenance or Job revision pinning. The PostgreSQL migration chain, downgrade safety, repository tests, Python 3.9/3.12 VOD lanes, Regression, Container, cgroup v2, Documentation links, Quality gates and Dependency Review all passed.
+
+
+## 11. Attempt-bound creative Asset provenance and exact Job revision pins (Issue #79)
+
+**Merged:** PR #184, squash commit `fe75d066fe24cf70ede05e94f70c477a75e6fe03` (2026-11-25). The final synchronized head passed the complete required CI matrix and Dependency Review. Quality gates passed, including PostgreSQL migration/repository tests, Python 3.9 and 3.12 regression, both gRPC/Celery/FFmpeg integration lanes, real Redis/Celery recovery, OS-process worker kill/restart, S3 publication/webhook retry, KMS envelope contracts, production container build and Linux cgroup v2 acceptance.
+
+Delivered:
+- Provenance is bound to the exact output Asset, source Job/Workflow/Stage/Attempt, exact ProjectRevision, operation contract version, workflow version, execution-plan schema/fingerprint, opaque prompt/config revision ID and canonical validation evidence/hash.
+- Job ProjectRevision pins are immutable at the database boundary and require a non-null tenant owner when populated. Both-null legacy Jobs remain supported.
+- Initial, concurrent and integrity-fallback idempotency replay paths compare both Project and ProjectRevision pins before returning an existing Job.
+- Provenance requires a persisted execution-plan snapshot that is re-verified before its fingerprint is recorded.
+- Provenance parent rows are sealed in the same transaction as the header. PostgreSQL permits only the one-way unsealed-to-sealed transition, requires a sealed row at commit, rejects post-commit parent INSERT/UPDATE/DELETE and checks recursive lineage for cycles.
+- Parent Asset IDs follow the same bounded opaque-ID contract as typed ProjectRevision references, including explicit IDs such as `source-frame`.
+- Worker operation-contract mismatch fails the claimed Attempt before handler execution; it is non-retryable and auditable. A completed Stage remains idempotently readable after worker upgrades.
+- Migration downgrade acquires locks before safety counts; CHECK constraints reject NULL/unknown validation status and populated Job pins without tenant ownership.
+
+The nine actionable CodeRabbit threads were addressed and resolved; the stale review was dismissed after the final head passed CI. No retention/deletion automation or feature flag activation was added.
+
+Remaining #79 work is the authenticated public Project/Revision/typed-entity gRPC surface, then a customer/legal-approved retention policy. Keep #79 open until both acceptance areas are resolved.
+
+## 12. Security operations and receiver replay release runbook (Issue #73)
+
+**Merged:** PR #185, squash commit `d55e139b94269f9d29d78b73152e1b97a587d9de` (2026-11-25). The docs-only PR passed Documentation links, Quality gates and Dependency Review.
+
+The runbook `docs/operations/security-and-webhook-receiver-release-runbook.md` records exact OIDC trust settings and negative token tests, least-privilege `video.tenant.quota.admin` provisioning, full active-tenant quota/legacy ownership reconciliation, and the receiving system's atomic Delivery-ID deduplication contract with concurrency/crash acceptance criteria.
+
+This is an operational contract, not proof of external deployment. Production IdP values, operator scope grants, tenant inventory/policies and receiver-side implementation evidence remain external release gates. Keep `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until they are verified; sender-side webhook history does not prevent receiver replay.
