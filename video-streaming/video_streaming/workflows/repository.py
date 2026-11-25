@@ -921,12 +921,12 @@ class WorkflowRepository:
             code = payload.get("failure_code")
             if code not in {
                     "DESTINATION_REJECTED", "TRANSPORT_ERROR",
-                    "HTTP_4XX", "HTTP_5XX"}:
+                    "HTTP_3XX", "HTTP_4XX", "HTTP_5XX"}:
                 raise ValueError("webhook failure code is invalid")
             safe_payload["failure_code"] = code
             status = payload.get("http_status")
             if status is not None:
-                if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
+                if isinstance(status, bool) or not isinstance(status, int) or not 300 <= status <= 599:
                     raise ValueError("failed webhook HTTP status is invalid")
                 safe_payload["http_status"] = status
         elif set(payload) != {"delivery_id"}:
