@@ -59,6 +59,16 @@ class CreativeProjectsMixin:
             created_at=self._iso(item.get("created_at")),
         )
 
+    def _revision_summary_response(self, item):
+        return self.pb2.CreativeProjectRevisionSummary(
+            id=item["id"],
+            project_id=item["project_id"],
+            tenant_id=item["tenant_id"],
+            revision_number=item["revision_number"],
+            content_sha256=item["content_sha256"],
+            created_at=self._iso(item.get("created_at")),
+        )
+
     def _entity_response(self, item):
         return self.pb2.CreativeProjectEntity(
             id=item["id"],
@@ -153,7 +163,7 @@ class CreativeProjectsMixin:
         except ValueError as exc:
             self._invalid(context, exc)
         return self.pb2.ListCreativeProjectRevisionsResponse(
-            revisions=[self._revision_response(item) for item in rows]
+            revisions=[self._revision_summary_response(item) for item in rows]
         )
 
     def create_creative_scene(self, request, context):
@@ -247,7 +257,7 @@ class CreativeProjectsMixin:
         repository = get_workflow_repository(required=True)
         try:
             result = repository.list_creative_project_entities(
-                request.project_id, principal
+                request.project_id, principal, limit=request.limit or 500
             )
         except AuthorizationError:
             self._not_found(context)
