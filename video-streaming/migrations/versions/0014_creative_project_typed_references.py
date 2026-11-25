@@ -299,7 +299,10 @@ def upgrade():
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.project_id IS DISTINCT FROM OLD.project_id
-               OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN
+               OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+               OR NEW.created_by_issuer IS DISTINCT FROM OLD.created_by_issuer
+               OR NEW.created_by_subject IS DISTINCT FROM OLD.created_by_subject
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
                 RAISE EXCEPTION 'creative entity identity is immutable';
             END IF;
             IF TG_TABLE_NAME = 'workflow_creative_shots'
@@ -312,6 +315,8 @@ def upgrade():
                    OR NEW.source_job_id IS DISTINCT FROM OLD.source_job_id
                    OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256
                    OR NEW.asset_type IS DISTINCT FROM OLD.asset_type
+                   OR NEW.media_type IS DISTINCT FROM OLD.media_type
+                   OR NEW.size_bytes IS DISTINCT FROM OLD.size_bytes
                ) THEN
                 RAISE EXCEPTION 'creative asset source identity is immutable';
             END IF;
