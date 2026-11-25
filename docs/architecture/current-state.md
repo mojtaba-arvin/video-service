@@ -285,10 +285,11 @@ integration, percentile/SLA view or automated adaptive-bitrate system.
 ### Operational and governance limits
 
 The CI harness and the connected GitHub integration do not establish that a
-production deployment exists. GitHub repository rulesets/branch protection and
-some repository security settings require owner/admin access. Those settings
-should be enabled, but they do not block independent engineering work on
-isolated branches.
+production deployment exists. The `Protect develop` ruleset requires pull
+requests and the `Quality gates` check; PR #171 demonstrated that the required
+check is reported successfully on a PR targeting `develop`. Production
+identity, cloud IAM/KMS and worker-host configuration still require owner/admin
+and deployment-environment evidence.
 
 The authoritative work queue remains
 [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54).
