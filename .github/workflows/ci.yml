@@ -607,7 +607,7 @@ jobs:
               with connection.cursor() as cursor:
                   cursor.execute("SELECT version_num FROM alembic_version")
                   revisions = [row[0] for row in cursor.fetchall()]
-                  if revisions != ["0013_creative_project_revisions"]:
+                  if revisions != ["0014_creative_project_typed_references"]:
                       raise SystemExit(
                           "Re-upgrade did not reach the expected head: {!r}".format(
                               revisions
