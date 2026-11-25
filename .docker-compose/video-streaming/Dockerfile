@@ -5,6 +5,8 @@ FROM python:3.12.11-alpine3.22
 
 LABEL maintainer="Mojtaba Arvin m.arvin@live.com"
 
+COPY cgroup_exec.c /opt/cgroup_exec.c
+
 RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1 \
     && apk add --no-cache \
         build-base \
@@ -16,7 +18,11 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip==26.0.1 \
         zlib-dev \
         jpeg-dev \
         imagemagick \
-        ffmpeg
+        ffmpeg \
+    && cc -O2 -Wall -Wextra -Werror /opt/cgroup_exec.c \
+        -o /usr/local/bin/video-cgroup-exec \
+    && chmod 0755 /usr/local/bin/video-cgroup-exec \
+    && rm -f /opt/cgroup_exec.c
 
 WORKDIR /opt/workdir
 

@@ -39,6 +39,8 @@ def attempt_cgroup_scope(attempt_id):
         delegated_root=settings.ATTEMPT_CGROUP_V2_ROOT,
         cpu_max=settings.ATTEMPT_CGROUP_V2_CPU_MAX,
         memory_max=settings.ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES,
+        pids_max=settings.ATTEMPT_CGROUP_V2_PIDS_MAX,
+        helper_path=settings.ATTEMPT_CGROUP_V2_EXECUTABLE,
         attempt_id=attempt_id,
     )
     token = _CURRENT_ATTEMPT_CGROUP.set(cgroup)
