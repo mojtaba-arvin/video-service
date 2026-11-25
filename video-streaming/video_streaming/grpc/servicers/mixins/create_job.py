@@ -719,6 +719,8 @@ class CreateJobMixin(object):
                     if settings.WORKFLOW_DURABLE_DISPATCH_ENABLED else None
                 ),
                 owner_principal=principal,
+                project_id=request.project_id or None,
+                project_revision_id=request.project_revision_id or None,
                 secret_envelopes=webhook_envelopes,
                 quota_enforcement_enabled=(
                     settings.TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED
