@@ -2,6 +2,9 @@
 
 import os
 import unittest
+from contextlib import contextmanager
+from dataclasses import replace
+from unittest import mock
 from datetime import timedelta
 from uuid import uuid4
 
@@ -425,6 +428,81 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         stages = {stage["key"]: stage for stage in snapshot["stages"]}
         self.assertEqual(stages["active"]["status"], "CANCELLED")
         self.assertEqual(stages["failing"]["status"], "FAILED")
+
+    def test_media_attempt_uses_cgroup_and_persists_kernel_usage_metrics(self):
+        from video_streaming.workflows import executor as executor_module
+
+        observed = {}
+
+        class FakeCgroup:
+            def usage(self):
+                return {
+                    "cpu": {"usage_usec": 2500000},
+                    "memory_peak_bytes": 4096,
+                }
+
+        @contextmanager
+        def fake_scope(attempt_id):
+            observed["attempt_id"] = attempt_id
+            yield FakeCgroup()
+
+        contracts = dict(executor_module.OPERATION_CONTRACTS)
+        contracts["video.input.check"] = replace(
+            contracts["video.input.check"],
+            cancellation="process_group_termination",
+        )
+        with mock.patch.object(
+                executor_module, "OPERATION_CONTRACTS", contracts):
+            with mock.patch.object(
+                    executor_module, "attempt_cgroup_scope", fake_scope):
+                result = self.executor(lambda _node, _context: {
+                    "validation_report": dict(VALID),
+                    "metrics": {"cpu_seconds": 1.0, "peak_memory_bytes": 1024},
+                }).execute(self.job_id, "check")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(observed["attempt_id"])
+        attempt = self.repository.get_job_snapshot(self.job_id)[
+            "stages"
+        ][0]["attempts"][-1]
+        self.assertEqual(attempt["cpu_seconds"], 2.5)
+        self.assertEqual(attempt["peak_memory_bytes"], 4096)
+
+    def test_media_attempt_persists_cgroup_usage_when_handler_fails(self):
+        from video_streaming.workflows import executor as executor_module
+
+        class FakeCgroup:
+            def usage(self):
+                return {
+                    "cpu": {"usage_usec": 750000},
+                    "memory_peak_bytes": 8192,
+                }
+
+        @contextmanager
+        def fake_scope(_attempt_id):
+            yield FakeCgroup()
+
+        contracts = dict(executor_module.OPERATION_CONTRACTS)
+        contracts["video.input.check"] = replace(
+            contracts["video.input.check"],
+            cancellation="process_group_termination",
+        )
+        with mock.patch.object(
+                executor_module, "OPERATION_CONTRACTS", contracts):
+            with mock.patch.object(
+                    executor_module, "attempt_cgroup_scope", fake_scope):
+                result = self.executor(
+                    lambda _node, _context: (_ for _ in ()).throw(
+                        RuntimeError("synthetic media failure")
+                    )
+                ).execute(self.job_id, "check")
+
+        self.assertEqual(result["status"], "retryable_failure")
+        attempt = self.repository.get_job_snapshot(self.job_id)[
+            "stages"
+        ][0]["attempts"][-1]
+        self.assertEqual(attempt["cpu_seconds"], 0.75)
+        self.assertEqual(attempt["peak_memory_bytes"], 8192)
 
     def test_handler_registry_must_cover_every_plan_operation(self):
         with self.assertRaisesRegex(ValueError, "exactly cover"):
