@@ -268,7 +268,7 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         ).execute(self.job_id, "check")
         self.assertEqual(permanent["status"], "failed")
 
-    def test_worker_rejects_stage_contract_version_mismatch_before_claim(self):
+    def test_worker_records_contract_version_mismatch_before_handler(self):
         from types import SimpleNamespace
         from unittest.mock import patch
 
