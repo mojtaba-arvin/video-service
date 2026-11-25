@@ -11,7 +11,7 @@ to reduce processing and storage space costs.
 
 For some delivery profiles, HLS with fragmented MP4 (fMP4/CMAF) can reduce duplicated packaging or storage compared with maintaining separate HLS and DASH outputs. Actual savings depend on player compatibility, encoding strategy, storage, and delivery configuration; no fixed percentage is guaranteed.
 
-The multi-stage dockerfile of the project uses `Python3.9.2` and **[FFmpeg](https://ffmpeg.org)** 4.1 that supports `fmp4` HLS segment type.
+The production image uses `Python 3.12.11` on Alpine 3.22 and installs FFmpeg/FFprobe from the same Alpine base to keep the runtime ABI consistent. The supported HLS/DASH packaging behavior is covered by the repository's integration tests.
 
 Features:
 * Supports multi outputs with custom encode formats, codecs and qualities

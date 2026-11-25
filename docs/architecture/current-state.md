@@ -285,10 +285,22 @@ integration, percentile/SLA view or automated adaptive-bitrate system.
 ### Operational and governance limits
 
 The CI harness and the connected GitHub integration do not establish that a
-production deployment exists. GitHub repository rulesets/branch protection and
-some repository security settings require owner/admin access. Those settings
-should be enabled, but they do not block independent engineering work on
-isolated branches.
+production deployment exists. The `Protect develop` ruleset requires pull
+requests and the `Quality gates` check; PR #171 demonstrated that the required
+check is reported successfully on a PR targeting `develop`. Production
+identity, cloud IAM/KMS and worker-host configuration still require owner/admin
+and deployment-environment evidence.
 
 The authoritative work queue remains
 [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54).
+
+## 11. Verified implementation update (2026-11-25)
+
+The following changes are merged to `develop` and have passing pull-request CI:
+
+- **PR #168** applies the Attempt cgroup v2 CPU/memory limits to durable playlist, thumbnail and watermark operations and persists kernel usage counters on success and failure.
+- **PR #170** adds atomic active-Job quota enforcement keyed to the authenticated tenant. The same CreateJob persistence path is used by legacy Celery and durable outbox dispatch. Enforcement remains default-off until all tenants have provisioned policies; no default quota is guessed.
+- **PR #171** adds a native `clone3(CLONE_INTO_CGROUP)` launcher and per-Attempt `pids.max`. The required Linux acceptance test verifies that a process admitted with `pids.max=1` cannot fork another process, alongside CPU throttling, memory OOM accounting, descendant termination and cleanup.
+- **PR #170 and #171** do not establish production rollout readiness. Quota policy provisioning/audit, disk quota/high-water accounting, delegated cgroup setup on production workers, production OIDC/KMS/STS/IAM evidence, and live broker/worker recovery remain operational gates.
+
+The merged PID implementation intentionally has no post-fork cgroup migration or fallback when `clone3(CLONE_INTO_CGROUP)` is unavailable. `ATTEMPT_CGROUP_V2_ENABLED` and `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED` remain false by default pending their respective rollout evidence.
