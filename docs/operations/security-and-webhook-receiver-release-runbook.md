@@ -47,6 +47,10 @@ As of this runbook revision, the repository has CI and Dependency Review workflo
 
 The IdP must first provide its exact issuer and audience for this gRPC API and its trusted HTTPS JWKS URI. If the IdP is not yet selected/configured, keep the production OIDC rollout blocked; do not substitute a guessed issuer, audience, or JWKS URL.
 
+### Selected reference provider
+
+[ADR 0010](../decisions/0010-keycloak-reference-oidc-provider.md) selects **Keycloak 26.6+ with Organizations** as the reference OIDC provider. This is an architectural selection, not evidence that a Keycloak instance exists or that production is configured. Use a dedicated realm and gRPC API audience; issue tenant-scoped access tokens in exactly one selected organization context. Keycloak's native organization claim is an object, while this service currently requires a top-level string tenant_id. A tested mapper/adapter must emit the selected immutable organization ID as tenant_id before production rollout. Never use organization:* or accept an ambiguous multi-organization token for this API. The exact issuer, audience and JWKS URI remain unavailable until the instance is provisioned.
+
 ## Gate 1 — operator identity and least privilege
 
 The quota-administration RPCs require the verified principal to carry the exact scope `video.tenant.quota.admin`. The public creative Project API separately uses `video.projects:create`, `video.projects:read` and `video.projects:write`; grant these only to tenant-scoped application identities that need Project/Revision or typed-entity access. The target tenant, cap and mandatory reason are request data; operator issuer and subject are derived from the verified token and persisted in the audit record.
