@@ -2303,13 +2303,23 @@ class WorkflowRepository:
                         "execution_plan_fingerprint": plan_fingerprint,
                     },
                 )
+                from video_streaming.workflows.operation_contracts import (
+                    OPERATION_CONTRACTS,
+                )
+
                 stage_records = {}
                 for index, spec in enumerate(stage_specs):
+                    operation_contract = OPERATION_CONTRACTS.get(
+                        spec["operation"]
+                    )
                     stage_record = StageRecord(
                         id=new_id(),
                         workflow_id=workflow_id,
                         stage_key=spec["stage_key"],
                         operation=spec["operation"],
+                        operation_contract_version=(
+                            operation_contract.version if operation_contract else 1
+                        ),
                         ordinal=spec.get("ordinal", index),
                         input_contract_json=spec.get("input", {}),
                         output_contract_json=spec.get("output", {}),
