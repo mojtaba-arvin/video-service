@@ -364,6 +364,11 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 job_row = session.get(JobRecord, output_job_id)
                 job_row.project_revision_id = str(uuid4())
 
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                stage_row = session.get(StageRecord, stage.id)
+                stage_row.operation_contract_version += 1
+
         self.assertEqual(provenance["asset_id"], output_asset["id"])
         self.assertEqual(provenance["project_revision_id"], revision["id"])
         self.assertEqual(provenance["attempt_id"], attempt_id)
