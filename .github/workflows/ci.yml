@@ -721,9 +721,14 @@ jobs:
       - name: Install process-control test dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-test-py312.txt
 
-      - name: Exercise real CPU, memory and descendant controls on cgroup v2
+      - name: Build atomic cgroup process launcher
+        run: cc -O2 -Wall -Wextra -Werror .docker-compose/video-streaming/cgroup_exec.c -o /tmp/video-cgroup-exec
+
+      - name: Exercise real CPU, memory, PID and descendant controls on cgroup v2
+        env:
+          ATTEMPT_CGROUP_V2_EXECUTABLE: /tmp/video-cgroup-exec
         run: |
-          sudo --preserve-env=PATH env PYTHONPATH=video-streaming python -m unittest discover \
+          sudo --preserve-env=PATH,ATTEMPT_CGROUP_V2_EXECUTABLE env PYTHONPATH=video-streaming python -m unittest discover \
             -s video-streaming/tests \
             -p 'test_cgroup_v2_linux_acceptance.py' \
             -v
