@@ -64,11 +64,6 @@ def upgrade():
         ["id", "job_id"],
     )
     op.create_unique_constraint(
-        "uq_workflow_job_project_revision_pin",
-        "workflow_jobs",
-        ["id", "project_id", "project_revision_id", "owner_tenant_id"],
-    )
-    op.create_unique_constraint(
         "uq_workflow_attempt_stage_identity",
         "workflow_attempts",
         ["id", "stage_id"],
