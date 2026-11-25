@@ -1,7 +1,7 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `8d196f36c113d60101cc8a7309efb56173f0db3e` (merged PR #172)
+- **Baseline:** `dc93324abc8f8ee6e70489764c06f1ab1ddbc20a` (merged PR #173)
 - **Last reviewed:** 2026-11-25
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
@@ -162,6 +162,7 @@ Baseline on `develop` as verified on 2026-11-25 (post-merge state):
 - **PR #154 merged** as `4062b6998b5fd6b1e0bd7b01de900f01f4137663`: Python 3.12.11 Alpine 3.22 production image, refreshed pins, same-base FFmpeg/FFprobe and startup Protobuf generation. Image/import/media-tool smoke and CI passed; full broker-backed VOD and migrations inside this image remain operational acceptance work.
 - **PR #156/#168 merged** as `d546607e20ea6fcec4859688ebed9286bcf0b3da` / `06a53f51b1fad0ea1dd0a1eaac6ffeb2c69097ba`: Attempt-scoped cgroup v2 CPU/memory limits are wired through durable playlist, thumbnail and watermark processing; kernel counters persist on success and failure.
 - **PR #171 merged** as `c54f60a3c43acfecae4c68bc047a7e74fa417443`: native `clone3(CLONE_INTO_CGROUP)` admission enforces per-Attempt `pids.max` from process creation. The Linux acceptance job verifies CPU, memory/OOM, PID rejection, descendant termination and cleanup. Disk quotas and production delegated-root verification remain open.
+- **PR #173 merged** as `dc93324abc8f8ee6e70489764c06f1ab1ddbc20a`: ADR 0011 defines hard per-Attempt scratch-disk isolation constraints. This is a design decision only; no disk quota backend or runtime flag is enabled.
 - **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
 - **PR #170 merged** as `6c375c52dc28d181c9d5ea69c291ceecd640044b`: atomic per-tenant active-Job admission uses the authenticated tenant for both legacy and durable CreateJob paths. The flag remains off until every tenant has an explicit policy; operator provisioning and policy-change audit history are not yet delivered.
 - **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Issue #148 is closed; PR #171 demonstrated the required `Quality gates` check on a PR targeting `develop`.
@@ -170,10 +171,10 @@ Baseline on `develop` as verified on 2026-11-25 (post-merge state):
 
 Next execution order:
 
-1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. Define and implement per-Attempt scratch-disk limits/high-water accounting without broad shared-filesystem deletion; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
+1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. ADR 0011 records the disk-isolation constraints. Implement a real per-Attempt filesystem quota backend only after worker mount/quota capability evidence; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
 2. **#73 — complete security operations.** Build an audited quota-policy provisioning path (operator identity, reason, version/history and inventory) before enabling `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED`; add bounded webhook attempt history without storing URLs, secrets, signatures or bodies; document/test the receiver's atomic Delivery-ID dedup transaction. Verify production issuer/audience/JWKS and legacy ownership reconciliation.
 3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; rehearse migrations and the complete broker-backed VOD path inside the exact Python 3.12 production image, then verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
-4. **#79 — complete the P0 long-running workflow contract** with persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable stages; preserve the existing immutable plan/fingerprint contract.
+4. **#79 — complete the P0 long-running workflow contract.** PR #153 already provides reusable versioned creative definitions and canonical fingerprints; ADR 0012 now defines the missing tenant-owned Project/Revision/Scene/Shot/Character/Asset and immutable provenance boundaries. Implement persistence and revision pinning in stages, then retention/deletion only after customer/legal policy is explicit.
 5. **#80 — implement deterministic CPU admission and tenant fairness** after quota provisioning/audit and resource metrics are operational; defer GPU/Spot policies.
 6. **#75/#82 — prepare licensed benchmark corpus and CDN telemetry correlation in parallel**, with privacy/retention controls.
 7. **#76 — implement MCP only after shared authorization, quota and audit contracts are complete.**
