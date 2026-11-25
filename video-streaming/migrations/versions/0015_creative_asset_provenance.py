@@ -373,7 +373,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_job_project_revision_pin_mutation()
-        RETURNS trigger AS $fn$$
+        RETURNS trigger AS $
         BEGIN
             IF NEW.project_id IS DISTINCT FROM OLD.project_id
                OR NEW.project_revision_id IS DISTINCT FROM OLD.project_revision_id THEN
@@ -390,7 +390,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_stage_operation_contract_mutation()
-        RETURNS trigger AS $fn$$
+        RETURNS trigger AS $
         BEGIN
             IF NEW.operation IS DISTINCT FROM OLD.operation
                OR NEW.operation_contract_version
