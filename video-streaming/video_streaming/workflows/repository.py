@@ -62,6 +62,10 @@ class JobRecord(Base):
             "id", "owner_tenant_id", "owner_issuer", "owner_subject",
             name="uq_workflow_jobs_secret_owner",
         ),
+        UniqueConstraint(
+            "id", "owner_tenant_id",
+            name="uq_workflow_jobs_tenant_identity",
+        ),
         Index(
             "ix_workflow_jobs_owner_tenant_created",
             "owner_tenant_id",
@@ -183,6 +187,276 @@ class CreativeProjectRevisionRecord(Base):
     content_sha256 = Column(String(64), nullable=False)
     created_by_issuer = Column(String(512), nullable=False)
     created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeSceneRecord(Base):
+    """Stable, project-scoped scene identity; name/order are presentation data."""
+
+    __tablename__ = "workflow_creative_scenes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_scene_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_scene_project_identity",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_scene_order"),
+        Index(
+            "ix_workflow_creative_scenes_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeShotRecord(Base):
+    """Stable shot identity constrained to a scene in the same project/tenant."""
+
+    __tablename__ = "workflow_creative_shots"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_shot_project",
+        ),
+        ForeignKeyConstraint(
+            ["scene_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_scenes.id",
+                "workflow_creative_scenes.project_id",
+                "workflow_creative_scenes.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_shot_scene_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_shot_project_identity",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_shot_order"),
+        Index(
+            "ix_workflow_creative_shots_scene_order",
+            "scene_id", "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    scene_id = Column(String(36), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeCharacterRecord(Base):
+    """Stable, project-scoped character identity."""
+
+    __tablename__ = "workflow_creative_characters"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_character_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_character_project_identity",
+        ),
+        CheckConstraint(
+            "sort_order >= 0", name="ck_workflow_creative_character_order"
+        ),
+        Index(
+            "ix_workflow_creative_characters_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeAssetRecord(Base):
+    """Project-scoped logical Asset bound to a same-tenant immutable artifact."""
+
+    __tablename__ = "workflow_creative_assets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_project",
+        ),
+        ForeignKeyConstraint(
+            ["source_job_id", "tenant_id"],
+            ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_source_job_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["artifact_id", "source_job_id"],
+            ["workflow_artifacts.id", "workflow_artifacts.job_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_artifact_job",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_project_identity",
+        ),
+        UniqueConstraint(
+            "artifact_id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_artifact_project",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_asset_order"),
+        CheckConstraint(
+            "length(content_sha256) = 64",
+            name="ck_workflow_creative_asset_hash_length",
+        ),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes >= 0",
+            name="ck_workflow_creative_asset_size",
+        ),
+        Index(
+            "ix_workflow_creative_assets_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    artifact_id = Column(String(36), nullable=False)
+    source_job_id = Column(String(36), nullable=False)
+    name = Column(String(255), nullable=False)
+    asset_type = Column(String(64), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    media_type = Column(String(128), nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeProjectRevisionReferenceRecord(Base):
+    """Immutable typed entity membership captured by one project revision."""
+
+    __tablename__ = "workflow_creative_project_revision_references"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["revision_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_revision",
+        ),
+        ForeignKeyConstraint(
+            ["scene_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_scenes.id",
+                "workflow_creative_scenes.project_id",
+                "workflow_creative_scenes.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_scene",
+        ),
+        ForeignKeyConstraint(
+            ["shot_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_shots.id",
+                "workflow_creative_shots.project_id",
+                "workflow_creative_shots.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_shot",
+        ),
+        ForeignKeyConstraint(
+            ["character_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_characters.id",
+                "workflow_creative_characters.project_id",
+                "workflow_creative_characters.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_character",
+        ),
+        ForeignKeyConstraint(
+            ["asset_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_asset",
+        ),
+        CheckConstraint(
+            "(CASE WHEN scene_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN shot_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN character_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN asset_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_workflow_project_revision_reference_one_type",
+        ),
+        UniqueConstraint(
+            "revision_id", "scene_id",
+            name="uq_workflow_project_revision_reference_scene",
+        ),
+        UniqueConstraint(
+            "revision_id", "shot_id",
+            name="uq_workflow_project_revision_reference_shot",
+        ),
+        UniqueConstraint(
+            "revision_id", "character_id",
+            name="uq_workflow_project_revision_reference_character",
+        ),
+        UniqueConstraint(
+            "revision_id", "asset_id",
+            name="uq_workflow_project_revision_reference_asset",
+        ),
+        Index(
+            "ix_workflow_project_revision_references_revision",
+            "revision_id", "project_id", "tenant_id",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    revision_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    scene_id = Column(String(36), nullable=True)
+    shot_id = Column(String(36), nullable=True)
+    character_id = Column(String(36), nullable=True)
+    asset_id = Column(String(36), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -373,6 +647,9 @@ class ArtifactRecord(Base):
         UniqueConstraint(
             "stage_id", "attempt_id", "logical_name",
             name="uq_stage_attempt_artifact_name",
+        ),
+        UniqueConstraint(
+            "id", "job_id", name="uq_workflow_artifact_job_identity"
         ),
         Index("ix_workflow_artifacts_job_type", "job_id", "artifact_type"),
     )
@@ -811,12 +1088,48 @@ class WorkflowRepository:
             "name": name, "created_at": now,
         }
 
+    @staticmethod
+    def _parse_creative_project_revision_references(snapshot):
+        if "references" not in snapshot:
+            return {}
+        references = snapshot["references"]
+        allowed = {"scenes", "shots", "characters", "assets"}
+        if not isinstance(references, dict) or set(references) - allowed:
+            raise ValueError("project revision references must use typed entity lists")
+        parsed = {}
+        for entity_type, entity_ids in references.items():
+            if not isinstance(entity_ids, list) or len(entity_ids) > 500:
+                raise ValueError(
+                    "project revision {} references must be a list of at most 500 IDs".format(
+                        entity_type
+                    )
+                )
+            if any(
+                    not isinstance(entity_id, str)
+                    or not entity_id.strip()
+                    or len(entity_id) > 36
+                    for entity_id in entity_ids):
+                raise ValueError(
+                    "project revision {} references contain an invalid ID".format(
+                        entity_type
+                    )
+                )
+            if len(set(entity_ids)) != len(entity_ids):
+                raise ValueError(
+                    "project revision {} references must be unique".format(
+                        entity_type
+                    )
+                )
+            parsed[entity_type] = list(entity_ids)
+        return parsed
+
     def create_creative_project_revision(self, project_id, content, principal):
         """Append the next immutable project snapshot for its authenticated tenant."""
         from video_streaming.security import AuthorizationError, require_scope
 
         require_scope(principal, "video.projects:write")
         snapshot, digest = self._canonical_project_content(content)
+        references = self._parse_creative_project_revision_references(snapshot)
         revision_id = new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -849,6 +1162,53 @@ class WorkflowRepository:
                 created_by_subject=principal.subject,
                 created_at=now,
             ))
+
+            entity_models = {
+                "scenes": CreativeSceneRecord,
+                "shots": CreativeShotRecord,
+                "characters": CreativeCharacterRecord,
+                "assets": CreativeAssetRecord,
+            }
+            resolved = {}
+            for entity_type, entity_ids in references.items():
+                model = entity_models[entity_type]
+                rows = session.execute(
+                    select(model).where(
+                        model.id.in_(entity_ids),
+                        model.project_id == project_id,
+                        model.tenant_id == principal.tenant_id,
+                    )
+                ).scalars().all() if entity_ids else []
+                if len(rows) != len(entity_ids):
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
+                    )
+                resolved[entity_type] = rows
+
+            scene_ids = set(references.get("scenes", []))
+            for shot in resolved.get("shots", []):
+                if shot.scene_id not in scene_ids:
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
+                    )
+
+            reference_columns = {
+                "scenes": "scene_id",
+                "shots": "shot_id",
+                "characters": "character_id",
+                "assets": "asset_id",
+            }
+            for entity_type, entity_ids in references.items():
+                column = reference_columns[entity_type]
+                for entity_id in entity_ids:
+                    session.add(CreativeProjectRevisionReferenceRecord(
+                        id=new_id(),
+                        revision_id=revision_id,
+                        project_id=project_id,
+                        tenant_id=principal.tenant_id,
+                        **{column: entity_id},
+                        created_at=now,
+                    ))
             project.updated_at = now
         return {
             "id": revision_id, "project_id": project_id,
@@ -890,6 +1250,275 @@ class WorkflowRepository:
                 "created_by_subject": row.created_by_subject,
                 "created_at": row.created_at,
             }
+
+    @staticmethod
+    def _validate_creative_entity_fields(name, sort_order):
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("creative entity name is required")
+        name = name.strip()
+        if len(name) > 255:
+            raise ValueError("creative entity name must contain at most 255 characters")
+        if (
+                isinstance(sort_order, bool)
+                or not isinstance(sort_order, int)
+                or sort_order < 0):
+            raise ValueError("sort_order must be a nonnegative integer")
+        return name
+
+    def _create_creative_project_entity(
+            self, model, project_id, name, principal, sort_order=0,
+            entity_id=None, extra=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        name = self._validate_creative_entity_fields(name, sort_order)
+        entity_id = entity_id or new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            values = {
+                "id": entity_id,
+                "project_id": project_id,
+                "tenant_id": principal.tenant_id,
+                "name": name,
+                "sort_order": sort_order,
+                "created_by_issuer": principal.issuer,
+                "created_by_subject": principal.subject,
+                "created_at": now,
+                "updated_at": now,
+            }
+            values.update(extra or {})
+            session.add(model(**values))
+            project.updated_at = now
+        return {
+            "id": entity_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id, "name": name,
+            "sort_order": sort_order, "created_at": now,
+        }
+
+    def create_creative_scene(
+            self, project_id, name, principal, sort_order=0, scene_id=None):
+        return self._create_creative_project_entity(
+            CreativeSceneRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=scene_id,
+        )
+
+    def create_creative_shot(
+            self, project_id, scene_id, name, principal,
+            sort_order=0, shot_id=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        with self._session() as session:
+            scene = session.execute(
+                select(CreativeSceneRecord).where(
+                    CreativeSceneRecord.id == scene_id,
+                    CreativeSceneRecord.project_id == project_id,
+                    CreativeSceneRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+        if scene is None:
+            raise AuthorizationError("Resource not found or access denied")
+        return self._create_creative_project_entity(
+            CreativeShotRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=shot_id,
+            extra={"scene_id": scene_id},
+        )
+
+    def create_creative_character(
+            self, project_id, name, principal,
+            sort_order=0, character_id=None):
+        return self._create_creative_project_entity(
+            CreativeCharacterRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=character_id,
+        )
+
+    def create_creative_asset(
+            self, project_id, artifact_id, name, asset_type, principal,
+            sort_order=0, asset_id=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        name = self._validate_creative_entity_fields(name, sort_order)
+        if not isinstance(asset_type, str) or not asset_type.strip():
+            raise ValueError("asset_type is required")
+        asset_type = asset_type.strip()
+        if len(asset_type) > 64:
+            raise ValueError("asset_type must contain at most 64 characters")
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            raise ValueError("artifact_id is required")
+        asset_id = asset_id or new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            artifact = session.execute(
+                select(ArtifactRecord)
+                .join(JobRecord, JobRecord.id == ArtifactRecord.job_id)
+                .where(
+                    ArtifactRecord.id == artifact_id,
+                    JobRecord.owner_tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None or artifact is None:
+                raise AuthorizationError("Resource not found or access denied")
+            if artifact.status != "AVAILABLE" or not artifact.checksum_sha256:
+                raise ValueError(
+                    "creative assets require an available content-addressed artifact"
+                )
+            artifact_values = {
+                "artifact_id": artifact.id,
+                "source_job_id": artifact.job_id,
+                "content_sha256": artifact.checksum_sha256,
+                "media_type": artifact.media_type,
+                "size_bytes": artifact.size_bytes,
+            }
+            if (
+                    not isinstance(artifact.checksum_sha256, str)
+                    or len(artifact.checksum_sha256) != 64
+                    or any(
+                        char not in "0123456789abcdef"
+                        for char in artifact.checksum_sha256.lower()
+                    )):
+                raise ValueError("source artifact must have a valid SHA-256 checksum")
+            session.add(CreativeAssetRecord(
+                id=asset_id,
+                project_id=project_id,
+                tenant_id=principal.tenant_id,
+                **artifact_values,
+                name=name,
+                asset_type=asset_type,
+                sort_order=sort_order,
+                created_by_issuer=principal.issuer,
+                created_by_subject=principal.subject,
+                created_at=now,
+                updated_at=now,
+            ))
+            project.updated_at = now
+        return {
+            "id": asset_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id, **artifact_values,
+            "name": name, "asset_type": asset_type,
+            "sort_order": sort_order, "created_at": now,
+        }
+
+    def list_creative_project_entities(self, project_id, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        models = {
+            "scenes": CreativeSceneRecord,
+            "shots": CreativeShotRecord,
+            "characters": CreativeCharacterRecord,
+            "assets": CreativeAssetRecord,
+        }
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            result = {}
+            for key, model in models.items():
+                rows = session.execute(
+                    select(model).where(
+                        model.project_id == project_id,
+                        model.tenant_id == principal.tenant_id,
+                    ).order_by(model.sort_order, model.created_at, model.id)
+                ).scalars().all()
+                result[key] = [{
+                    "id": row.id,
+                    "project_id": row.project_id,
+                    "tenant_id": row.tenant_id,
+                    "name": row.name,
+                    "sort_order": row.sort_order,
+                    **({
+                        "scene_id": row.scene_id,
+                    } if key == "shots" else {}),
+                    **({
+                        "artifact_id": row.artifact_id,
+                        "source_job_id": row.source_job_id,
+                        "asset_type": row.asset_type,
+                        "content_sha256": row.content_sha256,
+                        "media_type": row.media_type,
+                        "size_bytes": row.size_bytes,
+                    } if key == "assets" else {}),
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                } for row in rows]
+            return result
+
+    def update_creative_project_entity(
+            self, entity_type, project_id, entity_id, principal,
+            name=None, sort_order=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        models = {
+            "scene": CreativeSceneRecord,
+            "shot": CreativeShotRecord,
+            "character": CreativeCharacterRecord,
+            "asset": CreativeAssetRecord,
+        }
+        model = models.get(entity_type)
+        if model is None:
+            raise ValueError("creative entity type is invalid")
+        if name is None and sort_order is None:
+            raise ValueError("at least one mutable presentation field is required")
+        if name is not None:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("creative entity name is required")
+            name = name.strip()
+            if len(name) > 255:
+                raise ValueError("creative entity name must contain at most 255 characters")
+        if sort_order is not None and (
+                isinstance(sort_order, bool)
+                or not isinstance(sort_order, int)
+                or sort_order < 0):
+            raise ValueError("sort_order must be a nonnegative integer")
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            row = session.execute(
+                select(model).where(
+                    model.id == entity_id,
+                    model.project_id == project_id,
+                    model.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None or row is None:
+                raise AuthorizationError("Resource not found or access denied")
+            if name is not None:
+                row.name = name
+            if sort_order is not None:
+                row.sort_order = sort_order
+            row.updated_at = now
+            project.updated_at = now
+            result = {
+                "id": entity_id, "project_id": project_id,
+                "tenant_id": principal.tenant_id, "name": row.name,
+                "sort_order": row.sort_order, "updated_at": now,
+            }
+        return result
 
     def record_webhook_delivery_event(
             self, job_id, attempt_id, event_type, payload):
