@@ -46,6 +46,15 @@ class CreativeProjectsMixin:
             latest_revision_number=item.get("latest_revision_number", 0),
         )
 
+    @staticmethod
+    def _unique_json_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("project revision JSON contains a duplicate object key")
+            value[key] = item
+        return value
+
     def _revision_response(self, item):
         return self.pb2.CreativeProjectRevisionResponse(
             id=item["id"],
@@ -53,7 +62,7 @@ class CreativeProjectsMixin:
             tenant_id=item["tenant_id"],
             revision_number=item["revision_number"],
             content_json=json.dumps(
-                item["content"], sort_keys=True, separators=(",", ":")
+                item["content"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
             ),
             content_sha256=item["content_sha256"],
             created_at=self._iso(item.get("created_at")),
@@ -128,7 +137,9 @@ class CreativeProjectsMixin:
         principal = self._principal(context, "video.projects:write")
         repository = get_workflow_repository(required=True)
         try:
-            content = json.loads(request.content_json)
+            content = json.loads(
+                request.content_json, object_pairs_hook=self._unique_json_object
+            )
             result = repository.create_creative_project_revision(
                 request.project_id, content, principal
             )
