@@ -280,3 +280,45 @@ Delivered:
 - List limits are bounded; caller-supplied Project/Asset/entity IDs are validated.
 
 #79 is not closed: customer/legal retention policy is still required before any retention/deletion automation. No delete RPC was added, and no retention flag was enabled.
+
+
+## 14. Current portfolio checkpoint — 2026-11-25 (supersedes earlier next-order notes)
+
+This checkpoint incorporates the merges completed after the earlier baseline above. Where an earlier paragraph describes one of these slices as pending, this section is authoritative.
+
+### Newly verified merged increments
+
+- **PR #175 — audited tenant quota policy changes:** append-only policy audit records, monotonically versioned policy updates, and atomic policy-plus-audit writes.
+- **PR #178 — sender-side webhook attempt history:** bounded, redacted STARTED/SUCCEEDED/FAILED events tied to the exact Job/Stage/Attempt. A STARTED event without a terminal event remains an unknown external outcome; retries reuse the stable Delivery ID.
+- **PR #180 — authenticated operator RPCs:** quota policy provisioning/inventory/audit history and Job-owner-scoped webhook delivery history. Operator identity comes from the verified principal and requires `video.tenant.quota.admin`.
+- **PR #184 — creative Asset provenance:** immutable source lineage, exact Job ProjectRevision pins and sealed database-enforced parent relationships.
+- **PR #187 — public creative Project API:** authenticated tenant-scoped Project/Revision and typed Scene/Shot/Character/Asset gRPC operations. No deletion API or retention automation.
+- **PR #189 — runtime configuration boundary:** OIDC issuer/audience/JWKS are supplied by the deployed identity provider; the repository has no deployment workflow or declared GitHub Environment. Do not use `gh variable set` as a substitute for configuring the running service.
+- **PR #190 — Keycloak reference IdP decision:** ADR 0010 selects Keycloak 26.6+ Organizations for the reference deployment profile. This is a provider selection only, not a provisioned IdP or production-ready trust configuration. Keycloak's organization claim is an object; a tested mapping must emit exactly one selected immutable organization ID as the service's top-level string `tenant_id`. Never use `organization:*` for tenant-scoped API tokens.
+
+Issue #74 is closed after the supported Python 3.12 runtime and compatibility work. Its remaining production-shaped staging verification is tracked under #71.
+
+### Current P0 status and hard boundaries
+
+1. **#71 — durable dispatch operational acceptance remains open.** The transactional outbox, relay, plan/Attempt claims and integration coverage are merged. Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`. Production/staging proof is still required for actual KMS/STS/IAM and S3 policies, legacy Job/callback inventory and drain, deployed broker redelivery after acknowledgement loss, worker-loss recovery, alerts and rollback. CI's explicit re-dispatch after SIGKILL is not proof of automatic broker redelivery in the deployed topology.
+2. **#72 — resource isolation remains partial.** CPU/memory/PID enforcement is implemented and real-kernel CI tested. Disk capacity is not enforced. Do not use cgroup `io.max`, periodic `du`, or shared-directory cleanup as a hard quota. Select a filesystem project-quota or per-Attempt volume backend only after inspecting the actual worker filesystem, mount options, container privileges and quota support. Verify delegated cgroup controllers on the real worker host. Keep `ATTEMPT_CGROUP_V2_ENABLED=false` until host evidence exists.
+3. **#73 — service security code is substantially delivered; production security operations remain open.** OIDC verification, tenant ownership, SSRF-resistant outbound transport, HMAC signing, sender history, audited quota administration and the receiver replay runbook are present. Still required: provision a real IdP and verify issuer/audience/JWKS/key rotation; grant the operator scope to named identities only; reconcile every active tenant and legacy-unowned Job before enabling `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED`; implement and test receiver-side atomic Delivery-ID deduplication in the receiving application. No production values or tenant policies may be guessed.
+4. **#79 — the Project API and provenance are delivered.** The only remaining acceptance area is customer/legal-approved retention, deletion scope, legal hold and audit-retention policy. Keep retention/deletion disabled and do not invent a retention period or add delete automation.
+
+### Revised product execution order
+
+- **Parallel engineering lane 1 — #76 MCP adapter:** begin implementation now as a thin adapter over the existing typed application/repository services. Reuse the verified principal, existing scope checks, tenant ownership, quotas and audit; never create a second authorization or orchestration path. Add bounded probe/thumbnail/transcode/status/cancel tools, deterministic versioned schemas, durable Job IDs, and MCP-client authorization tests. It may be implemented and tested with injected test principals, but do not expose it publicly or claim production readiness until real OIDC/runtime configuration and the relevant operational gates are verified.
+- **Parallel engineering lane 2 — #82 CDN/QoE correlation:** define and test a provider-neutral delivery-event contract and correlation/query behavior using synthetic fixtures. Do not claim real CDN coverage or production QoE until a provider log source and privacy/retention policy are selected.
+- **Parallel engineering lane 3 — #75 benchmark harness:** prepare deterministic corpus manifests, pinned tool/config metadata, matched-quality execution and raw-result reporting. Synthetic fixtures validate the harness only. Codec conclusions require legally approved representative source media; no codec-default change or savings claim before then.
+- **Operational lane — #71/#72/#73/#79:** prepare evidence checklists and keep the feature flags off. These cannot be completed by repository code or GitHub settings alone; they require the actual worker host, staging broker/cloud identity/storage, a provisioned IdP, active-tenant inventory, receiving application and customer/legal policy.
+- **After baseline evidence — #80:** add deterministic CPU scheduling/fairness only when queue/resource metrics and tenant quota policies are operational. Defer GPU/Spot selection until interruption economics are measured.
+- **Then — #84:** implement incremental ingestion and provisional artifact publication only after source chunk identity, checksums, ordering, replay, backpressure and final-publication contracts are agreed and tested.
+- **Defer — #81/#83:** JIT packaging and Edge–Cloud are experiments, not prerequisites for a reliable first operational release. Do not build them ahead of a measured target workload.
+
+### Non-negotiable release switches
+
+- `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`
+- `ATTEMPT_CGROUP_V2_ENABLED=false` until production worker delegation is verified
+- `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until all active tenants and legacy ownership are reconciled
+- No production OIDC activation until the selected IdP supplies exact trust metadata and the Keycloak organization-to-`tenant_id` mapping is tested
+- No retention/deletion automation until customer/legal policy is approved
