@@ -165,13 +165,13 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
                     sys.executable,
                     "-c",
                     (
-                        "import errno,subprocess,sys\\n"
-                        "try:\\n"
-                        " subprocess.Popen([sys.executable,'-c','pass'])\\n"
-                        "except OSError as exc:\\n"
-                        " print(exc.errno, flush=True)\\n"
-                        " sys.exit(0 if exc.errno == errno.EAGAIN else 2)\\n"
-                        "sys.exit(3)\\n"
+                        "import errno,subprocess,sys\n"
+                        "try:\n"
+                        " subprocess.Popen([sys.executable,'-c','pass'])\n"
+                        "except OSError as exc:\n"
+                        " print(exc.errno, flush=True)\n"
+                        " sys.exit(0 if exc.errno == errno.EAGAIN else 2)\n"
+                        "sys.exit(3)\n"
                     ),
                 ],
                 stdout=subprocess.PIPE,
