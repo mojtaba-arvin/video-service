@@ -1168,6 +1168,258 @@ class WorkflowRepository:
                 "created_at": row.created_at,
             }
 
+    @staticmethod
+    def _validate_creative_entity_fields(name, sort_order):
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("creative entity name is required")
+        name = name.strip()
+        if len(name) > 255:
+            raise ValueError("creative entity name must contain at most 255 characters")
+        if (
+                isinstance(sort_order, bool)
+                or not isinstance(sort_order, int)
+                or sort_order < 0):
+            raise ValueError("sort_order must be a nonnegative integer")
+        return name
+
+    def _create_creative_project_entity(
+            self, model, project_id, name, principal, sort_order=0,
+            entity_id=None, extra=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        name = self._validate_creative_entity_fields(name, sort_order)
+        entity_id = entity_id or new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            values = {
+                "id": entity_id,
+                "project_id": project_id,
+                "tenant_id": principal.tenant_id,
+                "name": name,
+                "sort_order": sort_order,
+                "created_by_issuer": principal.issuer,
+                "created_by_subject": principal.subject,
+                "created_at": now,
+                "updated_at": now,
+            }
+            values.update(extra or {})
+            session.add(model(**values))
+            project.updated_at = now
+        return {
+            "id": entity_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id, "name": name,
+            "sort_order": sort_order, "created_at": now,
+        }
+
+    def create_creative_scene(
+            self, project_id, name, principal, sort_order=0, scene_id=None):
+        return self._create_creative_project_entity(
+            CreativeSceneRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=scene_id,
+        )
+
+    def create_creative_shot(
+            self, project_id, scene_id, name, principal,
+            sort_order=0, shot_id=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        with self._session() as session:
+            scene = session.execute(
+                select(CreativeSceneRecord).where(
+                    CreativeSceneRecord.id == scene_id,
+                    CreativeSceneRecord.project_id == project_id,
+                    CreativeSceneRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+        if scene is None:
+            raise AuthorizationError("Resource not found or access denied")
+        return self._create_creative_project_entity(
+            CreativeShotRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=shot_id,
+            extra={"scene_id": scene_id},
+        )
+
+    def create_creative_character(
+            self, project_id, name, principal,
+            sort_order=0, character_id=None):
+        return self._create_creative_project_entity(
+            CreativeCharacterRecord, project_id, name, principal,
+            sort_order=sort_order, entity_id=character_id,
+        )
+
+    def create_creative_asset(
+            self, project_id, artifact_id, name, asset_type, principal,
+            sort_order=0, asset_id=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        name = self._validate_creative_entity_fields(name, sort_order)
+        if not isinstance(asset_type, str) or not asset_type.strip():
+            raise ValueError("asset_type is required")
+        asset_type = asset_type.strip()
+        if len(asset_type) > 64:
+            raise ValueError("asset_type must contain at most 64 characters")
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            raise ValueError("artifact_id is required")
+        asset_id = asset_id or new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            artifact = session.execute(
+                select(ArtifactRecord)
+                .join(JobRecord, JobRecord.id == ArtifactRecord.job_id)
+                .where(
+                    ArtifactRecord.id == artifact_id,
+                    JobRecord.owner_tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None or artifact is None:
+                raise AuthorizationError("Resource not found or access denied")
+            if artifact.status != "AVAILABLE" or not artifact.checksum_sha256:
+                raise ValueError(
+                    "creative assets require an available content-addressed artifact"
+                )
+            session.add(CreativeAssetRecord(
+                id=asset_id,
+                project_id=project_id,
+                tenant_id=principal.tenant_id,
+                artifact_id=artifact.id,
+                source_job_id=artifact.job_id,
+                name=name,
+                asset_type=asset_type,
+                content_sha256=artifact.checksum_sha256,
+                media_type=artifact.media_type,
+                size_bytes=artifact.size_bytes,
+                sort_order=sort_order,
+                created_by_issuer=principal.issuer,
+                created_by_subject=principal.subject,
+                created_at=now,
+                updated_at=now,
+            ))
+            project.updated_at = now
+        return {
+            "id": asset_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id, "artifact_id": artifact.id,
+            "source_job_id": artifact.job_id, "name": name,
+            "asset_type": asset_type, "content_sha256": artifact.checksum_sha256,
+            "media_type": artifact.media_type, "size_bytes": artifact.size_bytes,
+            "sort_order": sort_order, "created_at": now,
+        }
+
+    def list_creative_project_entities(self, project_id, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        models = {
+            "scenes": CreativeSceneRecord,
+            "shots": CreativeShotRecord,
+            "characters": CreativeCharacterRecord,
+            "assets": CreativeAssetRecord,
+        }
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            result = {}
+            for key, model in models.items():
+                rows = session.execute(
+                    select(model).where(
+                        model.project_id == project_id,
+                        model.tenant_id == principal.tenant_id,
+                    ).order_by(model.sort_order, model.created_at, model.id)
+                ).scalars().all()
+                result[key] = [{
+                    "id": row.id,
+                    "project_id": row.project_id,
+                    "tenant_id": row.tenant_id,
+                    "name": row.name,
+                    "sort_order": row.sort_order,
+                    **({
+                        "scene_id": row.scene_id,
+                    } if key == "shots" else {}),
+                    **({
+                        "artifact_id": row.artifact_id,
+                        "source_job_id": row.source_job_id,
+                        "asset_type": row.asset_type,
+                        "content_sha256": row.content_sha256,
+                        "media_type": row.media_type,
+                        "size_bytes": row.size_bytes,
+                    } if key == "assets" else {}),
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                } for row in rows]
+            return result
+
+    def update_creative_project_entity(
+            self, entity_type, project_id, entity_id, principal,
+            name=None, sort_order=None):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        models = {
+            "scene": CreativeSceneRecord,
+            "shot": CreativeShotRecord,
+            "character": CreativeCharacterRecord,
+            "asset": CreativeAssetRecord,
+        }
+        model = models.get(entity_type)
+        if model is None:
+            raise ValueError("creative entity type is invalid")
+        if name is None and sort_order is None:
+            raise ValueError("at least one mutable presentation field is required")
+        if name is not None:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("creative entity name is required")
+            name = name.strip()
+            if len(name) > 255:
+                raise ValueError("creative entity name must contain at most 255 characters")
+        if sort_order is not None and (
+                isinstance(sort_order, bool)
+                or not isinstance(sort_order, int)
+                or sort_order < 0):
+            raise ValueError("sort_order must be a nonnegative integer")
+        now = utcnow()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(model).where(
+                    model.id == entity_id,
+                    model.project_id == project_id,
+                    model.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise AuthorizationError("Resource not found or access denied")
+            if name is not None:
+                row.name = name
+            if sort_order is not None:
+                row.sort_order = sort_order
+            row.updated_at = now
+        return {
+            "id": entity_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id, "name": row.name,
+            "sort_order": row.sort_order, "updated_at": now,
+        }
+
     def record_webhook_delivery_event(
             self, job_id, attempt_id, event_type, payload):
         """Append a redacted sender-side webhook attempt event.
