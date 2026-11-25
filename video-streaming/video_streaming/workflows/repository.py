@@ -1296,6 +1296,11 @@ class WorkflowRepository:
         name = name.strip()
         if len(name) > 255:
             raise ValueError("project name must contain at most 255 characters")
+        if project_id is not None and (
+                not isinstance(project_id, str)
+                or not project_id.strip()
+                or len(project_id) > 36):
+            raise ValueError("project_id must be a non-empty opaque identifier of at most 36 characters")
         project_id = project_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -1583,6 +1588,11 @@ class WorkflowRepository:
 
         require_scope(principal, "video.projects:write")
         name = self._validate_creative_entity_fields(name, sort_order)
+        if entity_id is not None and (
+                not isinstance(entity_id, str)
+                or not entity_id.strip()
+                or len(entity_id) > 36):
+            raise ValueError("entity ID must be a non-empty opaque identifier of at most 36 characters")
         entity_id = entity_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
