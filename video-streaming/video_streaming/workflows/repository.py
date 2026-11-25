@@ -644,12 +644,9 @@ class WorkflowRepository:
         be enforced by the authenticated admin service boundary. The audit
         identity is always derived from a trusted RequestPrincipal.
         """
-        from video_streaming.security import RequestPrincipal, AuthorizationError
+        from video_streaming.security import require_scope
 
-        if not isinstance(operator_principal, RequestPrincipal):
-            raise AuthorizationError("An authenticated operator is required")
-        if operator_principal.is_expired():
-            raise AuthorizationError("An authenticated operator is required")
+        require_scope(operator_principal, "video.tenant.quota.admin")
         if not isinstance(tenant_id, str) or not tenant_id.strip():
             raise ValueError("tenant_id must be a non-empty string")
         tenant_id = tenant_id.strip()
@@ -699,8 +696,10 @@ class WorkflowRepository:
         return {"tenant_id": tenant_id, "max_active_jobs": max_active_jobs,
                 "policy_version": next_version}
 
-    def list_tenant_job_quota_policies(self, limit=1000):
-        """Return a bounded policy inventory for an authorized admin caller."""
+    def list_tenant_job_quota_policies(self, operator_principal, limit=1000):
+        """Return a bounded policy inventory to an explicitly scoped operator."""
+        from video_streaming.security import require_scope
+        require_scope(operator_principal, "video.tenant.quota.admin")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         with self._session() as session:
