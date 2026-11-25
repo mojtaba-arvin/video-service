@@ -18,13 +18,13 @@ Use a dedicated realm for the service deployment and a dedicated OIDC client acc
 
 Use Keycloak Organizations for customer/tenant membership. Request the built-in **organization** scope in a single-organization context. For users who belong to multiple organizations, select one explicit organization using **organization:<alias>**; never use **organization:*** for this service's tenant-scoped API tokens.
 
-Configure the Organization Membership mapper to include the immutable organization ID in access tokens. The service must receive exactly one selected tenant as the top-level string claim **tenant_id**. Keycloak's native organization representation is an **organization** object keyed by organization alias; it is not itself the current service's tenant_id string. Before production, implement and test an explicit mapper/adapter that emits the selected organization's immutable ID as tenant_id. Do not point OIDC_TENANT_CLAIM at the nested object, use a mutable organization alias as tenant identity, or accept a token containing ambiguous multiple organizations.
+Configure the Organization Membership mapper to add the immutable organization ID to access tokens. Keycloak emits an **organization** object keyed by organization alias, with the immutable ID under each selected organization. The verifier now supports this native shape directly: set **OIDC_TENANT_CLAIM=organization** and it extracts the `id` only when exactly one organization is present. This avoids a custom Keycloak mapper/SPI and avoids treating the mutable alias as tenant identity. Tokens with zero, multiple, malformed, or ID-less organization entries fail closed. Do not request `organization:*` for this tenant-scoped API.
 
 Map the API permissions to the service's existing claims:
 - **sub**: stable Keycloak subject;
 - **tenant_id**: selected immutable organization ID, emitted as a top-level string;
-- **scope**: space-delimited OAuth scopes, including only permissions requested and granted to that client;
-- **roles**: a flat string list of application roles needed by the service, including **video.tenant.quota.admin** only for named operator identities.
+- **scope**: space-delimited OAuth scopes; the quota-admin RPC checks the exact **video.tenant.quota.admin** scope, so grant it through a dedicated Keycloak client scope only to named operator identities;
+- **roles**: optional informational application roles; the current quota-admin authorization path does not consult this claim.
 
 Use RS256 initially, publish keys through Keycloak's OIDC discovery/JWKS endpoints, and retain the verifier's bounded JWKS cache and fail-closed behavior. Key rotation must be tested against real access tokens before release. gRPC TLS remains independently mandatory.
 
@@ -50,7 +50,7 @@ Auth0 and ZITADEL remain valid alternatives if a managed identity service become
 
 1. Provision a persistent, TLS-protected Keycloak instance and record its exact issuer/discovery URL.
 2. Create the dedicated realm, API client, resource audience, organization scope and least-privilege client roles.
-3. Implement the selected-organization-to-tenant_id mapping and verify that a multi-organization user receives exactly one tenant per access token.
+3. Set `OIDC_TENANT_CLAIM=organization`; verify the Organization Membership mapper includes the immutable organization ID and a multi-organization user receives exactly one selected organization per access token.
 4. Verify access tokens contain iss, aud, exp, sub, tenant_id, scope, and roles in the exact shapes accepted by the service.
 5. Verify wrong issuer/audience, missing or ambiguous tenant, missing subject, expired token, unsupported algorithm, unknown key and JWKS outage fail closed.
 6. Verify role/scope grants and revocations for normal clients, tenant users, and named quota operators.
@@ -62,5 +62,5 @@ Auth0 and ZITADEL remain valid alternatives if a managed identity service become
 
 - Keycloak is the documented reference IdP, but application code remains generic OIDC.
 - Production deployment is still blocked until an actual instance and hosting/runtime configuration exist.
-- The current verifier's simple tenant_id contract needs an explicit, tested mapping from Keycloak's selected organization context.
+- The verifier supports Keycloak's native organization claim when explicitly configured; ambiguous or malformed organization contexts fail closed.
 - Operating an IdP becomes an availability and security responsibility; persistent storage, backups, patching, TLS and restore testing are non-optional.
