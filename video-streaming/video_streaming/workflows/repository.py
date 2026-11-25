@@ -1892,6 +1892,10 @@ class WorkflowRepository:
                 created_at=now,
             )
             session.add(provenance)
+            # The parent table has an immediate composite FK to this header.
+            # Flush the header explicitly before inserting its parent rows;
+            # ORM unit-of-work ordering is not a dependency guarantee here.
+            session.flush()
             for parent in parent_rows:
                 session.add(CreativeAssetProvenanceParentRecord(
                     provenance_id=provenance_id,
