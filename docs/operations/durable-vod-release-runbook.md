@@ -166,20 +166,23 @@ policy, backup owner, and a tested incident procedure.
 
 The required CI job `Linux cgroup v2 kernel acceptance (Python 3.12)` runs on
 an Ubuntu 24.04 host as root. It creates a dedicated child cgroup, enables only
-the CPU and memory controllers needed by the test, and exercises the actual
+the CPU, memory and PID controllers needed by the test, and exercises the actual
 kernel interface through `AttemptCgroupV2` and the process supervisor.
 
 The test verifies CPU quota throttling via `cpu.stat`, memory-limit OOM
-accounting via `memory.events`, termination of a detached descendant via
-`cgroup.kill`, and refusal to remove a populated cgroup. The cgroup is removed
+accounting via `memory.events`, atomic PID admission through
+`clone3(CLONE_INTO_CGROUP)` and `pids.max`, termination of a detached
+descendant via `cgroup.kill`, and refusal to remove a populated cgroup. The cgroup is removed
 only after the kernel reports `populated 0`.
 
 This is evidence for the CI host's Linux kernel and delegated cgroup setup; it
 does not prove the production host has the same delegation or limits. Before
 enabling `ATTEMPT_CGROUP_V2_ENABLED` in production, provision and verify the
 service user's delegated root and controller policy on the actual worker host.
-PID admission and disk quotas remain unimplemented and must not be claimed as
-enforced. The durable Workflow executor also remains a separate integration
+PID admission is enforced only when the native `video-cgroup-exec` launcher
+is installed and the host supports `clone3(CLONE_INTO_CGROUP)`; unsupported
+kernels/seccomp policies fail closed. Disk quotas remain unimplemented and
+must not be claimed as enforced. The durable Workflow executor also remains a separate integration
 gate until its Attempts are wrapped in the same cgroup lifecycle.
 
 ## Gate 6 — staged activation (separate approval)
