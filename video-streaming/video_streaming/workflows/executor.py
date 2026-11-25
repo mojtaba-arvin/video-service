@@ -7,7 +7,10 @@ key and is responsible for applying it to every external side effect.
 """
 
 import re
+from contextlib import nullcontext
 from dataclasses import dataclass
+
+from video_streaming.execution.attempt_scope import attempt_cgroup_scope
 
 from video_streaming.workflows.domain import (
     AttemptLeaseLost,
@@ -58,6 +61,35 @@ class WorkflowNodeExecutor:
         self.handlers = dict(handlers)
         self.worker_id = worker_id.strip()
         self.lease_ttl_seconds = lease_ttl_seconds
+
+    @staticmethod
+    def _uses_cgroup(operation):
+        contract = OPERATION_CONTRACTS[operation]
+        return contract.cancellation in (
+            "process_group_termination",
+            "before_and_after_probe",
+        )
+
+    @staticmethod
+    def _merge_cgroup_metrics(metrics, usage):
+        merged = dict(metrics or {})
+        if not isinstance(usage, dict):
+            return merged
+        cpu = usage.get("cpu") or {}
+        cpu_usec = cpu.get("usage_usec")
+        if cpu_usec is not None:
+            measured = float(cpu_usec) / 1000000.0
+            previous = merged.get("cpu_seconds")
+            merged["cpu_seconds"] = max(
+                measured, float(previous) if previous is not None else 0.0
+            )
+        peak = usage.get("memory_peak_bytes")
+        if peak is not None:
+            previous = merged.get("peak_memory_bytes")
+            merged["peak_memory_bytes"] = max(
+                int(peak), int(previous) if previous is not None else 0
+            )
+        return merged
 
     @staticmethod
     def _error_code(exc):
@@ -166,9 +198,25 @@ class WorkflowNodeExecutor:
                     lease_token=token,
                 )
                 return {"status": "cancelled", "node_id": node_id}
-            result = self.handlers[operation](node, context)
+            cgroup_usage = None
+            scope = (
+                attempt_cgroup_scope(attempt_id)
+                if self._uses_cgroup(operation) else nullcontext(None)
+            )
+            with scope as cgroup:
+                try:
+                    result = self.handlers[operation](node, context)
+                finally:
+                    # Read kernel counters before the scope removes its cgroup.
+                    # Capture on failure too, so failed/retried Attempts retain
+                    # the resource cost observed before the exception.
+                    if cgroup is not None:
+                        cgroup_usage = cgroup.usage()
             if not isinstance(result, dict):
                 raise ValueError("node handler must return a result dictionary")
+            result["metrics"] = self._merge_cgroup_metrics(
+                result.get("metrics"), cgroup_usage
+            )
             validation_report = result.get("validation_report")
             if not isinstance(validation_report, dict):
                 raise ValueError("node handler omitted validation_report")
@@ -222,6 +270,7 @@ class WorkflowNodeExecutor:
                     error_code=self._error_code(exc),
                     # Exception messages may include customer values or URLs.
                     error_message=type(exc).__name__,
+                    metrics=self._merge_cgroup_metrics({}, cgroup_usage),
                     lease_token=token,
                     retry_after_seconds=retry_after_seconds,
                 )
