@@ -28,8 +28,8 @@ class FakeRepository:
     def __init__(self):
         self.calls = []
 
-    def _record(self, name, result, *args, **kwargs):
-        self.calls.append((name, args, kwargs))
+    def _record(self, method, result, *args, **kwargs):
+        self.calls.append((method, args, kwargs))
         return result
 
     def create_creative_project(self, name, principal, project_id=None):
