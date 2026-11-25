@@ -5,7 +5,9 @@ import os
 import tempfile
 import unittest
 
-from video_streaming.workflows.errors import (\n    PermanentOperationError, RetryableOperationError,\n)
+from video_streaming.workflows.errors import (
+    PermanentOperationError, RetryableOperationError,
+)
 from video_streaming.workflows.publication_handlers import (
     build_publication_handlers,
 )
