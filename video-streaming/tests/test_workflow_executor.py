@@ -268,25 +268,24 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         self.assertEqual(permanent["status"], "failed")
 
     def test_worker_records_contract_version_mismatch_before_handler(self):
-        from types import SimpleNamespace
         from unittest.mock import patch
 
         calls = []
-        from video_streaming.workflows import executor as executor_module
+        original_get_stage_snapshot = self.repository.get_stage_snapshot
 
-        current = executor_module.OPERATION_CONTRACTS["video.input.check"]
-        persisted_stage = self.repository.get_stage_snapshot(self.job_id, "check")
-        self.assertEqual(persisted_stage["operation_contract_version"], current.version)
-        with patch.dict(executor_module.OPERATION_CONTRACTS, {
-            "video.input.check": SimpleNamespace(
-                version=current.version + 1,
-                retry_class=current.retry_class,
-            )
-        }):
+        def mismatched_stage_snapshot(job_id, stage_key):
+            stage = original_get_stage_snapshot(job_id, stage_key)
+            stage["operation_contract_version"] += 1
+            return stage
+
+        with patch.object(
+                self.repository,
+                "get_stage_snapshot",
+                side_effect=mismatched_stage_snapshot):
             result = self.executor(
                 lambda *_args: calls.append("called")
             ).execute(self.job_id, "check")
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "failed", result)
         self.assertEqual(result["error_code"], "OperationContractVersionMismatch")
         self.assertEqual(calls, [])
         stage = self.repository.get_stage_snapshot(self.job_id, "check")
