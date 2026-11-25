@@ -15,10 +15,10 @@ if _HAS_LOGGING_RUNTIME:
     from video_streaming.core.tasks.base import BaseTask
     from video_streaming.core.services.s3 import S3Service
     from video_streaming.ffmpeg.tasks.mixins.call_webhook import CallWebhookMixin
-from video_streaming.security.webhook_signing import (
-    DELIVERY_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
-    stable_delivery_id, verify_webhook_signature,
-)
+    from video_streaming.security.webhook_signing import (
+        DELIVERY_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+        stable_delivery_id, verify_webhook_signature,
+    )
 
     class _DummyTask(BaseTask):
         name = "tests.sensitive_logging"

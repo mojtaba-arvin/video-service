@@ -297,7 +297,7 @@ class CreateJobMixin(object):
                     protocol=("hls" if output.protocol == self.pb2.Protocol.HLS else "dash")
                 ),
                 tasks.call_webhook.s(
-                    request_id=request_id, delivery_stage_key=watermarked_video_output_id
+                    request_id=request_id, delivery_stage_key=output_id
                 )
             )
             if output.use_watermark:
@@ -350,7 +350,9 @@ class CreateJobMixin(object):
                     request_id=request_id,
                     output_id=output_id
                 ),
-                tasks.call_webhook.s(request_id=request_id)
+                tasks.call_webhook.s(
+                    request_id=request_id, delivery_stage_key=watermarked_video_output_id
+                )
             )
 
             if output.use_watermark:
