@@ -130,6 +130,62 @@ class TenantJobQuotaAuditRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class CreativeProjectRecord(Base):
+    """Tenant-owned root for durable creative continuity."""
+
+    __tablename__ = "workflow_creative_projects"
+    __table_args__ = (
+        UniqueConstraint("id", "tenant_id", name="uq_workflow_creative_project_tenant"),
+        Index("ix_workflow_creative_projects_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    tenant_id = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeProjectRevisionRecord(Base):
+    """Immutable, tenant-scoped canonical snapshot of creative project state."""
+
+    __tablename__ = "workflow_creative_project_revisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_project_tenant",
+        ),
+        UniqueConstraint(
+            "project_id", "tenant_id", "revision_number",
+            name="uq_workflow_project_revision_number",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_project_revision_identity",
+        ),
+        CheckConstraint("revision_number >= 1", name="ck_workflow_project_revision_positive"),
+        CheckConstraint("length(content_sha256) = 64", name="ck_workflow_project_revision_hash_length"),
+        Index(
+            "ix_workflow_project_revisions_project_created",
+            "project_id", "tenant_id", "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    revision_number = Column(Integer, nullable=False)
+    content_json = Column(JSON, nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class JobSecretRecord(Base):
     """Encrypted callback material bound to the exact durable Job owner."""
 
@@ -695,6 +751,140 @@ class WorkflowRepository:
             ))
         return {"tenant_id": tenant_id, "max_active_jobs": max_active_jobs,
                 "policy_version": next_version}
+
+    @staticmethod
+    def _canonical_project_content(content):
+        """Return a detached JSON value and its deterministic SHA-256 digest."""
+        if not isinstance(content, dict):
+            raise ValueError("project revision content must be a JSON object")
+
+        def validate_string_keys(value):
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if not isinstance(key, str):
+                        raise ValueError("project revision object keys must be strings")
+                    validate_string_keys(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    validate_string_keys(nested)
+
+        validate_string_keys(content)
+        try:
+            canonical = json.dumps(
+                content, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False,
+            )
+            detached = json.loads(canonical)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("project revision content must be finite JSON data") from exc
+        return detached, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def create_creative_project(self, name, principal, project_id=None):
+        """Create a tenant-owned project from a verified authenticated principal."""
+        from video_streaming.security import require_scope
+
+        require_scope(principal, "video.projects:create")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("project name is required")
+        name = name.strip()
+        if len(name) > 255:
+            raise ValueError("project name must contain at most 255 characters")
+        project_id = project_id or new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            session.add(CreativeProjectRecord(
+                id=project_id,
+                tenant_id=principal.tenant_id,
+                name=name,
+                created_by_issuer=principal.issuer,
+                created_by_subject=principal.subject,
+                created_at=now,
+                updated_at=now,
+            ))
+        return {
+            "id": project_id, "tenant_id": principal.tenant_id,
+            "name": name, "created_at": now,
+        }
+
+    def create_creative_project_revision(self, project_id, content, principal):
+        """Append the next immutable project snapshot for its authenticated tenant."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        snapshot, digest = self._canonical_project_content(content)
+        revision_id = new_id()
+        now = utcnow()
+        with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord)
+                .where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            latest = session.execute(
+                select(func.max(CreativeProjectRevisionRecord.revision_number))
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one()
+            revision_number = (latest or 0) + 1
+            session.add(CreativeProjectRevisionRecord(
+                id=revision_id,
+                project_id=project_id,
+                tenant_id=principal.tenant_id,
+                revision_number=revision_number,
+                content_json=snapshot,
+                content_sha256=digest,
+                created_by_issuer=principal.issuer,
+                created_by_subject=principal.subject,
+                created_at=now,
+            ))
+            project.updated_at = now
+        return {
+            "id": revision_id, "project_id": project_id,
+            "tenant_id": principal.tenant_id,
+            "revision_number": revision_number,
+            "content": snapshot, "content_sha256": digest,
+            "created_at": now,
+        }
+
+    def get_creative_project_revision(
+            self, project_id, revision_number, principal):
+        """Read one exact project snapshot without revealing foreign projects."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        if (
+                isinstance(revision_number, bool)
+                or not isinstance(revision_number, int)
+                or revision_number < 1):
+            raise ValueError("revision_number must be a positive integer")
+        with self._session() as session:
+            row = session.execute(
+                select(CreativeProjectRevisionRecord)
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                    CreativeProjectRevisionRecord.revision_number == revision_number,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise AuthorizationError("Resource not found or access denied")
+            return {
+                "id": row.id, "project_id": row.project_id,
+                "tenant_id": row.tenant_id,
+                "revision_number": row.revision_number,
+                "content": deepcopy(row.content_json),
+                "content_sha256": row.content_sha256,
+                "created_by_issuer": row.created_by_issuer,
+                "created_by_subject": row.created_by_subject,
+                "created_at": row.created_at,
+            }
 
     def list_tenant_job_quota_policies(self, operator_principal, limit=1000):
         """Return a bounded policy inventory to an explicitly scoped operator."""

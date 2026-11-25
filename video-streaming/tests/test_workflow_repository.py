@@ -5,6 +5,7 @@ import threading
 import unittest
 
 from sqlalchemy import select, func, event, text
+from sqlalchemy.exc import DBAPIError
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -129,6 +130,64 @@ class WorkflowRepositoryTests(unittest.TestCase):
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
 
+    def test_creative_project_revisions_are_tenant_scoped_canonical_and_immutable(self):
+        owner = self.make_owner_principal(
+            tenant="creative-tenant-" + str(uuid4()),
+            subject="creative-owner",
+            scopes=["video.projects:create", "video.projects:write", "video.projects:read"],
+        )
+        project = self.repository.create_creative_project("  Feature Film  ", owner)
+        self.assertEqual(project["name"], "Feature Film")
+        first_content = {
+            "title": "Feature Film",
+            "scenes": [{"id": "scene-1", "shots": ["shot-1"]}],
+            "creative_decisions": {"look": "natural"},
+        }
+        first = self.repository.create_creative_project_revision(project["id"], first_content, owner)
+        reordered_content = {
+            "creative_decisions": {"look": "natural"},
+            "scenes": [{"shots": ["shot-1"], "id": "scene-1"}],
+            "title": "Feature Film",
+        }
+        second = self.repository.create_creative_project_revision(project["id"], reordered_content, owner)
+        self.assertEqual(first["revision_number"], 1)
+        self.assertEqual(second["revision_number"], 2)
+        self.assertEqual(first["content_sha256"], second["content_sha256"])
+        loaded = self.repository.get_creative_project_revision(project["id"], 1, owner)
+        self.assertEqual(loaded["content"], first_content)
+        self.assertEqual(loaded["content_sha256"], first["content_sha256"])
+        foreign = self.make_owner_principal(
+            tenant="foreign-tenant-" + str(uuid4()), subject="foreign-owner",
+            scopes=["video.projects:read", "video.projects:write"],
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.get_creative_project_revision(project["id"], 1, foreign)
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_creative_project_revision(project["id"], {"title": "foreign"}, foreign)
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                session.execute(
+                    text("UPDATE workflow_creative_project_revisions SET content_sha256 = :digest WHERE id = :revision_id"),
+                    {"digest": "0" * 64, "revision_id": first["id"]},
+                )
+
+    def test_creative_project_revision_rejects_non_json_and_missing_scope(self):
+        owner = self.make_owner_principal(scopes=["video.projects:create", "video.projects:write"])
+        project = self.repository.create_creative_project("Scoped", owner)
+        with self.assertRaises(ValueError):
+            self.repository.create_creative_project_revision(project["id"], {"invalid": float("nan")}, owner)
+        for invalid_content in (
+                {"scenes": {2: "B", 10: "A"}},
+                {"scenes": [{"shots": {"nested": {1: "invalid"}}}]},
+        ):
+            with self.subTest(invalid_content=invalid_content):
+                with self.assertRaisesRegex(ValueError, "keys must be strings"):
+                    self.repository.create_creative_project_revision(
+                        project["id"], invalid_content, owner
+                    )
+        without_scope = self.make_owner_principal(scopes=["video.projects:create"])
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_creative_project_revision(project["id"], {"title": "No write"}, without_scope)
     def test_execution_plan_dependencies_are_normalized_and_same_workflow(self):
         job_id = str(uuid4())
         request = {
