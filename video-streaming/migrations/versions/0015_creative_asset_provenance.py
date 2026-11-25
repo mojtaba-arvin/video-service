@@ -324,6 +324,15 @@ def downgrade():
         raise RuntimeError(
             "Refusing to drop asset provenance while records exist"
         )
+    pinned_jobs = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_jobs "
+        "WHERE project_revision_id IS NOT NULL"
+    )).scalar_one()
+    if pinned_jobs:
+        raise RuntimeError(
+            "Refusing to drop Job ProjectRevision pins while pinned Jobs exist"
+        )
+
     versioned_stages = op.get_bind().execute(sa.text(
         "SELECT COUNT(*) FROM workflow_stages "
         "WHERE operation_contract_version <> 1"
