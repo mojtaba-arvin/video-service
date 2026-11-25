@@ -282,6 +282,8 @@ class WorkflowRepositoryTests(unittest.TestCase):
             workflow_name="video.vod",
             execution_plan=plan,
             owner_principal=owner,
+            project_id=project["id"],
+            project_revision_id=revision["id"],
         )
         stage_key = plan["nodes"][0]["stage_key"]
         attempt_id, _, lease_token, _ = self.repository.claim_node_attempt(
@@ -339,6 +341,29 @@ class WorkflowRepositoryTests(unittest.TestCase):
             },
             owner,
         )
+        snapshot = self.repository.get_job_snapshot(output_job_id)
+        self.assertEqual(snapshot["project_id"], project["id"])
+        self.assertEqual(snapshot["project_revision_id"], revision["id"])
+        self.assertEqual(
+            snapshot["stages"][0]["operation_contract_version"],
+            stage.operation_contract_version,
+        )
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key="provenance-output-" + output_job_id,
+                request_hash="2" * 64,
+                workflow_name="video.vod",
+                execution_plan=plan,
+                owner_principal=owner,
+                project_id=project["id"],
+                project_revision_id=str(uuid4()),
+            )
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                job_row = session.get(JobRecord, output_job_id)
+                job_row.project_revision_id = str(uuid4())
+
         self.assertEqual(provenance["asset_id"], output_asset["id"])
         self.assertEqual(provenance["project_revision_id"], revision["id"])
         self.assertEqual(provenance["attempt_id"], attempt_id)
