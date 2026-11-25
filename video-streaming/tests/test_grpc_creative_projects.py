@@ -115,7 +115,7 @@ class FakeRepository:
             "sort_order": kwargs.get("sort_order") or 0,
         }, *args, **kwargs)
 
-    def list_creative_project_entities(self, project_id, principal):
+    def list_creative_project_entities(self, project_id, principal, limit):
         return self._record("list_entities", {
             "scenes": [{"id": "scene-1", "project_id": project_id,
                         "tenant_id": principal.tenant_id, "name": "Scene",
@@ -126,7 +126,7 @@ class FakeRepository:
                         "sort_order": 0, "artifact_id": "artifact-1",
                         "asset_type": "video", "content_sha256": "b" * 64,
                         "media_type": "video/mp4", "size_bytes": 100}],
-        }, project_id, principal)
+        }, project_id, principal, limit=limit)
 
 
 class CreativeProjectsService(CreativeProjectsMixin):
@@ -256,10 +256,11 @@ class CreativeProjectsRpcTests(unittest.TestCase):
 
             entities = self.service.list_creative_project_entities(
                 streaming_pb2.ListCreativeProjectEntitiesRequest(
-                    project_id="project-1"
+                    project_id="project-1", limit=25
                 ),
                 self.context,
             )
+            self.assertEqual(self.repository.calls[-1][2]["limit"], 25)
             self.assertEqual(entities.scenes[0].name, "Scene")
             self.assertEqual(entities.assets[0].source_job_id, "")
             self.assertEqual(entities.assets[0].media_type, "video/mp4")
