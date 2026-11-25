@@ -205,13 +205,15 @@ Delivered:
 - Reads/writes require explicit `video.projects:*` scopes and foreign-tenant access is denied without revealing resource existence.
 - Migration `0013_creative_project_revisions` follows `0012_tenant_quota_audit`; downgrade refuses to discard project/revision history.
 
+**Implemented:** PR #181, squash commit `f219f95937d799f9858fd98c1622a6b865e8813c` (2026-11-25), migration `0014_project_refs`. The typed Scene/Shot/Character/Asset tables are tenant/project scoped; Shot→Scene and Asset→same-tenant Job→Artifact relationships use composite foreign keys. ProjectRevision typed membership is stored in an immutable reference table with one-of typed IDs and composite project/tenant/revision FKs. Entity IDs, ownership, Shot parent and Asset source/content identity are DB-protected; names/order remain mutable presentation fields. Tests cover cross-project/tenant rejection, revision reference immutability, identity triggers and downgrade safety.
+
 Next #79 increments, in order:
-1. Typed, tenant-constrained Scene/Shot/Character/Asset references that point to a Project and, where required, an exact ProjectRevision.
-2. Append-only provenance for derived artifacts (source artifact IDs/hashes, operation/version, redacted prompt/config revision, validation evidence and Attempt).
-3. Pin each Job to an exact ProjectRevision and verify that pin during retry/resume; keep workflow-definition and execution-plan versions separate.
+1. Append-only provenance for derived artifacts (source artifact IDs/hashes, operation/version, redacted prompt/config revision, validation evidence and Attempt).
+2. Pin each Job to an exact ProjectRevision and verify that pin during retry/resume; keep workflow-definition and execution-plan versions separate.
+3. Expose project entity/revision operations through the authenticated application/gRPC boundary without duplicating domain authorization.
 4. Define customer/legal retention policy before any retention automation or deletion path.
 
-Do not add model-provider payloads to the domain schema, mutable revision updates, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
+Asset registration currently requires an existing AVAILABLE content-addressed Artifact; source ingestion remains #84. Do not add model-provider payloads to the domain schema, mutable revision identity/relationships, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
 
 
 ## 8. Webhook delivery history increment (Issue #73)
@@ -228,3 +230,10 @@ A STARTED event without a terminal event means the external outcome is unknown a
 **Merged:** PR #180, squash commit `c986bae25651d14021e2d34b95af154587a0401b` (2026-11-25). The service now exposes authenticated gRPC operations for quota provisioning, bounded current-policy inventory, bounded quota audit-history inspection, and bounded Job-owner-scoped webhook delivery history.
 
 Quota administration derives operator issuer/subject from the verified OIDC RequestPrincipal and requires `video.tenant.quota.admin`; callers supply only target tenant, cap and mandatory reason. Audit history is visible only to that scope. Webhook history uses `video.jobs:read` and exact Job-owner identity. The feature flag remains disabled: this code does not configure the external IdP, prove production issuer/audience/JWKS, provision every active tenant or implement receiver-side replay suppression.
+
+
+## 10. Typed creative project references increment (Issue #79)
+
+**Merged:** PR #181, squash commit `f219f95937d799f9858fd98c1622a6b865e8813c` (2026-11-25). Migration `0014_project_refs` adds tenant/project-scoped Scene, Shot, Character and Asset identities. Shot→Scene, Asset→same-tenant Job→Artifact and ProjectRevision→typed-entity membership are enforced with composite foreign keys. The revision membership table is immutable and stores exactly one typed entity reference per row. PostgreSQL triggers preserve entity identity and Asset source/content identity while allowing name/order presentation edits.
+
+Asset registration requires an existing AVAILABLE Artifact with a valid SHA-256 checksum owned by a Job in the same tenant. It does not implement source ingestion, public gRPC project APIs, artifact provenance or Job revision pinning. The PostgreSQL migration chain, downgrade safety, repository tests, Python 3.9/3.12 VOD lanes, Regression, Container, cgroup v2, Documentation links, Quality gates and Dependency Review all passed.
