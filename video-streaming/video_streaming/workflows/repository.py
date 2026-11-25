@@ -1088,12 +1088,48 @@ class WorkflowRepository:
             "name": name, "created_at": now,
         }
 
+    @staticmethod
+    def _parse_creative_project_revision_references(snapshot):
+        if "references" not in snapshot:
+            return {}
+        references = snapshot["references"]
+        allowed = {"scenes", "shots", "characters", "assets"}
+        if not isinstance(references, dict) or set(references) - allowed:
+            raise ValueError("project revision references must use typed entity lists")
+        parsed = {}
+        for entity_type, entity_ids in references.items():
+            if not isinstance(entity_ids, list) or len(entity_ids) > 500:
+                raise ValueError(
+                    "project revision {} references must be a list of at most 500 IDs".format(
+                        entity_type
+                    )
+                )
+            if any(
+                    not isinstance(entity_id, str)
+                    or not entity_id.strip()
+                    or len(entity_id) > 36
+                    for entity_id in entity_ids):
+                raise ValueError(
+                    "project revision {} references contain an invalid ID".format(
+                        entity_type
+                    )
+                )
+            if len(set(entity_ids)) != len(entity_ids):
+                raise ValueError(
+                    "project revision {} references must be unique".format(
+                        entity_type
+                    )
+                )
+            parsed[entity_type] = list(entity_ids)
+        return parsed
+
     def create_creative_project_revision(self, project_id, content, principal):
         """Append the next immutable project snapshot for its authenticated tenant."""
         from video_streaming.security import AuthorizationError, require_scope
 
         require_scope(principal, "video.projects:write")
         snapshot, digest = self._canonical_project_content(content)
+        references = self._parse_creative_project_revision_references(snapshot)
         revision_id = new_id()
         now = utcnow()
         with self._session.begin() as session:
@@ -1126,6 +1162,53 @@ class WorkflowRepository:
                 created_by_subject=principal.subject,
                 created_at=now,
             ))
+
+            entity_models = {
+                "scenes": CreativeSceneRecord,
+                "shots": CreativeShotRecord,
+                "characters": CreativeCharacterRecord,
+                "assets": CreativeAssetRecord,
+            }
+            resolved = {}
+            for entity_type, entity_ids in references.items():
+                model = entity_models[entity_type]
+                rows = session.execute(
+                    select(model).where(
+                        model.id.in_(entity_ids),
+                        model.project_id == project_id,
+                        model.tenant_id == principal.tenant_id,
+                    )
+                ).scalars().all() if entity_ids else []
+                if len(rows) != len(entity_ids):
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
+                    )
+                resolved[entity_type] = rows
+
+            scene_ids = set(references.get("scenes", []))
+            for shot in resolved.get("shots", []):
+                if shot.scene_id not in scene_ids:
+                    raise AuthorizationError(
+                        "Resource not found or access denied"
+                    )
+
+            reference_columns = {
+                "scenes": "scene_id",
+                "shots": "shot_id",
+                "characters": "character_id",
+                "assets": "asset_id",
+            }
+            for entity_type, entity_ids in references.items():
+                column = reference_columns[entity_type]
+                for entity_id in entity_ids:
+                    session.add(CreativeProjectRevisionReferenceRecord(
+                        id=new_id(),
+                        revision_id=revision_id,
+                        project_id=project_id,
+                        tenant_id=principal.tenant_id,
+                        **{column: entity_id},
+                        created_at=now,
+                    ))
             project.updated_at = now
         return {
             "id": revision_id, "project_id": project_id,
