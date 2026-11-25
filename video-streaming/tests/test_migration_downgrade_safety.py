@@ -61,6 +61,7 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
         ("0008_attempt_leases.py", "workflow_attempts", "Attempt lease state"),
         ("0009_transactional_outbox.py", "workflow_outbox", "workflow Outbox"),
         ("0010_workflow_stage_dependencies.py", "workflow_stage_dependencies", "dependency edges"),
+        ("0011_tenant_job_quotas.py", "workflow_tenant_job_quota_policies", "tenant quota policies"),
     )
 
     def test_downgrade_refuses_to_discard_existing_state(self):
