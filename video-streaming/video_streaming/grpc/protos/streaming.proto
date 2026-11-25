@@ -8,6 +8,10 @@ service Streaming{
   rpc start_playback_session(StartPlaybackSessionRequest) returns (StartPlaybackSessionResponse) {}
   rpc record_playback_event(RecordPlaybackEventRequest) returns (RecordPlaybackEventResponse) {}
   rpc get_playback_qoe_report(GetPlaybackQoEReportRequest) returns (PlaybackQoEReportResponse) {}
+  rpc provision_tenant_job_quota_policy(ProvisionTenantJobQuotaPolicyRequest) returns (TenantJobQuotaPolicyResponse) {}
+  rpc list_tenant_job_quota_policies(ListTenantJobQuotaPoliciesRequest) returns (ListTenantJobQuotaPoliciesResponse) {}
+  rpc list_tenant_job_quota_audit_events(ListTenantJobQuotaAuditEventsRequest) returns (ListTenantJobQuotaAuditEventsResponse) {}
+  rpc get_webhook_delivery_history(GetWebhookDeliveryHistoryRequest) returns (WebhookDeliveryHistoryResponse) {}
 }
 
 message JobRequest {
@@ -483,4 +487,72 @@ message PlaybackQoEReportResponse {
   map<string, int32> missing_cost_dimensions_by_attempt = 22;
   repeated string excluded_cost_dimensions = 23;
   repeated string pricing_model_versions = 24;
+}
+
+message ProvisionTenantJobQuotaPolicyRequest {
+  string tenant_id = 1;
+  int32 max_active_jobs = 2;
+  // Required operator rationale; persisted in the immutable audit record.
+  string reason = 3;
+}
+
+message TenantJobQuotaPolicyResponse {
+  string tenant_id = 1;
+  int32 max_active_jobs = 2;
+  int32 policy_version = 3;
+  string updated_at = 4;
+}
+
+message ListTenantJobQuotaPoliciesRequest {
+  // Zero selects the server default (100); maximum is 1000.
+  int32 limit = 1;
+}
+
+message ListTenantJobQuotaPoliciesResponse {
+  repeated TenantJobQuotaPolicyResponse policies = 1;
+}
+
+message ListTenantJobQuotaAuditEventsRequest {
+  // Empty selects all tenants; requires the quota-admin scope.
+  string tenant_id = 1;
+  // Zero selects the server default (100); maximum is 1000.
+  int32 limit = 2;
+}
+
+message TenantJobQuotaAuditEvent {
+  string tenant_id = 1;
+  int32 previous_max_active_jobs = 2;
+  bool previous_limit_available = 3;
+  int32 max_active_jobs = 4;
+  int32 policy_version = 5;
+  string operator_issuer = 6;
+  string operator_subject = 7;
+  string reason = 8;
+  string created_at = 9;
+}
+
+message ListTenantJobQuotaAuditEventsResponse {
+  repeated TenantJobQuotaAuditEvent events = 1;
+}
+
+message GetWebhookDeliveryHistoryRequest {
+  string tracking_id = 1;
+  // Zero selects the server default (50); maximum is 100.
+  int32 limit = 2;
+}
+
+message WebhookDeliveryAttemptEvent {
+  string event_type = 1;
+  string occurred_at = 2;
+  string stage_id = 3;
+  string attempt_id = 4;
+  string delivery_id = 5;
+  int32 http_status = 6;
+  bool http_status_available = 7;
+  string failure_code = 8;
+}
+
+message WebhookDeliveryHistoryResponse {
+  string tracking_id = 1;
+  repeated WebhookDeliveryAttemptEvent events = 2;
 }
