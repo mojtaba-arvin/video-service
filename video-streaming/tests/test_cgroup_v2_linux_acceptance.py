@@ -127,12 +127,12 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
                         sys.executable,
                         "-c",
                         (
-                            "import time\\n"
-                            "end=time.monotonic()+1.2\\n"
-                            "n=0\\n"
-                            "while time.monotonic()<end:\\n"
-                            " n+=1\\n"
-                            "print(n)\\n"
+                            "import time\n"
+                            "end=time.monotonic()+1.2\n"
+                            "n=0\n"
+                            "while time.monotonic()<end:\n"
+                            " n+=1\n"
+                            "print(n)\n"
                         ),
                     ],
                     timeout_seconds=5,
