@@ -62,6 +62,10 @@ class JobRecord(Base):
             "id", "owner_tenant_id", "owner_issuer", "owner_subject",
             name="uq_workflow_jobs_secret_owner",
         ),
+        UniqueConstraint(
+            "id", "owner_tenant_id",
+            name="uq_workflow_jobs_tenant_identity",
+        ),
         Index(
             "ix_workflow_jobs_owner_tenant_created",
             "owner_tenant_id",
@@ -183,6 +187,276 @@ class CreativeProjectRevisionRecord(Base):
     content_sha256 = Column(String(64), nullable=False)
     created_by_issuer = Column(String(512), nullable=False)
     created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeSceneRecord(Base):
+    """Stable, project-scoped scene identity; name/order are presentation data."""
+
+    __tablename__ = "workflow_creative_scenes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_scene_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_scene_project_identity",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_scene_order"),
+        Index(
+            "ix_workflow_creative_scenes_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeShotRecord(Base):
+    """Stable shot identity constrained to a scene in the same project/tenant."""
+
+    __tablename__ = "workflow_creative_shots"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_shot_project",
+        ),
+        ForeignKeyConstraint(
+            ["scene_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_scenes.id",
+                "workflow_creative_scenes.project_id",
+                "workflow_creative_scenes.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_shot_scene_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_shot_project_identity",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_shot_order"),
+        Index(
+            "ix_workflow_creative_shots_scene_order",
+            "scene_id", "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    scene_id = Column(String(36), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeCharacterRecord(Base):
+    """Stable, project-scoped character identity."""
+
+    __tablename__ = "workflow_creative_characters"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_character_project",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_character_project_identity",
+        ),
+        CheckConstraint(
+            "sort_order >= 0", name="ck_workflow_creative_character_order"
+        ),
+        Index(
+            "ix_workflow_creative_characters_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeAssetRecord(Base):
+    """Project-scoped logical Asset bound to a same-tenant immutable artifact."""
+
+    __tablename__ = "workflow_creative_assets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_project",
+        ),
+        ForeignKeyConstraint(
+            ["source_job_id", "tenant_id"],
+            ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_source_job_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["artifact_id", "source_job_id"],
+            ["workflow_artifacts.id", "workflow_artifacts.job_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_asset_artifact_job",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_project_identity",
+        ),
+        UniqueConstraint(
+            "artifact_id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_artifact_project",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_workflow_creative_asset_order"),
+        CheckConstraint(
+            "length(content_sha256) = 64",
+            name="ck_workflow_creative_asset_hash_length",
+        ),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes >= 0",
+            name="ck_workflow_creative_asset_size",
+        ),
+        Index(
+            "ix_workflow_creative_assets_project_order",
+            "project_id", "tenant_id", "sort_order",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    artifact_id = Column(String(36), nullable=False)
+    source_job_id = Column(String(36), nullable=False)
+    name = Column(String(255), nullable=False)
+    asset_type = Column(String(64), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    media_type = Column(String(128), nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_by_issuer = Column(String(512), nullable=False)
+    created_by_subject = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeProjectRevisionReferenceRecord(Base):
+    """Immutable typed entity membership captured by one project revision."""
+
+    __tablename__ = "workflow_creative_project_revision_references"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["revision_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_revision",
+        ),
+        ForeignKeyConstraint(
+            ["scene_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_scenes.id",
+                "workflow_creative_scenes.project_id",
+                "workflow_creative_scenes.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_scene",
+        ),
+        ForeignKeyConstraint(
+            ["shot_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_shots.id",
+                "workflow_creative_shots.project_id",
+                "workflow_creative_shots.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_shot",
+        ),
+        ForeignKeyConstraint(
+            ["character_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_characters.id",
+                "workflow_creative_characters.project_id",
+                "workflow_creative_characters.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_character",
+        ),
+        ForeignKeyConstraint(
+            ["asset_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_project_revision_reference_asset",
+        ),
+        CheckConstraint(
+            "(CASE WHEN scene_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN shot_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN character_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN asset_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_workflow_project_revision_reference_one_type",
+        ),
+        UniqueConstraint(
+            "revision_id", "scene_id",
+            name="uq_workflow_project_revision_reference_scene",
+        ),
+        UniqueConstraint(
+            "revision_id", "shot_id",
+            name="uq_workflow_project_revision_reference_shot",
+        ),
+        UniqueConstraint(
+            "revision_id", "character_id",
+            name="uq_workflow_project_revision_reference_character",
+        ),
+        UniqueConstraint(
+            "revision_id", "asset_id",
+            name="uq_workflow_project_revision_reference_asset",
+        ),
+        Index(
+            "ix_workflow_project_revision_references_revision",
+            "revision_id", "project_id", "tenant_id",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    revision_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    scene_id = Column(String(36), nullable=True)
+    shot_id = Column(String(36), nullable=True)
+    character_id = Column(String(36), nullable=True)
+    asset_id = Column(String(36), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -373,6 +647,9 @@ class ArtifactRecord(Base):
         UniqueConstraint(
             "stage_id", "attempt_id", "logical_name",
             name="uq_stage_attempt_artifact_name",
+        ),
+        UniqueConstraint(
+            "id", "job_id", name="uq_workflow_artifact_job_identity"
         ),
         Index("ix_workflow_artifacts_job_type", "job_id", "artifact_type"),
     )
