@@ -105,6 +105,10 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
             attempt_id=uuid.uuid4().hex,
         )
         try:
+            swap_max = os.path.join(cgroup.path, "memory.swap.max")
+            if os.path.exists(swap_max):
+                with open(swap_max, "w") as stream:
+                    stream.write("0")
             yield cgroup
         finally:
             if not cgroup.wait_empty(0.2):
@@ -123,8 +127,12 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
                         sys.executable,
                         "-c",
                         (
-                            "import time; end=time.monotonic()+1.2; n=0; "
-                            "while time.monotonic()<end: n+=1; print(n)"
+                            "import time\\n"
+                            "end=time.monotonic()+1.2\\n"
+                            "n=0\\n"
+                            "while time.monotonic()<end:\\n"
+                            " n+=1\\n"
+                            "print(n)\\n"
                         ),
                     ],
                     timeout_seconds=5,
@@ -147,6 +155,7 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
                     "-c",
                     (
                         "data=bytearray(256*1024*1024); "
+                        "[(data.__setitem__(i, 1)) for i in range(0, len(data), 4096)]; "
                         "print(len(data), flush=True)"
                     ),
                 ],

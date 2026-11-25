@@ -162,26 +162,7 @@ reason; never replay poison messages blindly.
 Assign an on-call owner, escalation path, dashboard, alert routing, retention
 policy, backup owner, and a tested incident procedure.
 
-## Gate 6 — staged activation (separate approval)
-
-Only after Gates 0–5 are evidenced and reviewed:
-
-1. Approve a written cutover plan and maintenance/rollback window.
-2. Confirm all accepted legacy Jobs are reconciled and no callback/side effect
-   can be lost or duplicated by the cutover.
-3. Deploy compatible API, worker, scheduler and migration revisions with the
-   feature gate still off.
-4. Enable durable dispatch for a controlled staging cohort only; monitor
-   outbox, worker, artifact and webhook signals.
-5. Verify end-to-end create, execute, publish, callback, cancellation, retry,
-   duplicate delivery, and recovery behavior.
-6. Expand only after explicit release approval and successful observation.
-7. Keep a tested means to stop new durable dispatch while allowing in-flight
-   work to drain safely.
-
-No activation is authorized by this document or by green CI alone.
-
-## Gate 7 — Linux cgroup v2 process-isolation acceptance
+## Gate 5A — Linux cgroup v2 process-isolation acceptance
 
 The required CI job `Linux cgroup v2 kernel acceptance (Python 3.12)` runs on
 an Ubuntu 24.04 host as root. It creates a dedicated child cgroup, enables only
@@ -200,6 +181,25 @@ service user's delegated root and controller policy on the actual worker host.
 PID admission and disk quotas remain unimplemented and must not be claimed as
 enforced. The durable Workflow executor also remains a separate integration
 gate until its Attempts are wrapped in the same cgroup lifecycle.
+
+## Gate 6 — staged activation (separate approval)
+
+Only after Gates 0–5 are evidenced and reviewed:
+
+1. Approve a written cutover plan and maintenance/rollback window.
+2. Confirm all accepted legacy Jobs are reconciled and no callback/side effect
+   can be lost or duplicated by the cutover.
+3. Deploy compatible API, worker, scheduler and migration revisions with the
+   feature gate still off.
+4. Enable durable dispatch for a controlled staging cohort only; monitor
+   outbox, worker, artifact and webhook signals.
+5. Verify end-to-end create, execute, publish, callback, cancellation, retry,
+   duplicate delivery, and recovery behavior.
+6. Expand only after explicit release approval and successful observation.
+7. Keep a tested means to stop new durable dispatch while allowing in-flight
+   work to drain safely.
+
+No activation is authorized by this document or by green CI alone.
 
 ## Rollback and stop conditions
 
