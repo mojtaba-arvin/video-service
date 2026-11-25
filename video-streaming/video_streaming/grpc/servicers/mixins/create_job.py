@@ -436,6 +436,12 @@ class CreateJobMixin(object):
     def _create_job(self, request, context):
         principal = get_request_principal()
         require_scope(principal, "video.jobs:create")
+        if bool(request.project_id) != bool(request.project_revision_id):
+            raise ValueError(
+                "project_id and project_revision_id must be supplied together"
+            )
+        if request.project_revision_id:
+            require_scope(principal, "video.projects:read")
         request_id: str = str(uuid.uuid4())
         logger.info(
             "Accepted video job",
