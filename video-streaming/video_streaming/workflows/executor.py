@@ -190,6 +190,7 @@ class WorkflowNodeExecutor:
             is_terminal=is_terminal,
             input_artifacts=input_artifacts,
         )
+        cgroup_usage = None
         try:
             if is_terminal():
                 self.repository.cancel_attempt(
@@ -198,7 +199,6 @@ class WorkflowNodeExecutor:
                     lease_token=token,
                 )
                 return {"status": "cancelled", "node_id": node_id}
-            cgroup_usage = None
             scope = (
                 attempt_cgroup_scope(attempt_id)
                 if self._uses_cgroup(operation) else nullcontext(None)
