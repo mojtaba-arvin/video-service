@@ -19,18 +19,18 @@ Configure these values from the identity provider's authoritative metadata:
 | `OIDC_AUDIENCE` | Exact audience issued for this gRPC API |
 | `OIDC_JWKS_URI` | HTTPS JWKS endpoint from the trusted issuer metadata |
 | `OIDC_ALLOWED_ALGORITHMS` | Explicit asymmetric algorithms supported by the IdP; default is `RS256` |
-| `OIDC_TENANT_CLAIM` | Tenant identity claim; default `tenant_id` |
+| `OIDC_TENANT_CLAIM` | Tenant identity claim; default `tenant_id`; set to `organization` for Keycloak Organizations |
 | `OIDC_SUBJECT_CLAIM` | Principal identity claim; default `sub` |
 | `OIDC_SCOPES_CLAIM` | Scope claim; default `scope` |
 | `OIDC_ROLES_CLAIM` | Role claim; default `roles` |
 | `OIDC_JWKS_TIMEOUT_SECONDS` | Bounded JWKS network timeout; default 5 seconds |
 | `OIDC_CLOCK_LEEWAY_SECONDS` | Clock tolerance; default 0 |
 
-The authenticator requires `exp`, `iss`, `aud` and the configured subject claim. Tenant identity must be a non-empty string. Scope and role claims may be whitespace-delimited strings or lists. Only asymmetric signing algorithms are accepted; HMAC algorithms such as HS256 are rejected.
+The authenticator requires `exp`, `iss`, `aud` and the configured subject claim. Tenant identity must resolve to a non-empty string. Scope and role claims may be whitespace-delimited strings or lists. Only asymmetric signing algorithms are accepted; HMAC algorithms such as HS256 are rejected.
 
 Before deployment, verify with real, non-production IdP-issued tokens:
 
-1. Correct issuer, audience, signature, expiry and tenant claim authenticate.
+1. Correct issuer, audience, signature, expiry and tenant claim authenticate. For Keycloak, set `OIDC_TENANT_CLAIM=organization`, enable Add organization id in the Organization Membership mapper, and request exactly one selected organization; the verifier extracts that organization's immutable `id`.
 2. Wrong issuer/audience, expired token, missing tenant/subject, unknown key, unsupported algorithm and malformed claims fail closed.
 3. JWKS endpoint outage or timeout fails closed; no static key or unsigned-token fallback exists.
 4. A rotated signing key is accepted only after it appears in the configured trusted JWKS.
@@ -49,7 +49,7 @@ The IdP must first provide its exact issuer and audience for this gRPC API and i
 
 ### Selected reference provider
 
-[ADR 0010](../decisions/0010-keycloak-reference-oidc-provider.md) selects **Keycloak 26.6+ with Organizations** as the reference OIDC provider. This is an architectural selection, not evidence that a Keycloak instance exists or that production is configured. Use a dedicated realm and gRPC API audience; issue tenant-scoped access tokens in exactly one selected organization context. Keycloak's native organization claim is an object, while this service currently requires a top-level string tenant_id. A tested mapper/adapter must emit the selected immutable organization ID as tenant_id before production rollout. Never use organization:* or accept an ambiguous multi-organization token for this API. The exact issuer, audience and JWKS URI remain unavailable until the instance is provisioned.
+[ADR 0010](../decisions/0010-keycloak-reference-oidc-provider.md) selects **Keycloak 26.6+ with Organizations** as the reference OIDC provider. This is an architectural selection, not evidence that a Keycloak instance exists or that production is configured. Use a dedicated realm and gRPC API audience; issue tenant-scoped access tokens in exactly one selected organization context. Set `OIDC_TENANT_CLAIM=organization`; the verifier extracts the immutable `id` from exactly one selected organization and rejects missing, malformed, ID-less or multiple entries. No custom mapper/SPI is required. Never use `organization:*` or accept an ambiguous multi-organization token for this API. The exact issuer, audience and JWKS URI remain unavailable until the instance is provisioned.
 
 ## Gate 1 — operator identity and least privilege
 
