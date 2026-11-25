@@ -900,7 +900,7 @@ class WorkflowRepository:
             "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
             "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
         }
-        if event_type not in allowed_types:
+        if not isinstance(event_type, str) or event_type not in allowed_types:
             raise ValueError("webhook delivery event type is invalid")
         if not isinstance(payload, dict) or set(payload) - {
                 "delivery_id", "http_status", "failure_code"}:
@@ -914,19 +914,27 @@ class WorkflowRepository:
         safe_payload = {"delivery_id": delivery_id}
         if event_type == "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED":
             status = payload.get("http_status")
-            if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status <= 299:
-                raise ValueError("successful webhook event requires a 2xx HTTP status")
+            if (
+                    isinstance(status, bool)
+                    or not isinstance(status, int)
+                    or not 200 <= status <= 299):
+                raise ValueError(
+                    "successful webhook event requires a 2xx HTTP status"
+                )
             safe_payload["http_status"] = status
         elif event_type == "WEBHOOK_DELIVERY_ATTEMPT_FAILED":
             code = payload.get("failure_code")
-            if code not in {
+            if not isinstance(code, str) or code not in {
                     "DESTINATION_REJECTED", "TRANSPORT_ERROR",
                     "HTTP_3XX", "HTTP_4XX", "HTTP_5XX"}:
                 raise ValueError("webhook failure code is invalid")
             safe_payload["failure_code"] = code
             status = payload.get("http_status")
             if status is not None:
-                if isinstance(status, bool) or not isinstance(status, int) or not 300 <= status <= 599:
+                if (
+                        isinstance(status, bool)
+                        or not isinstance(status, int)
+                        or not 300 <= status <= 599):
                     raise ValueError("failed webhook HTTP status is invalid")
                 safe_payload["http_status"] = status
         elif set(payload) != {"delivery_id"}:
