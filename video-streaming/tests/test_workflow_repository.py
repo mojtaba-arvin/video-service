@@ -371,7 +371,6 @@ class WorkflowRepositoryTests(unittest.TestCase):
             idempotency_key="provenance-pin-trigger-" + pin_test_job_id,
             request_hash="3" * 64,
             workflow_name="video.vod",
-            execution_plan=plan,
             owner_principal=owner,
             project_id=project["id"],
             project_revision_id=revision["id"],
