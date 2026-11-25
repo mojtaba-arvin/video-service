@@ -6343,6 +6343,8 @@ class WorkflowRepository:
                 "idempotency_key": job.idempotency_key,
                 "request_hash": job.request_hash,
                 "reference_id": job.reference_id,
+                "project_id": job.project_id,
+                "project_revision_id": job.project_revision_id,
                 "metadata": job.metadata_json,
                 "status": job.state,
                 "workflow": {
@@ -6381,6 +6383,7 @@ class WorkflowRepository:
                     "id": stage.id,
                     "key": stage.stage_key,
                     "operation": stage.operation,
+                    "operation_contract_version": stage.operation_contract_version,
                     "status": stage.status,
                     "version": stage.version,
                     "input": stage.input_contract_json,
