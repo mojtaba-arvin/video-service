@@ -1,5 +1,11 @@
 import json
+from typing import Optional
+
 from celery import Task
+from video_streaming.security.webhook_signing import (
+    build_webhook_signature_headers,
+    stable_delivery_id,
+)
 from video_streaming import settings
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.core.tasks import BaseTask
@@ -22,7 +28,9 @@ class CallWebhookMixin(object):
 
     def call_webhook(self,
                      request_id: str,
-                     webhook_url: str = None) -> None or True:
+                     webhook_url: Optional[str] = None,
+                     signing_secret: Optional[str] = None,
+                     delivery_stage_key: Optional[str] = None) -> None or True:
         """
         returns None when job details has been expired and
         returns True when delivered by 2xx HTTP status
@@ -37,7 +45,20 @@ class CallWebhookMixin(object):
         encoded_body = json.dumps({
             "request_id": request_id,
             "reference_id": job_details["reference_id"]
-        })
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        delivery_id = stable_delivery_id(
+            request_id, delivery_stage_key or "legacy-callback"
+        )
+        headers = {"Idempotency-Key": delivery_id}
+        if signing_secret is not None:
+            if not delivery_stage_key:
+                raise self.raise_ignore(
+                    message=self.error_messages.WEBHOOK_URL_IS_REQUIRED,
+                    request_kwargs=self.request.kwargs,
+                )
+            headers.update(build_webhook_signature_headers(
+                signing_secret, delivery_id, encoded_body
+            ))
         try:
             http_response = request_webhook(
                 webhook_url,
@@ -45,6 +66,7 @@ class CallWebhookMixin(object):
                 connect_timeout=settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS,
                 read_timeout=settings.WEBHOOK_READ_TIMEOUT_SECONDS,
                 allow_loopback=settings.WEBHOOK_ALLOW_LOOPBACK_CALLBACKS,
+                headers=headers,
             )
         except WebhookDestinationError:
             # Never include the supplied URL in task state or exception text.

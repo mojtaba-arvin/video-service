@@ -166,7 +166,9 @@ class CreateJobMixin(object):
             "thumbnails": thumbnails,
         }
 
-    def _build_durable_vod_plan(self, job_id, request, webhook_secret_ref=None):
+    def _build_durable_vod_plan(
+            self, job_id, request, webhook_secret_ref=None,
+            webhook_signing_secret_ref=None):
         """Compile the public request into the complete, transport-neutral VOD DAG.
 
         Terminal output Stage keys retain legacy IDs (p0/wp0/t0/wt0/wv0) for
@@ -178,6 +180,7 @@ class CreateJobMixin(object):
             job_id=job_id,
             request=self._build_durable_vod_request(request),
             webhook_secret_ref=webhook_secret_ref,
+            webhook_signing_secret_ref=webhook_signing_secret_ref,
         )
 
     @staticmethod
@@ -293,7 +296,9 @@ class CreateJobMixin(object):
                     output_id=output_id,
                     protocol=("hls" if output.protocol == self.pb2.Protocol.HLS else "dash")
                 ),
-                tasks.call_webhook.s(request_id=request_id)
+                tasks.call_webhook.s(
+                    request_id=request_id, delivery_stage_key=output_id
+                )
             )
             if output.use_watermark:
                 watermarked_playlists_ids.append(output_id)
@@ -345,7 +350,9 @@ class CreateJobMixin(object):
                     request_id=request_id,
                     output_id=output_id
                 ),
-                tasks.call_webhook.s(request_id=request_id)
+                tasks.call_webhook.s(
+                    request_id=request_id, delivery_stage_key=output_id
+                )
             )
 
             if output.use_watermark:
@@ -595,7 +602,10 @@ class CreateJobMixin(object):
                         request_id=request_id,
                         output_id=watermarked_video_output_id
                     ),
-                    tasks.call_webhook.s(request_id=request_id)
+                    tasks.call_webhook.s(
+                        request_id=request_id,
+                        delivery_stage_key=watermarked_video_output_id,
+                    )
                 )
             )
 
@@ -634,6 +644,19 @@ class CreateJobMixin(object):
         # persisted atomically with Job/Workflow/Stages by create_job().
         webhook_envelopes = []
         webhook_secret_ref = None
+        webhook_signing_secret_ref = None
+        if request.webhook_signing_secret and not request.webhook_url.strip():
+            raise exceptions.WebhookSigningSecretInvalidException(
+                message="webhook_signing_secret requires webhook_url"
+            )
+        if request.webhook_signing_secret:
+            signing_bytes = request.webhook_signing_secret.encode("utf-8")
+            if not 32 <= len(signing_bytes) <= 16 * 1024:
+                raise exceptions.WebhookSigningSecretInvalidException(
+                    message=(
+                        "webhook_signing_secret must contain 32 to 16384 UTF-8 bytes"
+                    )
+                )
         if request.webhook_url and request.webhook_url.strip():
             from video_streaming.security.secret_store import (
                 SecretContext, prepare_secret,
@@ -654,11 +677,27 @@ class CreateJobMixin(object):
             )
             webhook_envelopes.append(webhook_envelope)
             webhook_secret_ref = webhook_envelope.secret_id
+            if request.webhook_signing_secret:
+                signing_envelope = prepare_secret(
+                    request.webhook_signing_secret,
+                    SecretContext(
+                        job_id=request_id,
+                        tenant_id=principal.tenant_id,
+                        issuer=principal.issuer,
+                        subject=principal.subject,
+                        purpose="webhook.signing",
+                    ),
+                    get_workflow_secret_key_provider(),
+                )
+                webhook_envelopes.append(signing_envelope)
+                webhook_signing_secret_ref = signing_envelope.secret_id
 
         # Compile all preflight, input, processing, upload and callback nodes.
         # The repository derives Stage rows and dependency edges atomically.
         execution_plan = self._build_durable_vod_plan(
-            request_id, request, webhook_secret_ref=webhook_secret_ref
+            request_id, request,
+            webhook_secret_ref=webhook_secret_ref,
+            webhook_signing_secret_ref=webhook_signing_secret_ref,
         )
 
         persisted_request_id, is_new_job = (

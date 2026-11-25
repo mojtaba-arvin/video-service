@@ -253,7 +253,8 @@ def build_vod_execution_plan(
         job_id,
         request,
         workflow_version="1",
-        webhook_secret_ref=None):
+        webhook_secret_ref=None,
+        webhook_signing_secret_ref=None):
     """Build and validate a complete DAG from a normalized VOD request.
 
     Expected request shape:
@@ -346,14 +347,22 @@ def build_vod_execution_plan(
 
     _required_text(job_id, "job_id")
     _required_text(workflow_version, "workflow_version")
-    if webhook_secret_ref is not None:
-        _required_text(webhook_secret_ref, "webhook_secret_ref")
-        if len(webhook_secret_ref) > 512:
-            raise VODPlanBuildError("webhook_secret_ref exceeds 512 characters")
-        if webhook_secret_ref.lower().startswith(("http://", "https://")):
-            raise VODPlanBuildError(
-                "webhook_secret_ref must be an opaque secret reference, not a URL"
-            )
+    for field, value in (
+        ("webhook_secret_ref", webhook_secret_ref),
+        ("webhook_signing_secret_ref", webhook_signing_secret_ref),
+    ):
+        if value is not None:
+            _required_text(value, field)
+            if len(value) > 512:
+                raise VODPlanBuildError("{} exceeds 512 characters".format(field))
+            if value.lower().startswith(("http://", "https://")):
+                raise VODPlanBuildError(
+                    "{} must be an opaque secret reference, not a URL".format(field)
+                )
+    if webhook_signing_secret_ref is not None and webhook_secret_ref is None:
+        raise VODPlanBuildError(
+            "webhook signing secret requires an enabled callback destination"
+        )
 
     nodes = []
     input_checks = []
@@ -465,6 +474,8 @@ def build_vod_execution_plan(
         parameters = {"enabled": callback_enabled}
         if webhook_secret_ref is not None:
             parameters["webhook_secret_ref"] = webhook_secret_ref
+        if webhook_signing_secret_ref is not None:
+            parameters["webhook_signing_secret_ref"] = webhook_signing_secret_ref
         nodes.append(_node(
             callback_id, "video.webhook.deliver", [dependency], parameters,
             "callback", "control",

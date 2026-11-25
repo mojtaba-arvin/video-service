@@ -15,6 +15,7 @@ __all__ = [
     'JobIsFinishedException',
     'NoWatermarkToUseException',
     'ResourceNotFoundOrDeniedException',
+    'WebhookSigningSecretInvalidException',
 ]
 
 
@@ -68,3 +69,10 @@ class ResourceNotFoundOrDeniedException(GrpcBaseException):
 
     status_code = grpc.StatusCode.NOT_FOUND
     message = "Resource not found"
+
+
+class WebhookSigningSecretInvalidException(GrpcBaseException):
+    """A caller supplied an invalid webhook signing-key configuration."""
+
+    status_code = grpc.StatusCode.INVALID_ARGUMENT
+    message = "Webhook signing secret is invalid"

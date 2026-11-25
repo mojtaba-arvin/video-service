@@ -5,6 +5,11 @@ import logging
 import unittest
 from unittest.mock import Mock, patch
 
+from video_streaming.security.webhook_signing import (
+    DELIVERY_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+    stable_delivery_id, verify_webhook_signature,
+)
+
 
 _HAS_LOGGING_RUNTIME = all(
     importlib.util.find_spec(module_name) is not None
@@ -15,7 +20,6 @@ if _HAS_LOGGING_RUNTIME:
     from video_streaming.core.tasks.base import BaseTask
     from video_streaming.core.services.s3 import S3Service
     from video_streaming.ffmpeg.tasks.mixins.call_webhook import CallWebhookMixin
-
     class _DummyTask(BaseTask):
         name = "tests.sensitive_logging"
 
@@ -82,6 +86,34 @@ class SensitiveLoggingTests(unittest.TestCase):
         self.assertNotIn(secret, rendered)
         self.assertNotIn(url, rendered)
         self.assertEqual(transport.call_args.args[0], url)
+        response.close.assert_called_once_with()
+
+    def test_signed_legacy_callback_signs_exact_transmitted_bytes(self):
+        secret = "s" * 48
+        response = Mock()
+        response.status = 204
+        response.reason = "No Content"
+        url = "https://callback.invalid/hook"
+
+        with patch(
+                "video_streaming.ffmpeg.tasks.mixins.call_webhook.request_webhook",
+                return_value=response) as transport:
+            result = _WebhookTask().call_webhook(
+                "job-signed", webhook_url=url,
+                signing_secret=secret, delivery_stage_key="p0",
+            )
+
+        self.assertTrue(result)
+        body = transport.call_args.kwargs["body"]
+        headers = transport.call_args.kwargs["headers"]
+        self.assertIsInstance(body, bytes)
+        self.assertEqual(headers[DELIVERY_ID_HEADER],
+                         stable_delivery_id("job-signed", "p0"))
+        self.assertTrue(headers[SIGNATURE_HEADER].startswith("v1="))
+        self.assertTrue(verify_webhook_signature(
+            secret, headers[TIMESTAMP_HEADER], headers[DELIVERY_ID_HEADER],
+            body, headers[SIGNATURE_HEADER],
+        ))
         response.close.assert_called_once_with()
 
     def test_webhook_transport_is_bounded_and_does_not_follow_redirects(self):
