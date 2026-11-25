@@ -351,7 +351,7 @@ class CreateJobMixin(object):
                     output_id=output_id
                 ),
                 tasks.call_webhook.s(
-                    request_id=request_id, delivery_stage_key=watermarked_video_output_id
+                    request_id=request_id, delivery_stage_key=output_id
                 )
             )
 
@@ -602,7 +602,10 @@ class CreateJobMixin(object):
                         request_id=request_id,
                         output_id=watermarked_video_output_id
                     ),
-                    tasks.call_webhook.s(request_id=request_id)
+                    tasks.call_webhook.s(
+                        request_id=request_id,
+                        delivery_stage_key=watermarked_video_output_id,
+                    )
                 )
             )
 
