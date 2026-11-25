@@ -2298,7 +2298,9 @@ class WorkflowRepository:
             enqueue_dispatch=False,
             outbox_dedupe_key=None,
             execution_backend=None,
-            quota_enforcement_enabled=False):
+            quota_enforcement_enabled=False,
+            project_id=None,
+            project_revision_id=None):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -2313,6 +2315,16 @@ class WorkflowRepository:
                 raise TypeError("owner_principal must be a RequestPrincipal")
             if owner_principal.is_expired():
                 raise AuthorizationError("Resource not found or access denied")
+
+        if (project_id is None) != (project_revision_id is None):
+            raise ValueError(
+                "project_id and project_revision_id must be supplied together"
+            )
+        if project_revision_id is not None:
+            if owner_principal is None:
+                raise ValueError("ProjectRevision pinning requires an authenticated Job owner")
+            from video_streaming.security import require_scope
+            require_scope(owner_principal, "video.projects:read")
 
         from video_streaming.security.secret_store import SecretEnvelope
 
@@ -2424,6 +2436,12 @@ class WorkflowRepository:
                         from video_streaming.security import AuthorizationError
                         raise AuthorizationError(
                             "Resource not found or access denied"
+                        )
+                    if (
+                            existing.project_id != project_id
+                            or existing.project_revision_id != project_revision_id):
+                        raise IdempotencyConflict(
+                            "Idempotency key resolves to a different ProjectRevision pin"
                         )
                     if owner_principal is not None and (
                             existing.owner_tenant_id != owner_principal.tenant_id
@@ -2594,6 +2612,29 @@ class WorkflowRepository:
                         for envelope in secret_envelopes):
                     raise ValueError("secret envelope job_id must match job_id")
 
+                if project_revision_id is not None:
+                    project = session.execute(
+                        select(CreativeProjectRecord).where(
+                            CreativeProjectRecord.id == project_id,
+                            CreativeProjectRecord.tenant_id
+                            == owner_principal.tenant_id,
+                        )
+                    ).scalar_one_or_none()
+                    revision = session.execute(
+                        select(CreativeProjectRevisionRecord).where(
+                            CreativeProjectRevisionRecord.id
+                            == project_revision_id,
+                            CreativeProjectRevisionRecord.project_id == project_id,
+                            CreativeProjectRevisionRecord.tenant_id
+                            == owner_principal.tenant_id,
+                        )
+                    ).scalar_one_or_none()
+                    if project is None or revision is None:
+                        from video_streaming.security import AuthorizationError
+                        raise AuthorizationError(
+                            "Resource not found or access denied"
+                        )
+
                 job = JobRecord(
                     id=job_id,
                     idempotency_key=idempotency_key,
@@ -2602,6 +2643,8 @@ class WorkflowRepository:
                     owner_tenant_id=(
                         owner_principal.tenant_id if owner_principal else None
                     ),
+                    project_id=project_id,
+                    project_revision_id=project_revision_id,
                     owner_issuer=(
                         owner_principal.issuer if owner_principal else None
                     ),
