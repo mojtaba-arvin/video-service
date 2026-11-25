@@ -51,7 +51,7 @@ def upgrade():
 
     op.create_table(
         "workflow_creative_scenes",
-        *entity_columns,
+        *entity_columns(),
         project_fk("fk_workflow_creative_scene_project"),
         sa.CheckConstraint(
             "sort_order >= 0", name="ck_workflow_creative_scene_order"
@@ -117,7 +117,7 @@ def upgrade():
 
     op.create_table(
         "workflow_creative_characters",
-        *entity_columns,
+        *entity_columns(),
         project_fk("fk_workflow_creative_character_project"),
         sa.CheckConstraint(
             "sort_order >= 0", name="ck_workflow_creative_character_order"
