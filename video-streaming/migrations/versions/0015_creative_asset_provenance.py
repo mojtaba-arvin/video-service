@@ -51,7 +51,8 @@ def upgrade():
         "ck_workflow_job_project_revision_pin_complete",
         "workflow_jobs",
         "(project_id IS NULL AND project_revision_id IS NULL) OR "
-        "(project_id IS NOT NULL AND project_revision_id IS NOT NULL)",
+        "(project_id IS NOT NULL AND project_revision_id IS NOT NULL "
+        "AND owner_tenant_id IS NOT NULL)",
     )
     op.create_unique_constraint(
         "uq_workflow_job_project_revision_pin",
@@ -104,6 +105,7 @@ def upgrade():
         sa.Column("prompt_config_revision_id", sa.String(length=128), nullable=False),
         sa.Column("validation_evidence_json", sa.JSON(), nullable=False),
         sa.Column("validation_evidence_sha256", sa.String(length=64), nullable=False),
+        sa.Column("is_sealed", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False,
             server_default=sa.func.now(),
@@ -193,7 +195,7 @@ def upgrade():
             name="ck_workflow_creative_provenance_validation_hash",
         ),
         sa.CheckConstraint(
-            "validation_evidence_json->>'status' = 'PASSED'",
+            "(validation_evidence_json->>'status' = 'PASSED') IS TRUE",
             name="ck_workflow_creative_provenance_validation_passed",
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -260,22 +262,114 @@ def upgrade():
     )
 
     op.execute("""
-        CREATE FUNCTION workflow_reject_creative_provenance_mutation()
-        RETURNS trigger AS $$
+        CREATE FUNCTION workflow_guard_creative_provenance_header()
+        RETURNS trigger AS $
         BEGIN
+            IF TG_OP = 'INSERT' THEN
+                IF NEW.is_sealed THEN
+                    RAISE EXCEPTION 'creative asset provenance must be created unsealed';
+                END IF;
+                RETURN NEW;
+            END IF;
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'creative asset provenance is immutable';
+            END IF;
+            IF OLD.is_sealed IS FALSE
+               AND NEW.is_sealed IS TRUE
+               AND (to_jsonb(NEW) - 'is_sealed')
+                   IS NOT DISTINCT FROM (to_jsonb(OLD) - 'is_sealed') THEN
+                RETURN NEW;
+            END IF;
             RAISE EXCEPTION 'creative asset provenance is immutable';
         END;
-        $$ LANGUAGE plpgsql
+        $ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_creative_asset_provenance_immutable
-        BEFORE UPDATE OR DELETE ON workflow_creative_asset_provenance
-        FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_mutation()
+        BEFORE INSERT OR UPDATE OR DELETE ON workflow_creative_asset_provenance
+        FOR EACH ROW EXECUTE FUNCTION workflow_guard_creative_provenance_header()
+    """)
+    op.execute("""
+        CREATE FUNCTION workflow_require_creative_provenance_sealed()
+        RETURNS trigger AS $
+        DECLARE
+            current_sealed boolean;
+        BEGIN
+            SELECT is_sealed INTO current_sealed
+            FROM workflow_creative_asset_provenance
+            WHERE id = NEW.id;
+            IF current_sealed IS DISTINCT FROM TRUE THEN
+                RAISE EXCEPTION 'creative asset provenance must be sealed before commit';
+            END IF;
+            RETURN NULL;
+        END;
+        $ LANGUAGE plpgsql
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER trg_workflow_creative_provenance_must_be_sealed
+        AFTER INSERT OR UPDATE ON workflow_creative_asset_provenance
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION workflow_require_creative_provenance_sealed()
+    """)
+    op.execute("""
+        CREATE FUNCTION workflow_guard_creative_provenance_parent_insert()
+        RETURNS trigger AS $
+        DECLARE
+            child_asset_id varchar(36);
+            header_sealed boolean;
+            creates_cycle boolean;
+        BEGIN
+            PERFORM 1
+            FROM workflow_creative_projects
+            WHERE id = NEW.project_id AND tenant_id = NEW.tenant_id
+            FOR UPDATE;
+            SELECT asset_id, is_sealed
+            INTO child_asset_id, header_sealed
+            FROM workflow_creative_asset_provenance
+            WHERE id = NEW.provenance_id
+              AND project_id = NEW.project_id
+              AND tenant_id = NEW.tenant_id
+            FOR UPDATE;
+            IF NOT FOUND OR header_sealed THEN
+                RAISE EXCEPTION 'creative asset provenance parent set is sealed';
+            END IF;
+            WITH RECURSIVE ancestors(asset_id) AS (
+                SELECT NEW.parent_asset_id
+                UNION
+                SELECT lineage_parent.parent_asset_id
+                FROM ancestors
+                JOIN workflow_creative_asset_provenance child
+                  ON child.asset_id = ancestors.asset_id
+                JOIN workflow_creative_asset_provenance_parents lineage_parent
+                  ON lineage_parent.provenance_id = child.id
+            )
+            SELECT EXISTS(
+                SELECT 1 FROM ancestors WHERE asset_id = child_asset_id
+            ) INTO creates_cycle;
+            IF creates_cycle THEN
+                RAISE EXCEPTION 'creative asset provenance lineage cycle detected';
+            END IF;
+            RETURN NEW;
+        END;
+        $ LANGUAGE plpgsql
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_workflow_creative_provenance_parent_insert_guard
+        BEFORE INSERT ON workflow_creative_asset_provenance_parents
+        FOR EACH ROW EXECUTE FUNCTION workflow_guard_creative_provenance_parent_insert()
+    """)
+    op.execute("""
+        CREATE FUNCTION workflow_reject_creative_provenance_parent_mutation()
+        RETURNS trigger AS $
+        BEGIN
+            RAISE EXCEPTION 'creative asset provenance is immutable';
+        END;
+        $ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_creative_asset_provenance_parents_immutable
         BEFORE UPDATE OR DELETE ON workflow_creative_asset_provenance_parents
-        FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_mutation()
+        FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_parent_mutation()
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_job_project_revision_pin_mutation()
@@ -315,6 +409,12 @@ def upgrade():
 
 
 def downgrade():
+    op.execute(
+        "LOCK TABLE workflow_jobs, workflow_stages, "
+        "workflow_creative_asset_provenance, "
+        "workflow_creative_asset_provenance_parents "
+        "IN SHARE ROW EXCLUSIVE MODE"
+    )
     count = op.get_bind().execute(sa.text(
         "SELECT COUNT(*) FROM workflow_creative_asset_provenance"
     )).scalar_one()
@@ -359,12 +459,21 @@ def downgrade():
         "ON workflow_creative_asset_provenance_parents"
     )
     op.execute(
+        "DROP TRIGGER trg_workflow_creative_provenance_parent_insert_guard "
+        "ON workflow_creative_asset_provenance_parents"
+    )
+    op.execute("DROP FUNCTION workflow_reject_creative_provenance_parent_mutation()")
+    op.execute("DROP FUNCTION workflow_guard_creative_provenance_parent_insert()")
+    op.execute(
+        "DROP TRIGGER trg_workflow_creative_provenance_must_be_sealed "
+        "ON workflow_creative_asset_provenance"
+    )
+    op.execute("DROP FUNCTION workflow_require_creative_provenance_sealed()")
+    op.execute(
         "DROP TRIGGER trg_workflow_creative_asset_provenance_immutable "
         "ON workflow_creative_asset_provenance"
     )
-    op.execute(
-        "DROP FUNCTION workflow_reject_creative_provenance_mutation()"
-    )
+    op.execute("DROP FUNCTION workflow_guard_creative_provenance_header()")
 
     op.drop_index(
         "ix_workflow_creative_provenance_parents_project",
