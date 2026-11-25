@@ -24,8 +24,7 @@ from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
     StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord,
-    CreativeSceneRecord, CreativeShotRecord, CreativeCharacterRecord,
-    CreativeAssetRecord, CreativeProjectRevisionReferenceRecord, utcnow
+    CreativeSceneRecord, CreativeProjectRevisionReferenceRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
