@@ -359,10 +359,15 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 project_id=project["id"],
                 project_revision_id=str(uuid4()),
             )
-        with self.assertRaises(DBAPIError):
+        second_revision = self.repository.create_creative_project_revision(
+            project["id"],
+            {"title": "Second valid pin", "references": {"assets": [parent_asset["id"]]}},
+            owner,
+        )
+        with self.assertRaisesRegex(DBAPIError, "Job ProjectRevision pin is immutable"):
             with self.repository._session.begin() as session:
                 job_row = session.get(JobRecord, output_job_id)
-                job_row.project_revision_id = str(uuid4())
+                job_row.project_revision_id = second_revision["id"]
 
         with self.assertRaises(DBAPIError):
             with self.repository._session.begin() as session:
@@ -390,7 +395,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(fetched["validation_evidence"]["status"], "PASSED")
         self.assertEqual(fetched["validation_evidence_sha256"],
                          provenance["validation_evidence_sha256"])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "validation metrics must be finite numbers or booleans"):
             self.repository.create_creative_asset_provenance(
                 output_asset["id"], revision["id"], "prompt-config-v3",
                 [parent_asset["id"]],
@@ -402,7 +407,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 },
                 owner,
             )
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "only passed validation evidence can be committed"):
             self.repository.create_creative_asset_provenance(
                 output_asset["id"], revision["id"], "prompt-config-v3",
                 [parent_asset["id"]],
@@ -413,7 +418,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 },
                 owner,
             )
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "prompt_config_revision_id must be an opaque identifier"):
             self.repository.create_creative_asset_provenance(
                 output_asset["id"], revision["id"], "prompt config raw text",
                 [parent_asset["id"]],
@@ -443,6 +448,20 @@ class WorkflowRepositoryTests(unittest.TestCase):
                     (parent_key, parent_asset["id"]),
                 )
                 session.delete(row)
+        with self.assertRaisesRegex(DBAPIError, "parent set is sealed"):
+            with self.repository._session.begin() as session:
+                session.execute(text(
+                    "INSERT INTO workflow_creative_asset_provenance_parents "
+                    "(provenance_id, project_id, tenant_id, parent_asset_id, "
+                    "parent_content_sha256) VALUES (:provenance_id, :project_id, "
+                    ":tenant_id, :parent_asset_id, :content_hash)"
+                ), {
+                    "provenance_id": provenance["id"],
+                    "project_id": project["id"],
+                    "tenant_id": tenant,
+                    "parent_asset_id": parent_asset["id"],
+                    "content_hash": "a" * 64,
+                })
 
     def test_typed_project_entities_are_tenant_scoped_and_revision_pinned(self):
         tenant = "creative-entities-" + str(uuid4())
