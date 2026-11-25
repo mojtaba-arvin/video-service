@@ -9,6 +9,7 @@ from .mixins import (
     CreateJobMixin,
     GetResultsMixin,
     PlaybackQoEMixin,
+    OperationsAdminMixin,
     RevokeJobsMixin,
     RevokeOutputsMixin,
 )
@@ -23,6 +24,7 @@ class Streaming(
         GetResultsMixin,
         CreateJobMixin,
         PlaybackQoEMixin,
+        OperationsAdminMixin,
         streaming_pb2_grpc.StreamingServicer):
 
     cache = RedisCache()
