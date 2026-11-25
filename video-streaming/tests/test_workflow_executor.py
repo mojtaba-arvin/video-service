@@ -432,10 +432,11 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
     def test_media_attempt_uses_cgroup_and_persists_kernel_usage_metrics(self):
         from video_streaming.workflows import executor as executor_module
 
-        observed = {}
+        observed = {"active": False}
 
         class FakeCgroup:
             def usage(self):
+                observed["usage_inside_scope"] = observed["active"]
                 return {
                     "cpu": {"usage_usec": 2500000},
                     "memory_peak_bytes": 4096,
@@ -443,8 +444,19 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
 
         @contextmanager
         def fake_scope(attempt_id):
-            observed["attempt_id"] = attempt_id
-            yield FakeCgroup()
+            observed["scope_attempt_id"] = attempt_id
+            observed["active"] = True
+            try:
+                yield FakeCgroup()
+            finally:
+                observed["active"] = False
+
+        def handler(_node, _context):
+            observed["handler_inside_scope"] = observed["active"]
+            return {
+                "validation_report": dict(VALID),
+                "metrics": {"cpu_seconds": 1.0, "peak_memory_bytes": 1024},
+            }
 
         contracts = dict(executor_module.OPERATION_CONTRACTS)
         contracts["video.input.check"] = replace(
@@ -455,18 +467,57 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
                 executor_module, "OPERATION_CONTRACTS", contracts):
             with mock.patch.object(
                     executor_module, "attempt_cgroup_scope", fake_scope):
-                result = self.executor(lambda _node, _context: {
-                    "validation_report": dict(VALID),
-                    "metrics": {"cpu_seconds": 1.0, "peak_memory_bytes": 1024},
-                }).execute(self.job_id, "check")
+                result = self.executor(handler).execute(self.job_id, "check")
 
         self.assertEqual(result["status"], "completed")
-        self.assertTrue(observed["attempt_id"])
+        self.assertTrue(observed["handler_inside_scope"])
+        self.assertTrue(observed["usage_inside_scope"])
+        self.assertFalse(observed["active"])
         attempt = self.repository.get_job_snapshot(self.job_id)[
             "stages"
         ][0]["attempts"][-1]
+        self.assertEqual(observed["scope_attempt_id"], attempt["id"])
         self.assertEqual(attempt["cpu_seconds"], 2.5)
         self.assertEqual(attempt["peak_memory_bytes"], 4096)
+
+    def test_cgroup_counter_read_failure_does_not_change_handler_outcome(self):
+        from video_streaming.workflows import executor as executor_module
+
+        class BrokenCgroup:
+            def usage(self):
+                raise OSError("synthetic counter read failure")
+
+        @contextmanager
+        def fake_scope(_attempt_id):
+            yield BrokenCgroup()
+
+        contracts = dict(executor_module.OPERATION_CONTRACTS)
+        contracts["video.input.check"] = replace(
+            contracts["video.input.check"],
+            cancellation="process_group_termination",
+        )
+        with mock.patch.object(
+                executor_module, "OPERATION_CONTRACTS", contracts):
+            with mock.patch.object(
+                    executor_module, "attempt_cgroup_scope", fake_scope):
+                result = self.executor(
+                    lambda _node, _context: (_ for _ in ()).throw(
+                        PermanentOperationError("deterministic media rejection")
+                    )
+                ).execute(self.job_id, "check")
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "PermanentOperationError")
+        attempt = self.repository.get_job_snapshot(self.job_id)[
+            "stages"
+        ][0]["attempts"][-1]
+        self.assertEqual(attempt["error_code"], "PermanentOperationError")
+        self.assertEqual(
+            attempt["metrics"]["cgroup_metrics_status"], "unavailable"
+        )
+        self.assertEqual(
+            attempt["metrics"]["cgroup_metrics_error_code"], "OSError"
+        )
 
     def test_media_attempt_persists_cgroup_usage_when_handler_fails(self):
         from video_streaming.workflows import executor as executor_module
