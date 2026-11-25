@@ -25,12 +25,17 @@ def upgrade():
         ["id", "job_id"],
     )
 
-    project_fk = lambda name: sa.ForeignKeyConstraint(
-        ["project_id", "tenant_id"],
-        ["workflow_creative_projects.id", "workflow_creative_projects.tenant_id"],
-        name=name,
-        ondelete="RESTRICT",
-    )
+    def project_fk(name):
+        return sa.ForeignKeyConstraint(
+            ["project_id", "tenant_id"],
+            [
+                "workflow_creative_projects.id",
+                "workflow_creative_projects.tenant_id",
+            ],
+            name=name,
+            ondelete="RESTRICT",
+        )
+
     def entity_columns():
         return [
             sa.Column("id", sa.String(length=36), nullable=False),
