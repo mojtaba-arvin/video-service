@@ -49,5 +49,7 @@ resolution or signing errors fail the delivery; there is no unsigned fallback.
 
 The sender integration does not provide receiver-side replay suppression. A
 receiver must atomically persist each accepted Delivery ID with its event and
-reject duplicates. Durable sender receipts are evidence of the sender's
-attempt/result, not proof that the remote receiver committed its side effect.
+reject duplicates. The durable adapter currently writes a receipt only after
+observing a 2xx response; that records the sender's observation, not proof that
+the receiver committed its side effect. Durable failed-attempt history and
+bounded receipt retention remain separate acceptance work.
