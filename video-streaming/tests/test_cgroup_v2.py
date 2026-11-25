@@ -12,7 +12,7 @@ from video_streaming.execution.cgroup_v2 import (
 
 
 class AttemptCgroupV2Tests(unittest.TestCase):
-    def _delegated_root(self, root, enabled="cpu memory"):
+    def _delegated_root(self, root, enabled="cpu memory pids"):
         for name, value in (
             ("cgroup.controllers", "cpu memory pids"),
             ("cgroup.subtree_control", enabled),
@@ -41,6 +41,8 @@ class AttemptCgroupV2Tests(unittest.TestCase):
             ("cpu.stat", "usage_usec 1250\nuser_usec 1000\nsystem_usec 250\n"),
             ("memory.peak", "4096"),
             ("memory.events", "low 0\nhigh 0\nmax 1\noom 0\noom_kill 0\n"),
+            ("pids.current", "0"),
+            ("pids.events", "max 0\n"),
         ):
             with open(os.path.join(attempt.path, name), "w") as stream:
                 stream.write(value)
@@ -52,7 +54,7 @@ class AttemptCgroupV2Tests(unittest.TestCase):
             with self.assertRaises(CgroupV2Unavailable):
                 AttemptCgroupV2(root, "50000 100000", 1024)
 
-    def test_applies_cpu_and_memory_limits_without_claiming_pid_limit(self):
+    def test_applies_cpu_memory_and_pid_limits(self):
         with tempfile.TemporaryDirectory() as root:
             self._delegated_root(root)
             with mock.patch(
@@ -63,10 +65,11 @@ class AttemptCgroupV2Tests(unittest.TestCase):
                 for name, expected in (
                     ("cpu.max", "50000 100000"),
                     ("memory.max", "1024"),
+                    ("pids.max", "64"),
                 ):
                     with open(os.path.join(attempt.path, name), "r") as stream:
                         self.assertEqual(stream.read(), expected)
-                self.assertNotIn("pids.max", os.listdir(attempt.path))
+                self.assertIn("pids.max", os.listdir(attempt.path))
             finally:
                 self._remove_fake_cgroup_files(attempt)
                 os.rmdir(attempt.path)
@@ -79,6 +82,8 @@ class AttemptCgroupV2Tests(unittest.TestCase):
             self.assertEqual(usage["cpu"]["usage_usec"], 1250)
             self.assertEqual(usage["memory_peak_bytes"], 4096)
             self.assertEqual(usage["memory_events"]["oom_kill"], 0)
+            self.assertEqual(usage["pids_current"], 0)
+            self.assertEqual(usage["pids_events"]["max"], 0)
             self._remove_fake_cgroup_files(attempt)
             os.rmdir(attempt.path)
 
