@@ -193,3 +193,14 @@ Issue #74 is closed: the required Python 3.12 migration CI, migration-chain chec
 - No claim of fully validated Python 3.12 runtime migration until migrations and the complete broker-backed VOD path pass inside the production image.
 
 This plan is intentionally outcome- and gate-based. The roadmap is adjusted when new evidence changes risk, product value, or implementation dependencies.
+
+## 7. Creative project continuity increment (Issue #79)
+
+The first persistence slice is implemented on the active project-revisions branch:
+- Tenant-owned Project roots record the authenticated creator identity; caller-provided tenant IDs are never accepted.
+- ProjectRevision snapshots are canonical JSON with SHA-256 content identity and monotonically increasing per-project revision numbers.
+- Composite `(project_id, tenant_id)` foreign keys prevent cross-tenant revision attachment; PostgreSQL triggers reject revision UPDATE and DELETE.
+- Repository reads and writes require explicit `video.projects:*` scopes and hide foreign-project existence behind the normal authorization denial.
+- Workflow-definition versions and execution-plan fingerprints remain independent of project revision. Job revision pinning, typed Scene/Shot/Character/Asset references and artifact provenance are later increments.
+
+The new migration follows `0012_tenant_quota_audit` as `0013_creative_project_revisions`. Downgrade is intentionally blocked while any project or revision exists. No retention duration or automated deletion is introduced without customer/legal policy. The PostgreSQL integration lane must validate cross-tenant rejection, canonical hashing, monotonic numbering and database-level immutability before merge.
