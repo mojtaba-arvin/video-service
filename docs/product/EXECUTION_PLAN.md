@@ -173,12 +173,14 @@ Next execution order:
 1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. Define and implement per-Attempt scratch-disk limits/high-water accounting without broad shared-filesystem deletion; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
 2. **#73 — complete security operations.** Build an audited quota-policy provisioning path (operator identity, reason, version/history and inventory) before enabling `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED`; add bounded webhook attempt history without storing URLs, secrets, signatures or bodies; document/test the receiver's atomic Delivery-ID dedup transaction. Verify production issuer/audience/JWKS and legacy ownership reconciliation.
 3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
-4. **#74 — close runtime migration acceptance.** Run migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside the exact Python 3.12 production image; retire Python 3.9 only after operational acceptance.
-5. **#80 — implement deterministic CPU admission and tenant fairness** before GPU/Spot policies.
+4. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; rehearse migrations and the complete broker-backed VOD path inside the exact Python 3.12 production image, then verify live KMS/STS/IAM, legacy callback inventory/drain, broker redelivery, worker-loss recovery, observability and rollback in staging.
+5. **#80 — implement deterministic CPU admission and tenant fairness** after quota provisioning/audit and resource metrics are operational; defer GPU/Spot policies.
 6. **#79 — extend the merged definition contract** with persisted definitions, project/scene/shot/character/asset continuity, provenance, retention/ownership, in-flight version policy and resumable stages.
 7. **#75/#82 — prepare licensed benchmark corpus and CDN telemetry correlation in parallel**, with privacy/retention controls.
 8. **#76 — implement MCP only after shared authorization, quota and audit contracts are complete.**
 9. **#84 — design incremental ingestion/output after artifact identity, resumability and backpressure contracts stabilize.**
+Issue #74 is closed: the required Python 3.12 migration CI, migration-chain checks and full VOD compatibility lanes passed. The remaining exact production-image/staging rehearsal is tracked under #71, not as an open runtime-migration implementation issue.
+
 ## 7. Explicit no-go decisions for now
 
 - No "exactly once" delivery claim.
