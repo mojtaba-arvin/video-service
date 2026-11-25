@@ -68,8 +68,23 @@ class WorkflowNodeExecutor:
         return contract.cancellation == "process_group_termination"
 
     @staticmethod
-    def _merge_cgroup_metrics(metrics, usage):
+    def _capture_cgroup_usage(cgroup):
+        if cgroup is None:
+            return None, None
+        try:
+            return cgroup.usage(), None
+        except Exception as exc:
+            # Resource accounting must never replace the handler's success or
+            # failure classification. Retain only a safe exception type code.
+            code = re.sub(r"[^A-Za-z0-9_.-]", "_", type(exc).__name__)[:128]
+            return None, code
+
+    @staticmethod
+    def _merge_cgroup_metrics(metrics, usage, usage_error_code=None):
         merged = dict(metrics or {})
+        if usage_error_code:
+            merged["cgroup_metrics_status"] = "unavailable"
+            merged["cgroup_metrics_error_code"] = usage_error_code
         if not isinstance(usage, dict):
             return merged
         cpu = usage.get("cpu") or {}
@@ -188,6 +203,7 @@ class WorkflowNodeExecutor:
             input_artifacts=input_artifacts,
         )
         cgroup_usage = None
+        cgroup_usage_error_code = None
         try:
             if is_terminal():
                 self.repository.cancel_attempt(
@@ -208,11 +224,16 @@ class WorkflowNodeExecutor:
                     # Capture on failure too, so failed/retried Attempts retain
                     # the resource cost observed before the exception.
                     if cgroup is not None:
-                        cgroup_usage = cgroup.usage()
+                        (
+                            cgroup_usage,
+                            cgroup_usage_error_code,
+                        ) = self._capture_cgroup_usage(cgroup)
             if not isinstance(result, dict):
                 raise ValueError("node handler must return a result dictionary")
             result["metrics"] = self._merge_cgroup_metrics(
-                result.get("metrics"), cgroup_usage
+                result.get("metrics"),
+                cgroup_usage,
+                cgroup_usage_error_code,
             )
             validation_report = result.get("validation_report")
             if not isinstance(validation_report, dict):
@@ -267,7 +288,9 @@ class WorkflowNodeExecutor:
                     error_code=self._error_code(exc),
                     # Exception messages may include customer values or URLs.
                     error_message=type(exc).__name__,
-                    metrics=self._merge_cgroup_metrics({}, cgroup_usage),
+                    metrics=self._merge_cgroup_metrics(
+                        {}, cgroup_usage, cgroup_usage_error_code
+                    ),
                     lease_token=token,
                     retry_after_seconds=retry_after_seconds,
                 )
