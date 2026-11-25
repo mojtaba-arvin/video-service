@@ -373,7 +373,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_job_project_revision_pin_mutation()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         BEGIN
             IF NEW.project_id IS DISTINCT FROM OLD.project_id
                OR NEW.project_revision_id IS DISTINCT FROM OLD.project_revision_id THEN
@@ -381,7 +381,7 @@ def upgrade():
             END IF;
             RETURN NEW;
         END;
-        $$ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_job_project_revision_pin_immutable
@@ -390,7 +390,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_stage_operation_contract_mutation()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         BEGIN
             IF NEW.operation IS DISTINCT FROM OLD.operation
                OR NEW.operation_contract_version
@@ -399,7 +399,7 @@ def upgrade():
             END IF;
             RETURN NEW;
         END;
-        $$ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_stage_operation_contract_immutable
