@@ -62,7 +62,7 @@ The STS ARN prefix check is an application-level guard, not a substitute for
 least-privilege IAM. KMS key policy and role trust policy are the authoritative
 cloud-side controls.
 
-For signed callbacks, the worker needs `kms:Decrypt` constrained to the
+For signed callbacks, the worker needs `kms:Decrypt` to be constrained to the
 `webhook.signing` encryption context as well as the existing
 `webhook.callback` purpose. Keep purpose conditions explicit; do not widen the
 role to arbitrary Job secret purposes.

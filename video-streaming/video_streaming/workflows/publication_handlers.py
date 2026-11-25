@@ -635,11 +635,10 @@ def build_publication_handlers(
                     from video_streaming.workflows.secret_runtime import (
                         resolve_job_webhook_signing_secret,
                     )
-                    signing_resolver = lambda job_id, secret_id: (
-                        resolve_job_webhook_signing_secret(
+                    def signing_resolver(job_id, secret_id):
+                        return resolve_job_webhook_signing_secret(
                             job_id, secret_id, repository=repository
                         )
-                    )
                 _check_active(context)
                 try:
                     signing_secret = signing_resolver(context.job_id, signing_ref)

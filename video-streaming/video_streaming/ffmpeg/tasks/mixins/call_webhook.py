@@ -1,4 +1,6 @@
 import json
+from typing import Optional
+
 from celery import Task
 from video_streaming.security.webhook_signing import (
     build_webhook_signature_headers,
@@ -26,9 +28,9 @@ class CallWebhookMixin(object):
 
     def call_webhook(self,
                      request_id: str,
-                     webhook_url: str = None,
-                     signing_secret: str = None,
-                     delivery_stage_key: str = None) -> None or True:
+                     webhook_url: Optional[str] = None,
+                     signing_secret: Optional[str] = None,
+                     delivery_stage_key: Optional[str] = None) -> None or True:
         """
         returns None when job details has been expired and
         returns True when delivered by 2xx HTTP status

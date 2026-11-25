@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Optional
 
 from video_streaming.celery import celery_app
 from video_streaming.ffmpeg.constants import TASK_DECORATOR_KWARGS
@@ -19,7 +20,8 @@ class CallWebhookTask(
     **TASK_DECORATOR_KWARGS
 )
 def call_webhook(
-        self, *args, request_id: str = None, delivery_stage_key: str = None):
+        self, *args, request_id: Optional[str] = None,
+        delivery_stage_key: Optional[str] = None):
     """Deliver a callback after resolving its encrypted Job-scoped secret.
 
     Raw callback URLs are never read from Redis or accepted as task arguments.

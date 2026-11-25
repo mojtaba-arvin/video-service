@@ -620,6 +620,41 @@ class WorkflowRepository:
                 raise AuthorizationError("Resource not found or access denied")
             return job.id
 
+    @staticmethod
+    def _rebind_webhook_secret_references(session, job_id, plan):
+        """Rebind plan references to accepted Job secrets without rotating them."""
+        if plan is None:
+            return
+        accepted_by_purpose = {}
+        now = utcnow()
+        for node in plan["nodes"]:
+            parameters = node["parameters"]
+            for parameter, purpose in (
+                ("webhook_secret_ref", "webhook.callback"),
+                ("webhook_signing_secret_ref", "webhook.signing"),
+            ):
+                if parameter not in parameters:
+                    continue
+                if purpose not in accepted_by_purpose:
+                    accepted_by_purpose[purpose] = session.execute(
+                        select(JobSecretRecord).where(
+                            JobSecretRecord.job_id == job_id,
+                            JobSecretRecord.purpose == purpose,
+                            JobSecretRecord.status == "ACTIVE",
+                            JobSecretRecord.deleted_at.is_(None),
+                            (JobSecretRecord.expires_at.is_(None)
+                             | (JobSecretRecord.expires_at > now)),
+                        )
+                    ).scalar_one_or_none()
+                accepted_secret = accepted_by_purpose[purpose]
+                if accepted_secret is None:
+                    raise IdempotencyConflict(
+                        "Idempotent plan references a missing active {} secret".format(
+                            purpose
+                        )
+                    )
+                parameters[parameter] = accepted_secret.secret_id
+
     def create_job(
             self,
             job_id,
@@ -781,29 +816,9 @@ class WorkflowRepository:
                         # transaction wins. Rebind the candidate plan to the
                         # already-accepted active envelope before comparing
                         # fingerprints; never rotate the persisted secret.
-                        for node in replay_plan["nodes"]:
-                            parameters = node["parameters"]
-                            for parameter, purpose in (
-                                ("webhook_secret_ref", "webhook.callback"),
-                                ("webhook_signing_secret_ref", "webhook.signing"),
-                            ):
-                                if parameter not in parameters:
-                                    continue
-                                accepted_secret = session.execute(
-                                    select(JobSecretRecord).where(
-                                        JobSecretRecord.job_id == existing.id,
-                                        JobSecretRecord.purpose == purpose,
-                                        JobSecretRecord.status == "ACTIVE",
-                                        JobSecretRecord.deleted_at.is_(None),
-                                        (JobSecretRecord.expires_at.is_(None)
-                                         | (JobSecretRecord.expires_at > utcnow())),
-                                    )
-                                ).scalar_one_or_none()
-                                if accepted_secret is None:
-                                    raise IdempotencyConflict(
-                                        "Idempotent plan references a missing active {} secret".format(purpose)
-                                    )
-                                parameters[parameter] = accepted_secret.secret_id
+                        self._rebind_webhook_secret_references(
+                            session, existing.id, replay_plan
+                        )
                     replay_fingerprint = (
                         execution_plan_sha256(replay_plan)
                         if replay_plan is not None else None
@@ -1022,25 +1037,9 @@ class WorkflowRepository:
                 if plan is not None:
                     replay_plan = deepcopy(plan)
                     replay_plan["job_id"] = existing.id
-                    for node in replay_plan["nodes"]:
-                        parameters = node["parameters"]
-                        if "webhook_secret_ref" not in parameters:
-                            continue
-                        accepted_secret = session.execute(
-                            select(JobSecretRecord).where(
-                                JobSecretRecord.job_id == existing.id,
-                                JobSecretRecord.purpose == "webhook.callback",
-                                JobSecretRecord.status == "ACTIVE",
-                                JobSecretRecord.deleted_at.is_(None),
-                                (JobSecretRecord.expires_at.is_(None)
-                                 | (JobSecretRecord.expires_at > utcnow())),
-                            )
-                        ).scalar_one_or_none()
-                        if accepted_secret is None:
-                            raise IdempotencyConflict(
-                                "Concurrent idempotent plan references a missing callback secret"
-                            )
-                        parameters["webhook_secret_ref"] = accepted_secret.secret_id
+                    self._rebind_webhook_secret_references(
+                        session, existing.id, replay_plan
+                    )
                 replay_fingerprint = (
                     execution_plan_sha256(replay_plan)
                     if replay_plan is not None else None

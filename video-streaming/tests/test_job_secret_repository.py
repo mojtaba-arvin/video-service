@@ -181,6 +181,44 @@ class JobSecretRepositoryTests(unittest.TestCase):
                 expected,
             )
 
+    def test_plan_secret_rebinding_handles_both_purposes_and_callback_only_plans(self):
+        job_id = str(uuid4())
+        callback = self.envelope(job_id, purpose="webhook.callback")
+        signing = self.envelope(job_id, value="s" * 48, purpose="webhook.signing")
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-rebind-{}".format(uuid4()),
+            request_hash="d" * 64,
+            owner_principal=self.principal,
+            secret_envelopes=[callback, signing],
+        )
+        plan = {"nodes": [
+            {"parameters": {
+                "webhook_secret_ref": "candidate-callback-ref",
+                "webhook_signing_secret_ref": "candidate-signing-ref",
+            }},
+            {"parameters": {"webhook_secret_ref": "candidate-callback-only"}},
+        ]}
+        with self.repository._session() as session:
+            self.repository._rebind_webhook_secret_references(
+                session, job_id, plan
+            )
+        self.assertEqual(
+            plan["nodes"][0]["parameters"]["webhook_secret_ref"],
+            callback.secret_id,
+        )
+        self.assertEqual(
+            plan["nodes"][0]["parameters"]["webhook_signing_secret_ref"],
+            signing.secret_id,
+        )
+        self.assertEqual(
+            plan["nodes"][1]["parameters"]["webhook_secret_ref"],
+            callback.secret_id,
+        )
+        self.assertNotIn(
+            "webhook_signing_secret_ref", plan["nodes"][1]["parameters"]
+        )
+
     def test_secret_write_requires_authenticated_owner_and_exact_scope(self):
         job_id = str(uuid4())
         with self.assertRaises(ValueError):
