@@ -546,9 +546,13 @@ class WorkflowRepositoryTests(unittest.TestCase):
             stored["content"]["references"]["assets"], [asset["id"]]
         )
         entities = self.repository.list_creative_project_entities(
-            project_id, owner
+            project_id, owner, limit=10
         )
         self.assertEqual([item["id"] for item in entities["scenes"]], [scene["id"]])
+        with self.assertRaises(ValueError):
+            self.repository.list_creative_project_entities(
+                project_id, owner, limit=1001
+            )
         self.assertEqual(entities["shots"][0]["scene_id"], scene["id"])
         self.assertEqual(entities["assets"][0]["content_sha256"], "b" * 64)
 
