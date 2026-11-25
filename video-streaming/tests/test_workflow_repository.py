@@ -130,6 +130,73 @@ class WorkflowRepositoryTests(unittest.TestCase):
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
 
+    def test_webhook_delivery_history_is_redacted_tenant_scoped_and_bounded(self):
+        owner = self.make_owner_principal(
+            tenant="webhook-history-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:read"],
+        )
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="webhook-history-" + job_id,
+            request_hash="e" * 64,
+            workflow_name="video.vod",
+            stage_specs=[{
+                "stage_key": "webhook-delivery",
+                "operation": "video.webhook.deliver",
+            }],
+            owner_principal=owner,
+        )
+        attempt_id, _ = self.repository.start_attempt(
+            job_id, "webhook-delivery", execution_backend="test"
+        )
+        delivery_id = "d" * 64
+        self.repository.record_webhook_delivery_event(
+            job_id, attempt_id, "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+            {"delivery_id": delivery_id},
+        )
+        self.repository.record_webhook_delivery_event(
+            job_id, attempt_id, "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
+            {"delivery_id": delivery_id, "http_status": 202},
+        )
+
+        latest = self.repository.list_webhook_delivery_history(
+            job_id, owner, limit=1
+        )
+        self.assertEqual(len(latest), 1)
+        self.assertEqual(
+            latest[0]["event_type"], "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED"
+        )
+        self.assertEqual(latest[0]["payload"], {
+            "delivery_id": delivery_id, "http_status": 202,
+        })
+        with self.assertRaises(AuthorizationError):
+            self.repository.list_webhook_delivery_history(
+                job_id,
+                self.make_owner_principal(
+                    tenant="foreign-" + str(uuid4()),
+                    scopes=["video.jobs:read"],
+                ),
+            )
+        with self.assertRaises(ValueError):
+            self.repository.record_webhook_delivery_event(
+                job_id, attempt_id, "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+                {"delivery_id": delivery_id, "destination": "https://private.invalid"},
+            )
+        with self.repository._session() as session:
+            events = session.execute(
+                select(WorkflowEventRecord).where(
+                    WorkflowEventRecord.job_id == job_id,
+                    WorkflowEventRecord.event_type.like("WEBHOOK_DELIVERY_%"),
+                )
+            ).scalars().all()
+        self.assertEqual(len(events), 2)
+        self.assertTrue(all(
+            set(event.payload_json).issubset({
+                "delivery_id", "http_status", "failure_code",
+            }) for event in events
+        ))
+
     def test_creative_project_revisions_are_tenant_scoped_canonical_and_immutable(self):
         owner = self.make_owner_principal(
             tenant="creative-tenant-" + str(uuid4()),
