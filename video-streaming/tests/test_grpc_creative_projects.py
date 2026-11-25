@@ -215,22 +215,49 @@ class CreativeProjectsRpcTests(unittest.TestCase):
             self.assertEqual(len(listed.revisions), 1)
             self.assertEqual(self.repository.calls[-1][2]["limit"], 10)
 
-    def test_invalid_revision_json_is_rejected_before_repository_write(self):
+    def test_invalid_or_ambiguous_revision_json_is_rejected_before_repository_write(self):
         p1, p2 = self._patches()
         with p1, p2:
-            with self.assertRaises(AbortCall) as caught:
-                self.service.create_creative_project_revision(
-                    streaming_pb2.CreateCreativeProjectRevisionRequest(
-                        project_id="project-1", content_json="{not-json"
-                    ),
-                    self.context,
-                )
-        self.assertEqual(caught.exception.code, grpc.StatusCode.INVALID_ARGUMENT)
+            for payload in ("{not-json", '{"title":"A","title":"B"}'):
+                with self.subTest(payload=payload):
+                    with self.assertRaises(AbortCall) as caught:
+                        self.service.create_creative_project_revision(
+                            streaming_pb2.CreateCreativeProjectRevisionRequest(
+                                project_id="project-1", content_json=payload
+                            ),
+                            self.context,
+                        )
+                    self.assertEqual(
+                        caught.exception.code, grpc.StatusCode.INVALID_ARGUMENT
+                    )
         self.assertFalse(any(call[0] == "create_revision" for call in self.repository.calls))
 
     def test_typed_entities_use_tenant_scoped_repository_and_allowlisted_fields(self):
         p1, p2 = self._patches()
         with p1, p2:
+            scene = self.service.create_creative_scene(
+                streaming_pb2.CreateCreativeSceneRequest(
+                    project_id="project-1", name="Opening", sort_order=1
+                ),
+                self.context,
+            )
+            shot = self.service.create_creative_shot(
+                streaming_pb2.CreateCreativeShotRequest(
+                    project_id="project-1", scene_id=scene.entity.id,
+                    name="Wide", sort_order=1,
+                ),
+                self.context,
+            )
+            character = self.service.create_creative_character(
+                streaming_pb2.CreateCreativeCharacterRequest(
+                    project_id="project-1", name="Lead", sort_order=1
+                ),
+                self.context,
+            )
+            self.assertEqual(scene.entity.name, "Opening")
+            self.assertEqual(shot.entity.scene_id, scene.entity.id)
+            self.assertEqual(character.entity.name, "Lead")
+
             asset = self.service.create_creative_asset(
                 streaming_pb2.CreateCreativeAssetRequest(
                     project_id="project-1", artifact_id="artifact-1",
