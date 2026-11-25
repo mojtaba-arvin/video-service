@@ -619,8 +619,16 @@ message CreativeProjectRevisionResponse {
   string content_sha256 = 6;
   string created_at = 7;
 }
+message CreativeProjectRevisionSummary {
+  string id = 1;
+  string project_id = 2;
+  string tenant_id = 3;
+  int32 revision_number = 4;
+  string content_sha256 = 5;
+  string created_at = 6;
+}
 message ListCreativeProjectRevisionsResponse {
-  repeated CreativeProjectRevisionResponse revisions = 1;
+  repeated CreativeProjectRevisionSummary revisions = 1;
 }
 message CreateCreativeSceneRequest {
   string project_id = 1;
@@ -668,7 +676,11 @@ message CreativeProjectEntity {
 message CreativeProjectEntityResponse {
   CreativeProjectEntity entity = 1;
 }
-message ListCreativeProjectEntitiesRequest { string project_id = 1; }
+message ListCreativeProjectEntitiesRequest {
+  string project_id = 1;
+  // Zero selects the server default (500); maximum is 1000 per entity type.
+  int32 limit = 2;
+}
 message ListCreativeProjectEntitiesResponse {
   repeated CreativeProjectEntity scenes = 1;
   repeated CreativeProjectEntity shots = 2;
