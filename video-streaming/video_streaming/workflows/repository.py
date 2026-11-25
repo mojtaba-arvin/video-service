@@ -87,7 +87,8 @@ class JobRecord(Base):
         ),
         CheckConstraint(
             "(project_id IS NULL AND project_revision_id IS NULL) OR "
-            "(project_id IS NOT NULL AND project_revision_id IS NOT NULL)",
+            "(project_id IS NOT NULL AND project_revision_id IS NOT NULL "
+            "AND owner_tenant_id IS NOT NULL)",
             name="ck_workflow_job_project_revision_pin_complete",
         ),
         UniqueConstraint(
@@ -623,6 +624,7 @@ class CreativeAssetProvenanceRecord(Base):
     prompt_config_revision_id = Column(String(128), nullable=False)
     validation_evidence_json = Column(JSON, nullable=False)
     validation_evidence_sha256 = Column(String(64), nullable=False)
+    is_sealed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -1760,7 +1762,8 @@ class WorkflowRepository:
             raise ValueError("parent_asset_ids must contain at most 100 IDs")
         if any(
                 not isinstance(parent_id, str)
-                or not re.fullmatch(r"[0-9a-fA-F-]{36}", parent_id)
+                or not parent_id.strip()
+                or len(parent_id) > 36
                 for parent_id in parent_asset_ids):
             raise ValueError("parent_asset_ids contains an invalid ID")
         if len(set(parent_asset_ids)) != len(parent_asset_ids):
@@ -1828,6 +1831,11 @@ class WorkflowRepository:
                     or workflow.job_id != job.id
                     or stage.workflow_id != workflow.id):
                 raise AuthorizationError("Resource not found or access denied")
+            if workflow.execution_plan_json is None:
+                raise ValueError(
+                    "provenance requires a persisted execution plan snapshot"
+                )
+            self._verify_execution_plan_snapshot(workflow, job.id)
             if (
                     not workflow.workflow_version
                     or not workflow.execution_plan_schema_version
@@ -1890,6 +1898,7 @@ class WorkflowRepository:
                 validation_evidence_json=evidence,
                 validation_evidence_sha256=evidence_digest,
                 created_at=now,
+                is_sealed=False,
             )
             session.add(provenance)
             # The parent table has an immediate composite FK to this header.
@@ -1905,6 +1914,8 @@ class WorkflowRepository:
                     parent_content_sha256=parent.content_sha256,
                     created_at=now,
                 ))
+            session.flush()
+            provenance.is_sealed = True
 
             result = {
                 "id": provenance_id,
@@ -2538,6 +2549,13 @@ class WorkflowRepository:
                                 "Idempotency key was already used with a different request"
                             )
                         if (
+                                concurrent_existing.project_id != project_id
+                                or concurrent_existing.project_revision_id
+                                != project_revision_id):
+                            raise IdempotencyConflict(
+                                "Idempotency key resolves to a different ProjectRevision pin"
+                            )
+                        if (
                                 concurrent_existing.owner_tenant_id
                                 != owner_principal.tenant_id
                                 or concurrent_existing.owner_issuer
@@ -2816,6 +2834,12 @@ class WorkflowRepository:
                     from video_streaming.security import AuthorizationError
                     raise AuthorizationError(
                         "Resource not found or access denied"
+                    )
+                if (
+                        existing.project_id != project_id
+                        or existing.project_revision_id != project_revision_id):
+                    raise IdempotencyConflict(
+                        "Idempotency key resolves to a different ProjectRevision pin"
                     )
                 existing_workflow = session.execute(
                     select(WorkflowRecord).where(
