@@ -1644,6 +1644,296 @@ class WorkflowRepository:
                 } for row in rows]
             return result
 
+    @staticmethod
+    def _canonical_provenance_validation_evidence(evidence):
+        allowed = {
+            "validator_id", "validator_version", "status",
+            "evidence_ids", "metrics",
+        }
+        if not isinstance(evidence, dict) or set(evidence) - allowed:
+            raise ValueError("validation evidence contains unsupported fields")
+        validator_id = evidence.get("validator_id")
+        validator_version = evidence.get("validator_version")
+        if (
+                not isinstance(validator_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", validator_id)):
+            raise ValueError("validation evidence validator_id is invalid")
+        if (
+                not isinstance(validator_version, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", validator_version)):
+            raise ValueError("validation evidence validator_version is invalid")
+        if evidence.get("status") != "PASSED":
+            raise ValueError("only passed validation evidence can be committed")
+
+        evidence_ids = evidence.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list) or len(evidence_ids) > 50:
+            raise ValueError("validation evidence_ids must contain at most 50 IDs")
+        if any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value)
+                for value in evidence_ids):
+            raise ValueError("validation evidence contains an invalid evidence ID")
+        if len(set(evidence_ids)) != len(evidence_ids):
+            raise ValueError("validation evidence IDs must be unique")
+
+        metrics = evidence.get("metrics", {})
+        if not isinstance(metrics, dict) or len(metrics) > 50:
+            raise ValueError("validation metrics must be a bounded object")
+        normalized_metrics = {}
+        for key, value in metrics.items():
+            if (
+                    not isinstance(key, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", key)):
+                raise ValueError("validation metric name is invalid")
+            if isinstance(value, bool):
+                normalized_metrics[key] = value
+            elif isinstance(value, (int, float)) and math.isfinite(value):
+                normalized_metrics[key] = value
+            else:
+                raise ValueError("validation metrics must be finite numbers or booleans")
+
+        normalized = {
+            "validator_id": validator_id,
+            "validator_version": validator_version,
+            "status": "PASSED",
+            "evidence_ids": list(evidence_ids),
+            "metrics": normalized_metrics,
+        }
+        return WorkflowRepository._canonical_project_content(normalized)
+
+    def create_creative_asset_provenance(
+            self, asset_id, project_revision_id, prompt_config_revision_id,
+            parent_asset_ids, validation_evidence, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:write")
+        if (
+                not isinstance(prompt_config_revision_id, str)
+                or not re.fullmatch(
+                    r"[A-Za-z0-9._:-]{1,128}", prompt_config_revision_id
+                )):
+            raise ValueError("prompt_config_revision_id must be an opaque identifier")
+        if not isinstance(parent_asset_ids, list) or len(parent_asset_ids) > 100:
+            raise ValueError("parent_asset_ids must contain at most 100 IDs")
+        if any(
+                not isinstance(parent_id, str)
+                or not re.fullmatch(r"[0-9a-fA-F-]{36}", parent_id)
+                for parent_id in parent_asset_ids):
+            raise ValueError("parent_asset_ids contains an invalid ID")
+        if len(set(parent_asset_ids)) != len(parent_asset_ids):
+            raise ValueError("parent_asset_ids must be unique")
+        evidence, evidence_digest = (
+            self._canonical_provenance_validation_evidence(validation_evidence)
+        )
+        now = utcnow()
+        provenance_id = new_id()
+
+        with self._session.begin() as session:
+            asset = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id == asset_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if asset is None:
+                raise AuthorizationError("Resource not found or access denied")
+            revision = session.execute(
+                select(CreativeProjectRevisionRecord).where(
+                    CreativeProjectRevisionRecord.id == project_revision_id,
+                    CreativeProjectRevisionRecord.project_id == asset.project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if revision is None:
+                raise AuthorizationError("Resource not found or access denied")
+            existing = session.execute(
+                select(CreativeAssetProvenanceRecord.id).where(
+                    CreativeAssetProvenanceRecord.asset_id == asset_id,
+                    CreativeAssetProvenanceRecord.project_id == asset.project_id,
+                    CreativeAssetProvenanceRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise ValueError("asset provenance is immutable and already exists")
+
+            artifact = session.get(ArtifactRecord, asset.artifact_id)
+            job = session.get(JobRecord, asset.source_job_id)
+            if (
+                    artifact is None or job is None
+                    or artifact.job_id != asset.source_job_id
+                    or job.owner_tenant_id != principal.tenant_id
+                    or artifact.status != "AVAILABLE"
+                    or artifact.checksum_sha256 != asset.content_sha256):
+                raise AuthorizationError("Resource not found or access denied")
+            if not artifact.stage_id or not artifact.attempt_id:
+                raise ValueError(
+                    "derived asset provenance requires an Attempt-bound Artifact"
+                )
+
+            stage = session.get(StageRecord, artifact.stage_id)
+            attempt = session.get(AttemptRecord, artifact.attempt_id)
+            workflow = (
+                session.get(WorkflowRecord, stage.workflow_id)
+                if stage is not None else None
+            )
+            if (
+                    stage is None or attempt is None or workflow is None
+                    or attempt.stage_id != stage.id
+                    or workflow.job_id != job.id
+                    or stage.workflow_id != workflow.id):
+                raise AuthorizationError("Resource not found or access denied")
+            if (
+                    not workflow.workflow_version
+                    or not workflow.execution_plan_schema_version
+                    or not workflow.execution_plan_fingerprint
+                    or not re.fullmatch(
+                        r"[0-9a-fA-F]{64}", workflow.execution_plan_fingerprint
+                    )
+                    or isinstance(stage.operation_contract_version, bool)
+                    or stage.operation_contract_version < 1):
+                raise ValueError(
+                    "provenance requires a pinned workflow and operation contract"
+                )
+
+            revision_references = (
+                revision.content_json.get("references", {})
+                if isinstance(revision.content_json, dict) else {}
+            )
+            revision_asset_ids = (
+                revision_references.get("assets", [])
+                if isinstance(revision_references, dict) else []
+            )
+            if any(parent_id not in revision_asset_ids for parent_id in parent_asset_ids):
+                raise ValueError(
+                    "every parent Asset must be included in the pinned ProjectRevision"
+                )
+            if asset_id in parent_asset_ids:
+                raise ValueError("an Asset cannot be its own provenance parent")
+
+            parent_rows = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id.in_(parent_asset_ids),
+                    CreativeAssetRecord.project_id == asset.project_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalars().all() if parent_asset_ids else []
+            if len(parent_rows) != len(parent_asset_ids):
+                raise AuthorizationError("Resource not found or access denied")
+
+            provenance = CreativeAssetProvenanceRecord(
+                id=provenance_id,
+                asset_id=asset.id,
+                project_id=asset.project_id,
+                tenant_id=principal.tenant_id,
+                artifact_id=artifact.id,
+                job_id=job.id,
+                workflow_id=workflow.id,
+                stage_id=stage.id,
+                attempt_id=attempt.id,
+                project_revision_id=revision.id,
+                operation_id=stage.operation,
+                operation_contract_version=stage.operation_contract_version,
+                workflow_version=workflow.workflow_version,
+                execution_plan_schema_version=workflow.execution_plan_schema_version,
+                execution_plan_fingerprint=workflow.execution_plan_fingerprint,
+                prompt_config_revision_id=prompt_config_revision_id,
+                validation_evidence_json=evidence,
+                validation_evidence_sha256=evidence_digest,
+                created_at=now,
+            )
+            session.add(provenance)
+            for parent in parent_rows:
+                session.add(CreativeAssetProvenanceParentRecord(
+                    provenance_id=provenance_id,
+                    project_id=asset.project_id,
+                    tenant_id=principal.tenant_id,
+                    parent_asset_id=parent.id,
+                    parent_content_sha256=parent.content_sha256,
+                    created_at=now,
+                ))
+
+        return {
+            "id": provenance_id,
+            "asset_id": asset_id,
+            "project_id": asset.project_id,
+            "tenant_id": principal.tenant_id,
+            "artifact_id": artifact.id,
+            "job_id": job.id,
+            "workflow_id": workflow.id,
+            "stage_id": stage.id,
+            "attempt_id": attempt.id,
+            "project_revision_id": revision.id,
+            "operation_id": stage.operation,
+            "operation_contract_version": stage.operation_contract_version,
+            "workflow_version": workflow.workflow_version,
+            "execution_plan_schema_version": workflow.execution_plan_schema_version,
+            "execution_plan_fingerprint": workflow.execution_plan_fingerprint,
+            "prompt_config_revision_id": prompt_config_revision_id,
+            "validation_evidence": evidence,
+            "validation_evidence_sha256": evidence_digest,
+            "parents": [{
+                "asset_id": parent.id,
+                "content_sha256": parent.content_sha256,
+            } for parent in parent_rows],
+            "created_at": now,
+        }
+
+    def get_creative_asset_provenance(self, asset_id, project_id, principal):
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        with self._session() as session:
+            asset = session.execute(
+                select(CreativeAssetRecord).where(
+                    CreativeAssetRecord.id == asset_id,
+                    CreativeAssetRecord.project_id == project_id,
+                    CreativeAssetRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if asset is None:
+                raise AuthorizationError("Resource not found or access denied")
+            row = session.execute(
+                select(CreativeAssetProvenanceRecord).where(
+                    CreativeAssetProvenanceRecord.asset_id == asset_id,
+                    CreativeAssetProvenanceRecord.project_id == project_id,
+                    CreativeAssetProvenanceRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            parents = session.execute(
+                select(CreativeAssetProvenanceParentRecord).where(
+                    CreativeAssetProvenanceParentRecord.provenance_id == row.id,
+                    CreativeAssetProvenanceParentRecord.project_id == project_id,
+                    CreativeAssetProvenanceParentRecord.tenant_id == principal.tenant_id,
+                ).order_by(CreativeAssetProvenanceParentRecord.parent_asset_id)
+            ).scalars().all()
+            return {
+                "id": row.id,
+                "asset_id": row.asset_id,
+                "project_id": row.project_id,
+                "tenant_id": row.tenant_id,
+                "artifact_id": row.artifact_id,
+                "job_id": row.job_id,
+                "workflow_id": row.workflow_id,
+                "stage_id": row.stage_id,
+                "attempt_id": row.attempt_id,
+                "project_revision_id": row.project_revision_id,
+                "operation_id": row.operation_id,
+                "operation_contract_version": row.operation_contract_version,
+                "workflow_version": row.workflow_version,
+                "execution_plan_schema_version": row.execution_plan_schema_version,
+                "execution_plan_fingerprint": row.execution_plan_fingerprint,
+                "prompt_config_revision_id": row.prompt_config_revision_id,
+                "validation_evidence": deepcopy(row.validation_evidence_json),
+                "validation_evidence_sha256": row.validation_evidence_sha256,
+                "parents": [{
+                    "asset_id": parent.parent_asset_id,
+                    "content_sha256": parent.parent_content_sha256,
+                } for parent in parents],
+                "created_at": row.created_at,
+            }
+
     def update_creative_project_entity(
             self, entity_type, project_id, entity_id, principal,
             name=None, sort_order=None):
