@@ -96,7 +96,12 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
                         migration.downgrade()
                 self.assertTrue(operations.connection.statements)
                 self.assertIn(table, operations.connection.statements[0])
-                self.assertEqual(operations.calls, [])
+                if filename == "0015_creative_asset_provenance.py":
+                    self.assertEqual(len(operations.calls), 1)
+                    self.assertEqual(operations.calls[0][0], "execute")
+                    self.assertIn("LOCK TABLE", operations.calls[0][1][0])
+                else:
+                    self.assertEqual(operations.calls, [])
 
     def test_provenance_downgrade_refuses_pinned_jobs(self):
         migration = _load_migration("0015_creative_asset_provenance.py")
@@ -106,7 +111,9 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
                 migration.downgrade()
         self.assertEqual(len(operations.connection.statements), 2)
         self.assertIn("workflow_jobs", operations.connection.statements[1])
-        self.assertEqual(operations.calls, [])
+        self.assertEqual(len(operations.calls), 1)
+        self.assertEqual(operations.calls[0][0], "execute")
+        self.assertIn("LOCK TABLE", operations.calls[0][1][0])
 
     def test_empty_state_preserves_normal_downgrade_path(self):
         for filename, table, _ in self.CASES:
