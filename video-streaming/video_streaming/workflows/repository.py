@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
-    ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
+    ForeignKeyConstraint, Index, Integer, Numeric, PrimaryKeyConstraint, String, Text,
     UniqueConstraint, create_engine, and_, or_,
     select, func,
 )
