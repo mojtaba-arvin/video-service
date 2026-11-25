@@ -7,7 +7,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0014_creative_project_typed_references"
+revision = "0014_project_refs"
 down_revision = "0013_creative_project_revisions"
 branch_labels = None
 depends_on = None
