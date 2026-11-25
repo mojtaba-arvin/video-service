@@ -44,6 +44,24 @@ class _Operations:
         return record
 
 
+class _SelectiveConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, statement):
+        sql = str(statement)
+        self.statements.append(sql)
+        if "FROM workflow_jobs" in sql:
+            return _ScalarResult(1)
+        return _ScalarResult(0)
+
+
+class _SelectiveOperations(_Operations):
+    def __init__(self):
+        self.connection = _SelectiveConnection()
+        self.calls = []
+
+
 def _load_migration(filename):
     path = os.path.join(MIGRATION_DIR, filename)
     spec = importlib.util.spec_from_file_location(
@@ -78,6 +96,16 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
                 self.assertTrue(operations.connection.statements)
                 self.assertIn(table, operations.connection.statements[0])
                 self.assertEqual(operations.calls, [])
+
+    def test_provenance_downgrade_refuses_pinned_jobs(self):
+        migration = _load_migration("0015_creative_asset_provenance.py")
+        operations = _SelectiveOperations()
+        with patch.object(migration, "op", operations):
+            with self.assertRaisesRegex(RuntimeError, "ProjectRevision pins"):
+                migration.downgrade()
+        self.assertEqual(len(operations.connection.statements), 2)
+        self.assertIn("workflow_jobs", operations.connection.statements[1])
+        self.assertEqual(operations.calls, [])
 
     def test_empty_state_preserves_normal_downgrade_path(self):
         for filename, table, _ in self.CASES:
