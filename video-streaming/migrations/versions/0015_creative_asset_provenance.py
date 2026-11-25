@@ -252,17 +252,15 @@ def upgrade():
 
 
 def downgrade():
-    for table, description in (
-        ("workflow_creative_asset_provenance_parents", "asset provenance parents"),
-        ("workflow_creative_asset_provenance", "asset provenance"),
-    ):
-        count = op.get_bind().execute(sa.text(
-            "SELECT COUNT(*) FROM {}".format(table)
-        )).scalar_one()
-        if count:
-            raise RuntimeError(
-                "Refusing to drop {} while records exist".format(description)
-            )
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_creative_asset_provenance"
+    )).scalar_one()
+    if count:
+        # Parent rows have a non-null FK to a provenance row, so checking the
+        # owning table is sufficient to protect both levels of the lineage.
+        raise RuntimeError(
+            "Refusing to drop asset provenance while records exist"
+        )
     versioned_stages = op.get_bind().execute(sa.text(
         "SELECT COUNT(*) FROM workflow_stages "
         "WHERE operation_contract_version <> 1"
