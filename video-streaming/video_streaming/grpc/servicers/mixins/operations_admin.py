@@ -36,17 +36,7 @@ class OperationsAdminMixin:
                 operator_principal=principal,
                 reason=request.reason,
             )
-            policy = repository.list_tenant_job_quota_policies(
-                principal, limit=1000
-            )
-            current = next(
-                (item for item in policy
-                 if item["tenant_id"] == result["tenant_id"]),
-                None,
-            )
-            updated_at = self._isoformat(
-                current["updated_at"] if current else None
-            )
+            updated_at = self._isoformat(result["updated_at"])
         except AuthorizationError:
             context.abort(
                 grpc.StatusCode.PERMISSION_DENIED,
