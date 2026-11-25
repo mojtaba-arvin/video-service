@@ -256,7 +256,8 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 created_at=utcnow(),
             ))
         parent_asset = self.repository.create_creative_asset(
-            project["id"], parent_artifact_id, "Source frame", "image", owner
+            project["id"], parent_artifact_id, "Source frame", "image", owner,
+            asset_id="source-frame",
         )
         revision = self.repository.create_creative_project_revision(
             project["id"],
@@ -364,9 +365,20 @@ class WorkflowRepositoryTests(unittest.TestCase):
             {"title": "Second valid pin", "references": {"assets": [parent_asset["id"]]}},
             owner,
         )
+        pin_test_job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=pin_test_job_id,
+            idempotency_key="provenance-pin-trigger-" + pin_test_job_id,
+            request_hash="3" * 64,
+            workflow_name="video.vod",
+            execution_plan=plan,
+            owner_principal=owner,
+            project_id=project["id"],
+            project_revision_id=revision["id"],
+        )
         with self.assertRaisesRegex(DBAPIError, "Job ProjectRevision pin is immutable"):
             with self.repository._session.begin() as session:
-                job_row = session.get(JobRecord, output_job_id)
+                job_row = session.get(JobRecord, pin_test_job_id)
                 job_row.project_revision_id = second_revision["id"]
 
         with self.assertRaises(DBAPIError):
