@@ -147,11 +147,11 @@ class AttemptCgroupV2:
 
     def usage(self):
         """Return Attempt-wide kernel counters, not per-process measurements."""
+        with open(os.path.join(self.path, "memory.peak"), "r") as stream:
+            memory_peak_bytes = int(stream.read().strip())
         return {
             "cpu": _read_key_values(os.path.join(self.path, "cpu.stat")),
-            "memory_peak_bytes": int(open(
-                os.path.join(self.path, "memory.peak"), "r"
-            ).read().strip()),
+            "memory_peak_bytes": memory_peak_bytes,
             "memory_events": _read_key_values(
                 os.path.join(self.path, "memory.events")
             ),
