@@ -719,6 +719,7 @@ class WorkflowRepository:
         if len(reason) > 1000:
             raise ValueError("reason must contain at most 1000 characters")
 
+        updated_at = utcnow()
         with self._session.begin() as session:
             policy = session.execute(
                 select(TenantJobQuotaPolicyRecord)
@@ -732,12 +733,12 @@ class WorkflowRepository:
                     tenant_id=tenant_id,
                     max_active_jobs=max_active_jobs,
                     policy_version=next_version,
-                    updated_at=utcnow(),
+                    updated_at=updated_at,
                 ))
             else:
                 policy.max_active_jobs = max_active_jobs
                 policy.policy_version = next_version
-                policy.updated_at = utcnow()
+                policy.updated_at = updated_at
             session.add(TenantJobQuotaAuditRecord(
                 id=new_id(),
                 tenant_id=tenant_id,
@@ -749,8 +750,12 @@ class WorkflowRepository:
                 policy_version=next_version,
                 created_at=utcnow(),
             ))
-        return {"tenant_id": tenant_id, "max_active_jobs": max_active_jobs,
-                "policy_version": next_version}
+        return {
+            "tenant_id": tenant_id,
+            "max_active_jobs": max_active_jobs,
+            "policy_version": next_version,
+            "updated_at": updated_at,
+        }
 
     @staticmethod
     def _canonical_project_content(content):
