@@ -35,6 +35,13 @@ class Streaming(
 
     @staticmethod
     def _exception_handler(exc: Exception):
+        from video_streaming.workflows.domain import (
+            TenantQuotaExceeded, TenantQuotaPolicyMissing,
+        )
+        if isinstance(exc, TenantQuotaExceeded):
+            raise exceptions.TenantJobQuotaExceededException()
+        if isinstance(exc, TenantQuotaPolicyMissing):
+            raise exceptions.TenantQuotaPolicyMissingException()
         if isinstance(exc, exceptions.GrpcBaseException):
             raise exc
         # Request and exception values may contain secrets or signed URLs.
