@@ -100,6 +100,36 @@ class TenantJobQuotaPolicyRecord(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class TenantJobQuotaAuditRecord(Base):
+    """Append-only operator audit trail for tenant admission policy changes."""
+
+    __tablename__ = "workflow_tenant_job_quota_audit"
+    __table_args__ = (
+        CheckConstraint(
+            "max_active_jobs >= 0",
+            name="ck_workflow_tenant_job_quota_audit_nonnegative",
+        ),
+        CheckConstraint(
+            "policy_version >= 1",
+            name="ck_workflow_tenant_job_quota_audit_version",
+        ),
+        Index(
+            "ix_workflow_tenant_job_quota_audit_tenant_created",
+            "tenant_id", "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    tenant_id = Column(String(255), nullable=False)
+    operator_issuer = Column(String(512), nullable=False)
+    operator_subject = Column(String(255), nullable=False)
+    reason = Column(String(1000), nullable=False)
+    previous_max_active_jobs = Column(Integer, nullable=True)
+    max_active_jobs = Column(Integer, nullable=False)
+    policy_version = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class JobSecretRecord(Base):
     """Encrypted callback material bound to the exact durable Job owner."""
 
@@ -606,16 +636,20 @@ class WorkflowRepository:
     def close(self):
         self.engine.dispose()
 
-    def set_tenant_job_quota_policy(
-            self, tenant_id, max_active_jobs, policy_version=1):
-        """Provision or replace a tenant's admission policy.
+    def provision_tenant_job_quota_policy(
+            self, tenant_id, max_active_jobs, operator_principal, reason):
+        """Atomically change a tenant quota and append its operator audit event.
 
-        This is an administrative operation; callers must authorize the
-        operator before invoking it. A zero limit intentionally suspends
-        new admissions for the tenant.
+        Authorization to invoke this administrative repository operation must
+        be enforced by the authenticated admin service boundary. The audit
+        identity is always derived from a trusted RequestPrincipal.
         """
+        from video_streaming.security import require_scope
+
+        require_scope(operator_principal, "video.tenant.quota.admin")
         if not isinstance(tenant_id, str) or not tenant_id.strip():
             raise ValueError("tenant_id must be a non-empty string")
+        tenant_id = tenant_id.strip()
         if len(tenant_id) > 255:
             raise ValueError("tenant_id must contain at most 255 characters")
         if (
@@ -623,24 +657,66 @@ class WorkflowRepository:
                 or not isinstance(max_active_jobs, int)
                 or max_active_jobs < 0):
             raise ValueError("max_active_jobs must be a nonnegative integer")
-        if (
-                isinstance(policy_version, bool)
-                or not isinstance(policy_version, int)
-                or policy_version < 1):
-            raise ValueError("policy_version must be a positive integer")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("an operator reason is required")
+        reason = reason.strip()
+        if len(reason) > 1000:
+            raise ValueError("reason must contain at most 1000 characters")
+
         with self._session.begin() as session:
-            policy = session.get(TenantJobQuotaPolicyRecord, tenant_id.strip())
+            policy = session.execute(
+                select(TenantJobQuotaPolicyRecord)
+                .where(TenantJobQuotaPolicyRecord.tenant_id == tenant_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            previous_limit = None if policy is None else policy.max_active_jobs
+            next_version = 1 if policy is None else policy.policy_version + 1
             if policy is None:
                 session.add(TenantJobQuotaPolicyRecord(
-                    tenant_id=tenant_id.strip(),
+                    tenant_id=tenant_id,
                     max_active_jobs=max_active_jobs,
-                    policy_version=policy_version,
+                    policy_version=next_version,
                     updated_at=utcnow(),
                 ))
             else:
                 policy.max_active_jobs = max_active_jobs
-                policy.policy_version = policy_version
+                policy.policy_version = next_version
                 policy.updated_at = utcnow()
+            session.add(TenantJobQuotaAuditRecord(
+                id=new_id(),
+                tenant_id=tenant_id,
+                operator_issuer=operator_principal.issuer,
+                operator_subject=operator_principal.subject,
+                reason=reason,
+                previous_max_active_jobs=previous_limit,
+                max_active_jobs=max_active_jobs,
+                policy_version=next_version,
+                created_at=utcnow(),
+            ))
+        return {"tenant_id": tenant_id, "max_active_jobs": max_active_jobs,
+                "policy_version": next_version}
+
+    def list_tenant_job_quota_policies(self, operator_principal, limit=1000):
+        """Return a bounded policy inventory to an explicitly scoped operator."""
+        from video_streaming.security import require_scope
+        require_scope(operator_principal, "video.tenant.quota.admin")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._session() as session:
+            rows = session.execute(
+                select(TenantJobQuotaPolicyRecord)
+                .order_by(TenantJobQuotaPolicyRecord.tenant_id)
+                .limit(limit)
+            ).scalars().all()
+            return [
+                {
+                    "tenant_id": row.tenant_id,
+                    "max_active_jobs": row.max_active_jobs,
+                    "policy_version": row.policy_version,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
 
     def find_idempotent_job(
             self, idempotency_key, request_hash, owner_principal=None):
