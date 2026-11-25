@@ -1,14 +1,11 @@
 """Attempt-scoped CPU and memory enforcement with cgroup v2.
 
-The caller must pass a delegated cgroup-v2 directory whose cpu and memory
-controllers are already enabled in cgroup.subtree_control. PID admission is
-intentionally not claimed here: safely enforcing pids.max at process creation
-requires an atomic CLONE_INTO_CGROUP-style launch path, not post-fork migration.
+The caller must pass a delegated cgroup-v2 directory whose cpu, memory and
+pids controllers are already enabled. Every workload process is created with
+clone3(CLONE_INTO_CGROUP); there is deliberately no post-fork migration fallback.
 """
 import os
-import signal
 import subprocess
-import sys
 import time
 import uuid
 
@@ -36,18 +33,17 @@ def _read_key_values(path):
 
 
 class AttemptCgroupV2:
-    """One cgroup per durable Attempt, with CPU/memory limits applied pre-exec.
+    """One cgroup per Attempt; CPU, memory and PID limits apply at process creation.
 
-    A gate process is attached to cgroup.procs before it is released to exec.
-    This avoids the unbounded fork-to-exec workload window and does not use
-    preexec_fn, which is unsafe in threaded workers. The gate itself is briefly
-    forked outside the target cgroup; therefore pids.max is deliberately not
-    configured or represented as an enforced limit by this implementation.
+    A small native launcher uses clone3(CLONE_INTO_CGROUP), so the target
+    process is born inside the Attempt cgroup. Unsupported kernels or seccomp
+    policies fail closed; there is no unsafe fork-then-migrate fallback.
     """
 
-    REQUIRED_CONTROLLERS = ("cpu", "memory")
+    REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
 
-    def __init__(self, delegated_root, cpu_max, memory_max, attempt_id=None):
+    def __init__(self, delegated_root, cpu_max, memory_max, attempt_id=None,
+                 pids_max=64, helper_path="/usr/local/bin/video-cgroup-exec"):
         self.root = os.path.realpath(delegated_root)
         self.attempt_id = str(attempt_id or uuid.uuid4().hex)
         if not self.attempt_id or any(
@@ -61,6 +57,13 @@ class AttemptCgroupV2:
             raise ValueError("cpu_max quota and period must be positive integers")
         if not isinstance(memory_max, int) or isinstance(memory_max, bool) or memory_max <= 0:
             raise ValueError("memory_max must be a positive integer")
+
+        if not isinstance(pids_max, int) or isinstance(pids_max, bool) or pids_max <= 0:
+            raise ValueError("pids_max must be a positive integer")
+        if not isinstance(helper_path, str) or not helper_path:
+            raise ValueError("helper_path is required")
+        self.pids_max = pids_max
+        self.helper_path = helper_path
 
         controllers_path = os.path.join(self.root, "cgroup.controllers")
         subtree_path = os.path.join(self.root, "cgroup.subtree_control")
@@ -84,9 +87,11 @@ class AttemptCgroupV2:
         try:
             _write(os.path.join(self.path, "cpu.max"), cpu_max)
             _write(os.path.join(self.path, "memory.max"), memory_max)
+            _write(os.path.join(self.path, "pids.max"), pids_max)
             required = (
                 "cgroup.procs", "cgroup.events", "cgroup.kill",
                 "cpu.stat", "memory.peak", "memory.events",
+                "pids.current", "pids.events",
             )
             absent = [
                 name for name in required
@@ -103,44 +108,27 @@ class AttemptCgroupV2:
 
     def spawn(self, command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
               stderr=subprocess.PIPE, env=None):
-        """Start a command only after its gate process has joined this cgroup."""
+        """Create the target directly inside this cgroup with atomic PID admission."""
         if self._closed:
             raise RuntimeError("attempt cgroup is closed")
         if not command or not isinstance(command, (list, tuple)):
             raise ValueError("command must be a non-empty argument sequence")
-        read_fd, write_fd = os.pipe()
-        os.set_inheritable(read_fd, True)
-        helper = (
-            "import os,sys; fd=int(sys.argv[1]); "
-            "token=os.read(fd,1); os.close(fd); "
-            "token == b'1' or os._exit(125); "
-            "os.execvp(sys.argv[2], sys.argv[2:])"
-        )
+        if not os.path.isfile(self.helper_path) or not os.access(
+                self.helper_path, os.X_OK):
+            raise CgroupV2Unavailable(
+                "atomic cgroup launcher is missing or not executable"
+            )
+
+        cgroup_fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             process = subprocess.Popen(
-                [sys.executable, "-c", helper, str(read_fd)] + list(command),
+                [self.helper_path, str(cgroup_fd), "--"] + list(command),
                 stdin=stdin, stdout=stdout, stderr=stderr, env=env,
-                pass_fds=(read_fd,), start_new_session=True, bufsize=0,
+                pass_fds=(cgroup_fd,), start_new_session=True, bufsize=0,
             )
-        except BaseException:
-            os.close(read_fd)
-            os.close(write_fd)
-            raise
-        else:
-            os.close(read_fd)
-
-        try:
-            _write(os.path.join(self.path, "cgroup.procs"), process.pid)
-            os.write(write_fd, b"1")
-        except BaseException:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise
         finally:
-            os.close(write_fd)
+            os.close(cgroup_fd)
+
         process._video_service_process_group = True
         process._video_service_cgroup = self
         return process
@@ -155,6 +143,8 @@ class AttemptCgroupV2:
             "memory_events": _read_key_values(
                 os.path.join(self.path, "memory.events")
             ),
+            "pids_current": int(open(os.path.join(self.path, "pids.current"), "r").read().strip()),
+            "pids_events": _read_key_values(os.path.join(self.path, "pids.events")),
         }
 
     def terminate(self):
