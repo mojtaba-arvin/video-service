@@ -886,6 +886,120 @@ class WorkflowRepository:
                 "created_at": row.created_at,
             }
 
+    def record_webhook_delivery_event(
+            self, job_id, attempt_id, event_type, payload):
+        """Append a redacted sender-side webhook attempt event.
+
+        The attempt, stage and workflow are resolved from persisted IDs rather
+        than trusting caller-supplied relationships. Only a strict payload
+        allowlist is persisted; destinations, headers, bodies and secrets are
+        never accepted.
+        """
+        allowed_types = {
+            "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+            "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
+            "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+        }
+        if not isinstance(event_type, str) or event_type not in allowed_types:
+            raise ValueError("webhook delivery event type is invalid")
+        if not isinstance(payload, dict) or set(payload) - {
+                "delivery_id", "http_status", "failure_code"}:
+            raise ValueError("webhook delivery event payload is invalid")
+        delivery_id = payload.get("delivery_id")
+        if (
+                not isinstance(delivery_id, str)
+                or not delivery_id.strip()
+                or len(delivery_id) > 128):
+            raise ValueError("webhook delivery ID is invalid")
+        safe_payload = {"delivery_id": delivery_id}
+        if event_type == "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED":
+            status = payload.get("http_status")
+            if (
+                    isinstance(status, bool)
+                    or not isinstance(status, int)
+                    or not 200 <= status <= 299):
+                raise ValueError(
+                    "successful webhook event requires a 2xx HTTP status"
+                )
+            safe_payload["http_status"] = status
+        elif event_type == "WEBHOOK_DELIVERY_ATTEMPT_FAILED":
+            code = payload.get("failure_code")
+            if not isinstance(code, str) or code not in {
+                    "DESTINATION_REJECTED", "TRANSPORT_ERROR",
+                    "HTTP_3XX", "HTTP_4XX", "HTTP_5XX"}:
+                raise ValueError("webhook failure code is invalid")
+            safe_payload["failure_code"] = code
+            status = payload.get("http_status")
+            if status is not None:
+                if (
+                        isinstance(status, bool)
+                        or not isinstance(status, int)
+                        or not 300 <= status <= 599):
+                    raise ValueError("failed webhook HTTP status is invalid")
+                safe_payload["http_status"] = status
+        elif set(payload) != {"delivery_id"}:
+            raise ValueError("started webhook event accepts only a delivery ID")
+
+        from video_streaming.security import AuthorizationError
+        with self._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            stage = (
+                session.get(StageRecord, attempt.stage_id)
+                if attempt is not None else None
+            )
+            workflow = (
+                session.get(WorkflowRecord, stage.workflow_id)
+                if stage is not None else None
+            )
+            if (
+                    attempt is None or stage is None or workflow is None
+                    or workflow.job_id != job_id):
+                raise AuthorizationError("Resource not found or access denied")
+            _record_event(
+                session, job_id, workflow.id, event_type,
+                stage_id=stage.id, attempt_id=attempt.id,
+                payload=safe_payload,
+            )
+        return {"recorded": True, "event_type": event_type}
+
+    def list_webhook_delivery_history(
+            self, job_id, principal, limit=50):
+        """List a bounded, tenant-authorized webhook delivery event window."""
+        from video_streaming.security import require_scope
+
+        require_scope(principal, "video.jobs:read")
+        if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100):
+            raise ValueError("limit must be between 1 and 100")
+        self.authorize_job_access(job_id, principal, "video.jobs:read")
+        event_types = (
+            "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+            "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
+            "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+        )
+        with self._session() as session:
+            rows = session.execute(
+                select(WorkflowEventRecord)
+                .where(
+                    WorkflowEventRecord.job_id == job_id,
+                    WorkflowEventRecord.event_type.in_(event_types),
+                )
+                .order_by(
+                    WorkflowEventRecord.occurred_at.desc(),
+                    WorkflowEventRecord.id.desc(),
+                )
+                .limit(limit)
+            ).scalars().all()
+            return [{
+                "event_type": row.event_type,
+                "occurred_at": row.occurred_at,
+                "stage_id": row.stage_id,
+                "attempt_id": row.attempt_id,
+                "payload": deepcopy(row.payload_json),
+            } for row in rows]
+
     def list_tenant_job_quota_policies(self, operator_principal, limit=1000):
         """Return a bounded policy inventory to an explicitly scoped operator."""
         from video_streaming.security import require_scope
