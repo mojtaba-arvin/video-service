@@ -23,7 +23,9 @@ from video_streaming.workflows.domain import (
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
-    StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord, utcnow
+    StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord,
+    CreativeSceneRecord, CreativeShotRecord, CreativeCharacterRecord,
+    CreativeAssetRecord, CreativeProjectRevisionReferenceRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -219,6 +221,173 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 "delivery_id", "http_status", "failure_code",
             }) for event in events
         ))
+
+    def test_typed_project_entities_are_tenant_scoped_and_revision_pinned(self):
+        tenant = "creative-entities-" + str(uuid4())
+        owner = self.make_owner_principal(
+            tenant=tenant,
+            scopes=["video.projects:create", "video.projects:write", "video.projects:read",
+                    "video.jobs:create", "video.jobs:read"],
+        )
+        project = self.repository.create_creative_project(
+            "Typed references", owner
+        )
+        project_id = project["id"]
+        scene = self.repository.create_creative_scene(
+            project_id, "Opening", owner, sort_order=1
+        )
+        shot = self.repository.create_creative_shot(
+            project_id, scene["id"], "Wide shot", owner, sort_order=1
+        )
+        character = self.repository.create_creative_character(
+            project_id, "Lead", owner, sort_order=1
+        )
+
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="creative-asset-" + job_id,
+            request_hash="a" * 64,
+            owner_principal=owner,
+        )
+        artifact_id = str(uuid4())
+        with self.repository._session.begin() as session:
+            session.add(ArtifactRecord(
+                id=artifact_id,
+                job_id=job_id,
+                stage_id=None,
+                attempt_id=None,
+                artifact_type="image",
+                logical_name="character-reference.png",
+                uri="s3://test-bucket/opaque-artifact-key",
+                media_type="image/png",
+                size_bytes=4096,
+                checksum_sha256="b" * 64,
+                status="AVAILABLE",
+                metadata_json={},
+                created_at=utcnow(),
+            ))
+        asset = self.repository.create_creative_asset(
+            project_id, artifact_id, "Character reference", "image", owner
+        )
+
+        revision = self.repository.create_creative_project_revision(
+            project_id,
+            {
+                "title": "Opening scene",
+                "references": {
+                    "scenes": [scene["id"]],
+                    "shots": [shot["id"]],
+                    "characters": [character["id"]],
+                    "assets": [asset["id"]],
+                },
+            },
+            owner,
+        )
+        self.assertEqual(
+            revision["content"]["references"]["shots"], [shot["id"]]
+        )
+        stored = self.repository.get_creative_project_revision(
+            project_id, revision["revision_number"], owner
+        )
+        self.assertEqual(
+            stored["content"]["references"]["assets"], [asset["id"]]
+        )
+        entities = self.repository.list_creative_project_entities(
+            project_id, owner
+        )
+        self.assertEqual([item["id"] for item in entities["scenes"]], [scene["id"]])
+        self.assertEqual(entities["shots"][0]["scene_id"], scene["id"])
+        self.assertEqual(entities["assets"][0]["content_sha256"], "b" * 64)
+
+        renamed = self.repository.update_creative_project_entity(
+            "scene", project_id, scene["id"], owner,
+            name="Opening — renamed", sort_order=2,
+        )
+        self.assertEqual(renamed["id"], scene["id"])
+        self.assertEqual(renamed["name"], "Opening — renamed")
+        # The revision keeps its stable IDs even when presentation metadata changes.
+        self.assertEqual(
+            self.repository.get_creative_project_revision(
+                project_id, revision["revision_number"], owner
+            )["content"]["references"]["scenes"],
+            [scene["id"]],
+        )
+
+        with self.repository._session.begin() as session:
+            scene_row = session.get(CreativeSceneRecord, scene["id"])
+            scene_row.id = str(uuid4())
+        with self.assertRaises(DBAPIError):
+            pass
+
+    def test_project_revision_rejects_cross_project_and_incomplete_shot_references(self):
+        tenant = "creative-reference-boundary-" + str(uuid4())
+        owner = self.make_owner_principal(
+            tenant=tenant,
+            scopes=["video.projects:create", "video.projects:write", "video.projects:read"],
+        )
+        first = self.repository.create_creative_project("First", owner)
+        second = self.repository.create_creative_project("Second", owner)
+        foreign_scene = self.repository.create_creative_scene(
+            second["id"], "Other project scene", owner
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_creative_project_revision(
+                first["id"],
+                {"references": {"scenes": [foreign_scene["id"]]}},
+                owner,
+            )
+
+        scene = self.repository.create_creative_scene(first["id"], "Scene", owner)
+        shot = self.repository.create_creative_shot(
+            first["id"], scene["id"], "Shot", owner
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_creative_project_revision(
+                first["id"],
+                {"references": {"shots": [shot["id"]]}},
+                owner,
+            )
+        with self.assertRaises(ValueError):
+            self.repository.create_creative_project_revision(
+                first["id"],
+                {"references": {"scenes": [scene["id"], scene["id"]]}},
+                owner,
+            )
+
+    def test_creative_asset_rejects_artifact_owned_by_another_tenant(self):
+        owner = self.make_owner_principal(
+            tenant="creative-asset-owner-" + str(uuid4()),
+            scopes=["video.projects:create", "video.projects:write"],
+        )
+        foreign = self.make_owner_principal(
+            tenant="creative-asset-foreign-" + str(uuid4()),
+            scopes=["video.jobs:create"],
+        )
+        project = self.repository.create_creative_project("Asset project", owner)
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="foreign-asset-" + job_id,
+            request_hash="c" * 64,
+            owner_principal=foreign,
+        )
+        artifact_id = str(uuid4())
+        with self.repository._session.begin() as session:
+            session.add(ArtifactRecord(
+                id=artifact_id,
+                job_id=job_id,
+                artifact_type="image",
+                logical_name="foreign.png",
+                checksum_sha256="d" * 64,
+                status="AVAILABLE",
+                metadata_json={},
+                created_at=utcnow(),
+            ))
+        with self.assertRaises(AuthorizationError):
+            self.repository.create_creative_asset(
+                project["id"], artifact_id, "Foreign asset", "image", owner
+            )
 
     def test_creative_project_revisions_are_tenant_scoped_canonical_and_immutable(self):
         owner = self.make_owner_principal(
