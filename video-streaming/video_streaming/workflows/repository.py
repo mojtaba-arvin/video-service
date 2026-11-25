@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    JSON, BigInteger, CheckConstraint, Column, DateTime, Float, ForeignKey,
+    JSON, BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey,
     ForeignKeyConstraint, Index, Integer, Numeric, PrimaryKeyConstraint, String, Text,
     UniqueConstraint, create_engine, and_, or_,
     select, func,
@@ -589,7 +589,7 @@ class CreativeAssetProvenanceRecord(Base):
             name="ck_workflow_creative_provenance_validation_hash",
         ),
         CheckConstraint(
-            "validation_evidence_json->>'status' = 'PASSED'",
+            "(validation_evidence_json->>'status' = 'PASSED') IS TRUE",
             name="ck_workflow_creative_provenance_validation_passed",
         ),
         UniqueConstraint(
