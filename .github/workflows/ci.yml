@@ -701,6 +701,33 @@ jobs:
               PYTHONPATH=/opt/workdir/video-streaming python -c "from video_streaming.grpc.server import GrpcServer; from video_streaming.celery import celery_app; from video_streaming.workflows.repository import WorkflowRepository"
             '
 
+  cgroup-v2-linux-acceptance:
+    name: Linux cgroup v2 kernel acceptance (Python 3.12)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test-py312.txt
+
+      - name: Install process-control test dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-test-py312.txt
+
+      - name: Exercise real CPU, memory and descendant controls on cgroup v2
+        run: |
+          sudo --preserve-env=PATH env PYTHONPATH=video-streaming python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_cgroup_v2_linux_acceptance.py' \
+            -v
+
   quality-gates:
     name: Quality gates
     if: always()
@@ -712,6 +739,7 @@ jobs:
       - vod-e2e
       - durable-workflow-state
       - container-runtime
+      - cgroup-v2-linux-acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -724,6 +752,7 @@ jobs:
       VOD_E2E_RESULT: ${{ needs.vod-e2e.result }}
       PG312_RESULT: ${{ needs.durable-workflow-state.result }}
       CONTAINER_RESULT: ${{ needs.container-runtime.result }}
+      CGROUP_RESULT: ${{ needs.cgroup-v2-linux-acceptance.result }}
     steps:
       - name: Enforce the required check policy
         shell: bash
@@ -746,6 +775,7 @@ jobs:
             [[ "$VOD_E2E_RESULT" == "success" ]] || fail "VOD end-to-end integration did not pass."
             [[ "$PG312_RESULT" == "success" ]] || fail "PostgreSQL compatibility tests on Python 3.12 did not pass."
             [[ "$CONTAINER_RESULT" == "success" ]] || fail "Python 3.12 production container build and smoke test did not pass."
+            [[ "$CGROUP_RESULT" == "success" ]] || fail "Real Linux cgroup v2 kernel acceptance did not pass."
           fi
 
           echo "All required checks passed for the detected change set." >> "$GITHUB_STEP_SUMMARY"
