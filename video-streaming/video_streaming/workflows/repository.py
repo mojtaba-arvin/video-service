@@ -1675,6 +1675,11 @@ class WorkflowRepository:
             raise ValueError("asset_type must contain at most 64 characters")
         if not isinstance(artifact_id, str) or not artifact_id.strip():
             raise ValueError("artifact_id is required")
+        if asset_id is not None and (
+                not isinstance(asset_id, str)
+                or not asset_id.strip()
+                or len(asset_id) > 36):
+            raise ValueError("asset_id must be a non-empty opaque identifier of at most 36 characters")
         asset_id = asset_id or new_id()
         now = utcnow()
         with self._session.begin() as session:
