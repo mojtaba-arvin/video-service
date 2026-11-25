@@ -314,11 +314,24 @@ class WorkflowRepositoryTests(unittest.TestCase):
             [scene["id"]],
         )
 
-        with self.repository._session.begin() as session:
-            scene_row = session.get(CreativeSceneRecord, scene["id"])
-            scene_row.id = str(uuid4())
         with self.assertRaises(DBAPIError):
-            pass
+            with self.repository._session.begin() as session:
+                scene_row = session.get(CreativeSceneRecord, scene["id"])
+                scene_row.id = str(uuid4())
+
+        with self.repository._session() as session:
+            reference_id = session.execute(
+                select(CreativeProjectRevisionReferenceRecord.id).where(
+                    CreativeProjectRevisionReferenceRecord.revision_id
+                    == revision["id"]
+                )
+            ).scalars().first()
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                reference = session.get(
+                    CreativeProjectRevisionReferenceRecord, reference_id
+                )
+                session.delete(reference)
 
     def test_project_revision_rejects_cross_project_and_incomplete_shot_references(self):
         tenant = "creative-reference-boundary-" + str(uuid4())
