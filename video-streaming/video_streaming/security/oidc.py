@@ -82,6 +82,26 @@ class OIDCAuthenticator:
             return frozenset(part.strip() for part in value)
         raise AuthenticationError("Invalid access token")
 
+    def _tenant_id_from_claims(self, claims):
+        value = claims.get(self.tenant_claim)
+        if self.tenant_claim != "organization":
+            return value
+
+        # Keycloak's Organization Membership mapper emits:
+        # {"organization": {"<alias>": {"id": "<immutable-id>"}}}.
+        # Tenant-scoped API tokens must select exactly one organization.
+        if not isinstance(value, dict) or len(value) != 1:
+            raise AuthenticationError("Invalid access token")
+        alias, organization = next(iter(value.items()))
+        if (
+                not isinstance(alias, str) or not alias.strip()
+                or not isinstance(organization, dict)):
+            raise AuthenticationError("Invalid access token")
+        tenant_id = organization.get("id")
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise AuthenticationError("Invalid access token")
+        return tenant_id.strip()
+
     def authenticate(self, token):
         if not isinstance(token, str) or not token or len(token) > 16384:
             raise AuthenticationError("Invalid access token")
@@ -97,7 +117,7 @@ class OIDCAuthenticator:
                 options={"require": ["exp", "iss", "aud", self.subject_claim]},
             )
             subject = claims.get(self.subject_claim)
-            tenant_id = claims.get(self.tenant_claim)
+            tenant_id = self._tenant_id_from_claims(claims)
             expires_at = datetime.fromtimestamp(claims["exp"], timezone.utc)
             if not isinstance(subject, str) or not subject.strip():
                 raise AuthenticationError("Invalid access token")
