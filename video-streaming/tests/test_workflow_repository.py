@@ -3445,7 +3445,13 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
         tenant = "quota-race-" + str(uuid4())
         principal = self.make_owner_principal(tenant=tenant)
-        self.repository.provision_tenant_job_quota_policy(\n            tenant, 1,\n            self.make_owner_principal(\n                tenant="quota-operator", scopes=["video.tenant.quota.admin"]\n            ),\n            "Concurrency admission test setup",\n        )
+        self.repository.provision_tenant_job_quota_policy(
+            tenant, 1,
+            self.make_owner_principal(
+                tenant="quota-operator", scopes=["video.tenant.quota.admin"]
+            ),
+            "Concurrency admission test setup",
+        )
         barrier = Barrier(2)
 
         def submit(index):
