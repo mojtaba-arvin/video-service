@@ -143,9 +143,13 @@ class AttemptCgroupV2:
             "memory_events": _read_key_values(
                 os.path.join(self.path, "memory.events")
             ),
-            "pids_current": int(open(os.path.join(self.path, "pids.current"), "r").read().strip()),
+            "pids_current": self._read_pids_current(),
             "pids_events": _read_key_values(os.path.join(self.path, "pids.events")),
         }
+
+    def _read_pids_current(self):
+        with open(os.path.join(self.path, "pids.current"), "r") as stream:
+            return int(stream.read().strip())
 
     def terminate(self):
         """Kill every process in this Attempt cgroup (including descendants)."""
