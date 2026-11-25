@@ -176,6 +176,15 @@ class WorkflowRepositoryTests(unittest.TestCase):
         project = self.repository.create_creative_project("Scoped", owner)
         with self.assertRaises(ValueError):
             self.repository.create_creative_project_revision(project["id"], {"invalid": float("nan")}, owner)
+        for invalid_content in (
+                {"scenes": {2: "B", 10: "A"}},
+                {"scenes": [{"shots": {"nested": {1: "invalid"}}}]},
+        ):
+            with self.subTest(invalid_content=invalid_content):
+                with self.assertRaisesRegex(ValueError, "keys must be strings"):
+                    self.repository.create_creative_project_revision(
+                        project["id"], invalid_content, owner
+                    )
         without_scope = self.make_owner_principal(scopes=["video.projects:create"])
         with self.assertRaises(AuthorizationError):
             self.repository.create_creative_project_revision(project["id"], {"title": "No write"}, without_scope)
