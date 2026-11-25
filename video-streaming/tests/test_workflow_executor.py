@@ -11,6 +11,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine, event
 
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
+from video_streaming.workflows.operation_contracts import OPERATION_CONTRACTS
 from video_streaming.workflows.domain import AttemptLeaseLost, InvalidStateTransition
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.errors import PermanentOperationError
