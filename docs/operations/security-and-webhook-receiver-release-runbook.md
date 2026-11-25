@@ -38,6 +38,15 @@ Before deployment, verify with real, non-production IdP-issued tokens:
 
 Do not place client secrets, private keys, bearer tokens or signed test tokens in this repository, runbook, CI variables visible to untrusted jobs, or issue comments.
 
+
+### Where these settings belong
+
+These are **service runtime configuration values**, not values that can be inferred from this repository. Supply them to the deployed gRPC service through its approved runtime configuration mechanism (for example, the deployment platform's environment/configuration store). The checked-in `video-streaming/video_streaming/.env.example` intentionally leaves `OIDC_ISSUER`, `OIDC_AUDIENCE` and `OIDC_JWKS_URI` blank; never deploy those placeholders.
+
+As of this runbook revision, the repository has CI and Dependency Review workflows but no GitHub Actions deployment workflow or declared GitHub Environment. Therefore, do **not** create an arbitrary GitHub Environment or set repository Environment variables solely to configure OIDC. GitHub Environment variables are appropriate only if a later deployment workflow explicitly targets that Environment and maps those variables into the service's runtime configuration. A successful `gh variable set` would not by itself configure the running service.
+
+The IdP must first provide its exact issuer and audience for this gRPC API and its trusted HTTPS JWKS URI. If the IdP is not yet selected/configured, keep the production OIDC rollout blocked; do not substitute a guessed issuer, audience, or JWKS URL.
+
 ## Gate 1 — operator identity and least privilege
 
 The quota-administration RPCs require the verified principal to carry the exact scope `video.tenant.quota.admin`. The public creative Project API separately uses `video.projects:create`, `video.projects:read` and `video.projects:write`; grant these only to tenant-scoped application identities that need Project/Revision or typed-entity access. The target tenant, cap and mandatory reason are request data; operator issuer and subject are derived from the verified token and persisted in the audit record.
