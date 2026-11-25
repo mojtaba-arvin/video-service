@@ -109,6 +109,10 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
             cpu_max=cpu_max,
             memory_max=memory_max,
             pids_max=pids_max,
+            helper_path=os.environ.get(
+                "ATTEMPT_CGROUP_V2_EXECUTABLE",
+                "/usr/local/bin/video-cgroup-exec",
+            ),
             attempt_id=uuid.uuid4().hex,
         )
         try:
