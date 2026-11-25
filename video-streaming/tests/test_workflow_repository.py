@@ -53,7 +53,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
     def test_quota_provisioning_is_versioned_and_audited_atomically(self):
         tenant = "quota-audit-" + str(uuid4())
         operator = self.make_owner_principal(
-            tenant="quota-operator", subject="operator-42"
+            tenant="quota-operator", subject="operator-42",\n            scopes=["video.tenant.quota.admin"]
         )
         first = self.repository.provision_tenant_job_quota_policy(
             tenant, 3, operator, "Initial capacity allocation"
@@ -83,7 +83,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.repository.provision_tenant_job_quota_policy(
                 "quota-invalid", 1, None, "reason"
             )
-        operator = self.make_owner_principal(tenant="quota-operator")
+        operator = self.make_owner_principal(\n            tenant="quota-operator", scopes=["video.tenant.quota.admin"]\n        )
         with self.assertRaises(ValueError):
             self.repository.provision_tenant_job_quota_policy(
                 "quota-invalid", 1, operator, "  "
@@ -3361,7 +3361,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 quota_enforcement_enabled=True,
             )
 
-        self.repository.provision_tenant_job_quota_policy(\n            "quota-zero", 0,\n            self.make_owner_principal(tenant="quota-operator"),\n            "Suspend tenant pending abuse investigation",\n        )
+        self.repository.provision_tenant_job_quota_policy(\n            "quota-zero", 0,\n            self.make_owner_principal(\n                tenant="quota-operator", scopes=["video.tenant.quota.admin"]\n            ),\n            "Suspend tenant pending abuse investigation",\n        )
         with self.assertRaises(TenantQuotaExceeded):
             self.repository.create_job(
                 job_id=str(uuid4()),
@@ -3374,7 +3374,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
     def test_tenant_quota_counts_nonterminal_jobs_and_releases_on_terminal_state(self):
         tenant = "quota-lifecycle-" + str(uuid4())
         principal = self.make_owner_principal(tenant=tenant)
-        self.repository.provision_tenant_job_quota_policy(\n            tenant, 1, principal, "Initial tenant quota provisioning"\n        )
+        self.repository.provision_tenant_job_quota_policy(\n            tenant, 1,\n            self.make_owner_principal(\n                tenant="quota-operator", scopes=["video.tenant.quota.admin"]\n            ),\n            "Initial tenant quota provisioning"\n        )
         idempotency_key = "quota-first-" + str(uuid4())
         job_id = str(uuid4())
         self.assertEqual(
