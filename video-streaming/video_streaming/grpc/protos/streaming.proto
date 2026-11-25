@@ -36,6 +36,9 @@ message JobRequest {
   // Optional independent HMAC-SHA256 signing key for outbound webhooks.
   // Requires webhook_url; minimum 32 UTF-8 bytes. Never reuse the URL secret.
   string webhook_signing_secret = 8;
+  // Optional immutable creative ProjectRevision pin. Supply both fields together.
+  string project_id = 9;
+  string project_revision_id = 10;
 }
 enum Protocol {
   HLS = 0;
