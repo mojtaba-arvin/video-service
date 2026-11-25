@@ -274,16 +274,20 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         calls = []
         current = OPERATION_CONTRACTS["video.input.check"]
         with patch.dict(OPERATION_CONTRACTS, {
-            "video.input.check": SimpleNamespace(version=current.version + 1)
+            "video.input.check": SimpleNamespace(
+                version=current.version + 1,
+                retry_class=current.retry_class,
+            )
         }):
-            with self.assertRaisesRegex(
-                    ValueError, "persisted Stage operation contract version"):
-                self.executor(lambda *_args: calls.append("called")).execute(
-                    self.job_id, "check"
-                )
+            result = self.executor(
+                lambda *_args: calls.append("called")
+            ).execute(self.job_id, "check")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "OperationContractVersionMismatch")
         self.assertEqual(calls, [])
         stage = self.repository.get_stage_snapshot(self.job_id, "check")
-        self.assertEqual(stage["status"], "PENDING")
+        self.assertEqual(stage["status"], "FAILED")
+        self.assertEqual(stage["attempts"][-1]["status"], "FAILED")
 
     def test_terminal_job_failure_does_not_schedule_another_retry(self):
         def handler(_node, _context):
