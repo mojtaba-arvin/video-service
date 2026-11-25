@@ -676,6 +676,11 @@ def build_publication_handlers(
                 request_headers["Idempotency-Key"] = delivery_id
                 receipt_delivery_id = delivery_id
             _check_active(context)
+            repository.record_webhook_delivery_event(
+                context.job_id, context.attempt_id,
+                "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+                {"delivery_id": receipt_delivery_id},
+            )
             try:
                 response = webhook_requester(
                     destination,
@@ -686,11 +691,31 @@ def build_publication_handlers(
                     headers=request_headers,
                 )
             except WebhookDestinationError as exc:
+                repository.record_webhook_delivery_event(
+                    context.job_id, context.attempt_id,
+                    "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+                    {"delivery_id": receipt_delivery_id,
+                     "failure_code": "DESTINATION_REJECTED"},
+                )
                 raise PermanentOperationError(
                     "webhook destination was rejected by outbound policy"
                 ) from exc
             except WebhookTransportError as exc:
+                repository.record_webhook_delivery_event(
+                    context.job_id, context.attempt_id,
+                    "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+                    {"delivery_id": receipt_delivery_id,
+                     "failure_code": "TRANSPORT_ERROR"},
+                )
                 raise RetryableOperationError("webhook transport failed") from exc
+            except Exception:
+                repository.record_webhook_delivery_event(
+                    context.job_id, context.attempt_id,
+                    "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+                    {"delivery_id": receipt_delivery_id,
+                     "failure_code": "TRANSPORT_ERROR"},
+                )
+                raise
             try:
                 status = response.status
                 if 200 <= status < 300:
@@ -700,11 +725,30 @@ def build_publication_handlers(
                         "delivery_id": receipt_delivery_id,
                         "http_status": status,
                     }
+                    repository.record_webhook_delivery_event(
+                        context.job_id, context.attempt_id,
+                        "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
+                        {"delivery_id": receipt_delivery_id,
+                         "http_status": status},
+                    )
                 elif 500 <= status <= 599:
+                    repository.record_webhook_delivery_event(
+                        context.job_id, context.attempt_id,
+                        "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+                        {"delivery_id": receipt_delivery_id,
+                         "failure_code": "HTTP_5XX", "http_status": status},
+                    )
                     raise RetryableOperationError(
                         "webhook endpoint returned a server error"
                     )
                 else:
+                    repository.record_webhook_delivery_event(
+                        context.job_id, context.attempt_id,
+                        "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+                        {"delivery_id": receipt_delivery_id,
+                         "failure_code": "HTTP_3XX" if 300 <= status <= 399 else "HTTP_4XX",
+                         "http_status": status},
+                    )
                     raise PermanentOperationError(
                         "webhook endpoint rejected the delivery"
                     )
