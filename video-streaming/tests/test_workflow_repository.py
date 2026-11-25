@@ -22,7 +22,7 @@ from video_streaming.workflows.domain import (
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
-    StageDependencyRecord, TenantJobQuotaPolicyRecord, utcnow
+    StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -49,6 +49,45 @@ class WorkflowRepositoryTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.repository.close()
+
+    def test_quota_provisioning_is_versioned_and_audited_atomically(self):
+        tenant = "quota-audit-" + str(uuid4())
+        operator = self.make_owner_principal(
+            tenant="quota-operator", subject="operator-42"
+        )
+        first = self.repository.provision_tenant_job_quota_policy(
+            tenant, 3, operator, "Initial capacity allocation"
+        )
+        second = self.repository.provision_tenant_job_quota_policy(
+            tenant, 5, operator, "Approved capacity increase"
+        )
+        self.assertEqual(first["policy_version"], 1)
+        self.assertEqual(second["policy_version"], 2)
+        with self.repository._session() as session:
+            events = session.execute(
+                select(TenantJobQuotaAuditRecord)
+                .where(TenantJobQuotaAuditRecord.tenant_id == tenant)
+                .order_by(TenantJobQuotaAuditRecord.policy_version)
+            ).scalars().all()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].previous_max_active_jobs, None)
+        self.assertEqual(events[0].max_active_jobs, 3)
+        self.assertEqual(events[1].previous_max_active_jobs, 3)
+        self.assertEqual(events[1].max_active_jobs, 5)
+        self.assertEqual(events[1].operator_issuer, operator.issuer)
+        self.assertEqual(events[1].operator_subject, operator.subject)
+        self.assertEqual(events[1].reason, "Approved capacity increase")
+
+    def test_quota_provisioning_requires_operator_and_reason(self):
+        with self.assertRaises(Exception):
+            self.repository.provision_tenant_job_quota_policy(
+                "quota-invalid", 1, None, "reason"
+            )
+        operator = self.make_owner_principal(tenant="quota-operator")
+        with self.assertRaises(ValueError):
+            self.repository.provision_tenant_job_quota_policy(
+                "quota-invalid", 1, operator, "  "
+            )
 
     def create_job(self, stage_key=None):
         job_id = str(uuid4())
@@ -3322,7 +3361,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 quota_enforcement_enabled=True,
             )
 
-        self.repository.set_tenant_job_quota_policy("quota-zero", 0)
+        self.repository.provision_tenant_job_quota_policy(\n            "quota-zero", 0,\n            self.make_owner_principal(tenant="quota-operator"),\n            "Suspend tenant pending abuse investigation",\n        )
         with self.assertRaises(TenantQuotaExceeded):
             self.repository.create_job(
                 job_id=str(uuid4()),
@@ -3335,7 +3374,7 @@ class WorkflowRepositoryTests(unittest.TestCase):
     def test_tenant_quota_counts_nonterminal_jobs_and_releases_on_terminal_state(self):
         tenant = "quota-lifecycle-" + str(uuid4())
         principal = self.make_owner_principal(tenant=tenant)
-        self.repository.set_tenant_job_quota_policy(tenant, 1)
+        self.repository.provision_tenant_job_quota_policy(\n            tenant, 1, principal, "Initial tenant quota provisioning"\n        )
         idempotency_key = "quota-first-" + str(uuid4())
         job_id = str(uuid4())
         self.assertEqual(
