@@ -10,7 +10,10 @@ import uuid
 from contextlib import contextmanager
 
 from video_streaming.execution import attempt_scope
-from video_streaming.execution.cgroup_v2 import AttemptCgroupV2
+from video_streaming.execution.cgroup_v2 import (
+    AttemptCgroupV2,
+    CgroupV2CleanupError,
+)
 from video_streaming.execution.process_control import run_streaming_process
 
 
@@ -190,6 +193,8 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
             self.assertTrue(ready, "parent did not report its detached child")
             child_pid = int(process.stdout.readline().decode("ascii").strip())
             self.assertGreater(child_pid, 0)
+            with self.assertRaises(CgroupV2CleanupError):
+                cgroup.cleanup(timeout_seconds=0.1)
 
             cgroup.terminate()
             self.assertTrue(cgroup.wait_empty(5))
