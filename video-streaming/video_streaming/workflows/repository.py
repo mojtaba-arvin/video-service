@@ -1313,6 +1313,93 @@ class WorkflowRepository:
             "name": name, "created_at": now,
         }
 
+    def get_creative_project(self, project_id, principal):
+        """Read a tenant-owned Project without revealing foreign identifiers."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            latest_revision = session.execute(
+                select(func.max(CreativeProjectRevisionRecord.revision_number))
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one()
+            return {
+                "id": project.id,
+                "tenant_id": project.tenant_id,
+                "name": project.name,
+                "created_at": project.created_at,
+                "updated_at": project.updated_at,
+                "latest_revision_number": latest_revision or 0,
+            }
+
+    def list_creative_projects(self, principal, limit=100):
+        """Return a bounded list of Projects owned by the authenticated tenant."""
+        from video_streaming.security import require_scope
+
+        require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("project limit must be between 1 and 1000")
+        with self._session() as session:
+            rows = session.execute(
+                select(CreativeProjectRecord)
+                .where(CreativeProjectRecord.tenant_id == principal.tenant_id)
+                .order_by(CreativeProjectRecord.updated_at.desc(), CreativeProjectRecord.id)
+                .limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "tenant_id": row.tenant_id,
+                "name": row.name,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            } for row in rows]
+
+    def list_creative_project_revisions(self, project_id, principal, limit=100):
+        """Return a bounded revision history for one owned Project."""
+        from video_streaming.security import AuthorizationError, require_scope
+
+        require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("revision limit must be between 1 and 1000")
+        with self._session() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
+            if project is None:
+                raise AuthorizationError("Resource not found or access denied")
+            rows = session.execute(
+                select(CreativeProjectRevisionRecord)
+                .where(
+                    CreativeProjectRevisionRecord.project_id == project_id,
+                    CreativeProjectRevisionRecord.tenant_id == principal.tenant_id,
+                )
+                .order_by(CreativeProjectRevisionRecord.revision_number.desc())
+                .limit(limit)
+            ).scalars().all()
+            return [{
+                "id": row.id,
+                "project_id": row.project_id,
+                "tenant_id": row.tenant_id,
+                "revision_number": row.revision_number,
+                "content": deepcopy(row.content_json),
+                "content_sha256": row.content_sha256,
+                "created_at": row.created_at,
+            } for row in rows]
+
     @staticmethod
     def _parse_creative_project_revision_references(snapshot):
         if "references" not in snapshot:
