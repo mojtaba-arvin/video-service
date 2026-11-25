@@ -324,6 +324,13 @@ WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
     default=5,
     cast=int)
 
+# Enforce tenant active-Job policies only after every tenant is provisioned.
+# Default off preserves the existing admission behavior during rollout.
+TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED = env_config.get(
+    "TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED",
+    default=False,
+    cast=bool)
+
 # Lease duration shared by processing and publication worker integrations.
 WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS = env_config.get(
     "WORKFLOW_ATTEMPT_LEASE_TTL_SECONDS",
