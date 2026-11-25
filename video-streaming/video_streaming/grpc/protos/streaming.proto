@@ -28,6 +28,10 @@ message JobRequest {
 
   // Client-supplied idempotency key. Empty preserves legacy create-new behavior.
   string idempotency_key = 7;
+
+  // Optional independent HMAC-SHA256 signing key for outbound webhooks.
+  // Requires webhook_url; minimum 32 UTF-8 bytes. Never reuse the URL secret.
+  string webhook_signing_secret = 8;
 }
 enum Protocol {
   HLS = 0;

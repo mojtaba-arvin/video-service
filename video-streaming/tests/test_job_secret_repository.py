@@ -89,7 +89,9 @@ class JobSecretRepositoryTests(unittest.TestCase):
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
 
-    def envelope(self, job_id, principal=None, value="https://callback.invalid/hook"):
+    def envelope(
+            self, job_id, principal=None, value="https://callback.invalid/hook",
+            purpose="webhook.callback"):
         owner = principal or self.principal
         return prepare_secret(
             value,
@@ -98,7 +100,7 @@ class JobSecretRepositoryTests(unittest.TestCase):
                 tenant_id=owner.tenant_id,
                 issuer=owner.issuer,
                 subject=owner.subject,
-                purpose="webhook.callback",
+                purpose=purpose,
             ),
             self.provider,
         )
@@ -142,6 +144,22 @@ class JobSecretRepositoryTests(unittest.TestCase):
             resolve_secret(stored, envelope.context, self.provider),
             plaintext,
         )
+
+    def test_callback_and_signing_secrets_persist_under_distinct_purposes(self):
+        job_id = str(uuid4())
+        callback = self.envelope(job_id, purpose="webhook.callback")
+        signing = self.envelope(job_id, value="s" * 48, purpose="webhook.signing")
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="idem-two-secrets-{}".format(uuid4()),
+            request_hash="c" * 64,
+            owner_principal=self.principal,
+            secret_envelopes=[callback, signing],
+        )
+        for purpose, envelope in (("webhook.callback", callback), ("webhook.signing", signing)):
+            stored = self.repository.get_job_secret_envelope(job_id, self.principal, purpose)
+            self.assertEqual(stored.secret_id, envelope.secret_id)
+            self.assertEqual(stored.context.purpose, purpose)
 
     def test_secret_write_requires_authenticated_owner_and_exact_scope(self):
         job_id = str(uuid4())
@@ -255,8 +273,14 @@ class JobSecretRepositoryTests(unittest.TestCase):
         candidate = self.envelope(
             candidate_job_id, value="https://first.invalid/callback"
         )
+        accepted_signing = self.envelope(
+            accepted_job_id, value="s" * 48, purpose="webhook.signing"
+        )
+        candidate_signing = self.envelope(
+            candidate_job_id, value="s" * 48, purpose="webhook.signing"
+        )
 
-        def plan(job_id, secret_id):
+        def plan(job_id, secret_id, signing_id):
             return {
                 "schema_version": 1,
                 "workflow_name": "video.vod",
@@ -270,6 +294,7 @@ class JobSecretRepositoryTests(unittest.TestCase):
                     "parameters": {
                         "enabled": True,
                         "webhook_secret_ref": secret_id,
+                        "webhook_signing_secret_ref": signing_id,
                     },
                     "retry_policy": {
                         "max_attempts": 3,
@@ -285,17 +310,21 @@ class JobSecretRepositoryTests(unittest.TestCase):
             job_id=accepted_job_id,
             idempotency_key=key,
             request_hash="f" * 64,
-            execution_plan=plan(accepted_job_id, accepted.secret_id),
+            execution_plan=plan(
+                accepted_job_id, accepted.secret_id, accepted_signing.secret_id
+            ),
             owner_principal=self.principal,
-            secret_envelopes=[accepted],
+            secret_envelopes=[accepted, accepted_signing],
         )
         replay_id, created = self.repository.create_job(
             job_id=candidate_job_id,
             idempotency_key=key,
             request_hash="f" * 64,
-            execution_plan=plan(candidate_job_id, candidate.secret_id),
+            execution_plan=plan(
+                candidate_job_id, candidate.secret_id, candidate_signing.secret_id
+            ),
             owner_principal=self.principal,
-            secret_envelopes=[candidate],
+            secret_envelopes=[candidate, candidate_signing],
         )
         self.assertEqual((replay_id, created), (accepted_job_id, False))
         stored = self.repository.get_job_secret_envelope(
@@ -306,6 +335,11 @@ class JobSecretRepositoryTests(unittest.TestCase):
             self.repository.get_execution_plan(accepted_job_id)["plan"]
             ["nodes"][0]["parameters"]["webhook_secret_ref"],
             accepted.secret_id,
+        )
+        self.assertEqual(
+            self.repository.get_execution_plan(accepted_job_id)["plan"]
+            ["nodes"][0]["parameters"]["webhook_signing_secret_ref"],
+            accepted_signing.secret_id,
         )
 
     def test_idempotency_lookup_returns_existing_job_without_secret_rotation(self):

@@ -57,6 +57,7 @@ class VODPlanBuilderTests(unittest.TestCase):
         plan = build_vod_execution_plan(
             "job-123", request_with_all_branches(),
             webhook_secret_ref="secret-store://callbacks/job-123",
+            webhook_signing_secret_ref="secret-store://signing/job-123",
         )
         nodes = {node["node_id"]: node for node in plan["nodes"]}
 
@@ -108,6 +109,17 @@ class VODPlanBuilderTests(unittest.TestCase):
             nodes["playlist-0-webhook"]["parameters"]["webhook_secret_ref"],
             "secret-store://callbacks/job-123",
         )
+        self.assertEqual(
+            nodes["playlist-0-webhook"]["parameters"]["webhook_signing_secret_ref"],
+            "secret-store://signing/job-123",
+        )
+
+    def test_signing_reference_requires_callback_destination(self):
+        with self.assertRaisesRegex(VODPlanBuildError, "requires an enabled"):
+            build_vod_execution_plan(
+                "job-123", request_with_all_branches(),
+                webhook_signing_secret_ref="signing-ref",
+            )
 
     def test_plan_is_deterministic_for_same_normalized_request(self):
         request = request_with_all_branches()

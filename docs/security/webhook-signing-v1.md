@@ -36,21 +36,18 @@ signing alone cannot guarantee receiver-side exactly-once effects.
 
 ## Integration and rollout gates
 
-The current helper and its unit tests establish only the canonical HMAC
-primitive. They do not activate signed delivery or prove durable replay
-suppression. Before enabling signing in either legacy Celery or durable outbox
-delivery, the service still needs:
+The API accepts an optional `webhook_signing_secret` field on `JobRequest`.
+When present, it is encrypted as a separate `webhook.signing` Job secret in the
+same transaction as the callback destination and immutable execution plan.
+Both the legacy Celery callback adapter and durable publication adapter resolve
+that purpose-scoped secret only inside the trusted worker and sign the exact
+UTF-8 request-body bytes with a stable per-output Delivery ID.
 
-1. A separate encrypted `webhook.signing` Job secret, atomically persisted
-   with the Job and execution plan, plus worker-only purpose-scoped resolution.
-2. Signing in every delivery adapter using the exact serialized body bytes and
-   the executor's stable delivery identity.
-3. Durable delivery-attempt/result receipts and bounded retention.
-4. A receiver-side dedupe contract and an explicit compatibility policy for
-   existing unsigned consumers. No silent unsigned fallback when signing is
-   required.
-5. Integration tests for secret isolation, retry identity, body tampering,
-   timestamp skew, concurrent duplicate acceptance, and failure recovery.
+Omitting `webhook_signing_secret` is the explicit compatibility mode for
+existing unsigned callback consumers. Supplying it is fail-closed: secret
+resolution or signing errors fail the delivery; there is no unsigned fallback.
 
-Until those gates pass, the helper is not wired into production delivery and
-must not be described as end-to-end webhook authentication or replay prevention.
+The sender integration does not provide receiver-side replay suppression. A
+receiver must atomically persist each accepted Delivery ID with its event and
+reject duplicates. Durable sender receipts are evidence of the sender's
+attempt/result, not proof that the remote receiver committed its side effect.

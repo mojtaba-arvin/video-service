@@ -40,8 +40,8 @@ def get_verified_workflow_worker_identity():
     return authenticate_workflow_worker(sts, prefix)
 
 
-def resolve_job_webhook_secret(job_id, secret_id, repository=None):
-    """Resolve one Job-scoped callback URL after live IAM identity verification."""
+def _resolve_job_webhook_secret(job_id, secret_id, purpose, repository=None):
+    """Resolve one Job-scoped webhook secret after live IAM identity verification."""
     if not isinstance(job_id, str) or not job_id.strip():
         raise ValueError("job_id is required")
     if repository is None:
@@ -51,11 +51,25 @@ def resolve_job_webhook_secret(job_id, secret_id, repository=None):
     envelope = repository.get_job_secret_envelope_for_worker(
         job_id,
         worker_identity,
-        "webhook.callback",
+        purpose,
         secret_id,
     )
     return resolve_secret(
         envelope,
         envelope.context,
         get_workflow_secret_key_provider(),
+    )
+
+    
+def resolve_job_webhook_secret(job_id, secret_id, repository=None):
+    """Resolve one Job-scoped callback URL after live IAM identity verification."""
+    return _resolve_job_webhook_secret(
+        job_id, secret_id, "webhook.callback", repository=repository
+    )
+
+
+def resolve_job_webhook_signing_secret(job_id, secret_id, repository=None):
+    """Resolve one Job-scoped signing key after live IAM identity verification."""
+    return _resolve_job_webhook_secret(
+        job_id, secret_id, "webhook.signing", repository=repository
     )

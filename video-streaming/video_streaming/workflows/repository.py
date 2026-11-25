@@ -666,7 +666,7 @@ class WorkflowRepository:
                     or context.issuer != owner_principal.issuer
                     or context.subject != owner_principal.subject):
                 raise ValueError("secret envelope scope must match the Job owner")
-            if context.purpose != "webhook.callback":
+            if context.purpose not in ("webhook.callback", "webhook.signing"):
                 raise ValueError("unsupported Job secret purpose")
             if context.purpose in seen_purposes:
                 raise ValueError("only one initial secret per purpose is allowed")
@@ -783,25 +783,27 @@ class WorkflowRepository:
                         # fingerprints; never rotate the persisted secret.
                         for node in replay_plan["nodes"]:
                             parameters = node["parameters"]
-                            if "webhook_secret_ref" not in parameters:
-                                continue
-                            accepted_secret = session.execute(
-                                select(JobSecretRecord).where(
-                                    JobSecretRecord.job_id == existing.id,
-                                    JobSecretRecord.purpose == "webhook.callback",
-                                    JobSecretRecord.status == "ACTIVE",
-                                    JobSecretRecord.deleted_at.is_(None),
-                                    (JobSecretRecord.expires_at.is_(None)
-                                     | (JobSecretRecord.expires_at > utcnow())),
-                                )
-                            ).scalar_one_or_none()
-                            if accepted_secret is None:
-                                raise IdempotencyConflict(
-                                    "Idempotent plan references a missing active callback secret"
-                                )
-                            parameters["webhook_secret_ref"] = (
-                                accepted_secret.secret_id
-                            )
+                            for parameter, purpose in (
+                                ("webhook_secret_ref", "webhook.callback"),
+                                ("webhook_signing_secret_ref", "webhook.signing"),
+                            ):
+                                if parameter not in parameters:
+                                    continue
+                                accepted_secret = session.execute(
+                                    select(JobSecretRecord).where(
+                                        JobSecretRecord.job_id == existing.id,
+                                        JobSecretRecord.purpose == purpose,
+                                        JobSecretRecord.status == "ACTIVE",
+                                        JobSecretRecord.deleted_at.is_(None),
+                                        (JobSecretRecord.expires_at.is_(None)
+                                         | (JobSecretRecord.expires_at > utcnow())),
+                                    )
+                                ).scalar_one_or_none()
+                                if accepted_secret is None:
+                                    raise IdempotencyConflict(
+                                        "Idempotent plan references a missing active {} secret".format(purpose)
+                                    )
+                                parameters[parameter] = accepted_secret.secret_id
                     replay_fingerprint = (
                         execution_plan_sha256(replay_plan)
                         if replay_plan is not None else None

@@ -9,6 +9,10 @@ from video_streaming.workflows.errors import PermanentOperationError
 from video_streaming.workflows.publication_handlers import (
     build_publication_handlers,
 )
+from video_streaming.security.webhook_signing import (
+    DELIVERY_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, VERSION_HEADER,
+    stable_delivery_id, verify_webhook_signature,
+)
 
 
 class _Context:
@@ -16,6 +20,7 @@ class _Context:
         self.job_id = "job-123"
         self.attempt_id = attempt_id
         self.node_id = "node-publication"
+        self.stage_key = "playlist-0-webhook"
         self.idempotency_key = "job-123:fingerprint:webhook-node"
         self.input_artifacts = artifacts or {}
         self.heartbeats = 0
@@ -296,6 +301,47 @@ class DurablePublicationHandlerTests(unittest.TestCase):
         receipt = json.loads(self.store.objects[receipt_uri].decode("utf-8"))
         self.assertEqual(receipt["status"], "delivered")
         self.assertEqual(receipt["delivery_id"], context.idempotency_key)
+
+    def test_signed_webhook_uses_distinct_key_and_exact_transmitted_body(self):
+        calls = []
+
+        def requester(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response()
+
+        signing_secret = "s" * 48
+        handlers = self.build(
+            webhook_secret_resolver=lambda *_args: "https://callback.example/hook",
+            webhook_signing_secret_resolver=lambda *_args: signing_secret,
+            webhook_requester=requester,
+        )
+        context = _Context()
+        result = handlers["video.webhook.deliver"](
+            {"parameters": {
+                "enabled": True,
+                "webhook_secret_ref": "callback-ref",
+                "webhook_signing_secret_ref": "signing-ref",
+            }},
+            context,
+        )
+        body = calls[0][1]["body"]
+        headers = calls[0][1]["headers"]
+        self.assertIsInstance(body, bytes)
+        self.assertEqual(headers[VERSION_HEADER], "v1")
+        self.assertEqual(headers[DELIVERY_ID_HEADER],
+                         stable_delivery_id(context.job_id, context.stage_key))
+        self.assertTrue(headers[SIGNATURE_HEADER].startswith("v1="))
+        self.assertTrue(verify_webhook_signature(
+            signing_secret, headers[TIMESTAMP_HEADER],
+            headers[DELIVERY_ID_HEADER], body, headers[SIGNATURE_HEADER],
+        ))
+        self.assertEqual(json.loads(body), {
+            "request_id": "job-123", "reference_id": "reference-456",
+        })
+        receipt = json.loads(
+            self.store.objects[result["artifacts"][0]["uri"]].decode("utf-8")
+        )
+        self.assertEqual(receipt["delivery_id"], headers[DELIVERY_ID_HEADER])
 
     def test_disabled_webhook_emits_skipped_receipt_without_resolving_secret(self):
         handlers = self.build(

@@ -27,6 +27,10 @@ from video_streaming.workflows.errors import (
 )
 from video_streaming.workflows.artifact_store import artifact_uri
 from video_streaming.security.secret_store import SecretContextMismatch, SecretDecryptionError
+from video_streaming.security.webhook_signing import (
+    build_webhook_signature_headers,
+    stable_delivery_id,
+)
 
 
 _VALIDATION = {"valid": True, "errors": []}
@@ -292,7 +296,8 @@ def build_publication_handlers(
         artifact_store,
         repository,
         webhook_secret_resolver=None,
-        webhook_requester=request_webhook):
+        webhook_requester=request_webhook,
+        webhook_signing_secret_resolver=None):
     """Build upload_file, upload_directory and webhook delivery adapters."""
     if s3_client is None or artifact_store is None or repository is None:
         raise ValueError("S3 client, Artifact Store and repository are required")
@@ -619,6 +624,37 @@ def build_publication_handlers(
                 raise RetryableOperationError(
                     "encrypted webhook destination resolution failed"
                 ) from exc
+            signing_secret = None
+            signing_ref = params.get("webhook_signing_secret_ref")
+            if signing_ref is not None:
+                signing_ref = _required_text(
+                    signing_ref, "webhook_signing_secret_ref"
+                )
+                signing_resolver = webhook_signing_secret_resolver
+                if signing_resolver is None:
+                    from video_streaming.workflows.secret_runtime import (
+                        resolve_job_webhook_signing_secret,
+                    )
+                    signing_resolver = lambda job_id, secret_id: (
+                        resolve_job_webhook_signing_secret(
+                            job_id, secret_id, repository=repository
+                        )
+                    )
+                _check_active(context)
+                try:
+                    signing_secret = signing_resolver(context.job_id, signing_ref)
+                except SecretDecryptionError as exc:
+                    raise RetryableOperationError(
+                        "encrypted webhook signing-key resolution failed"
+                    ) from exc
+                except (SecretContextMismatch, ValueError) as exc:
+                    raise PermanentOperationError(
+                        "encrypted webhook signing key is not valid for this Job"
+                    ) from exc
+                except Exception as exc:
+                    raise RetryableOperationError(
+                        "encrypted webhook signing-key resolution failed"
+                    ) from exc
             job = repository.get_job_snapshot(context.job_id)
             if job is None:
                 raise PermanentOperationError("webhook job record is missing")
@@ -630,15 +666,25 @@ def build_publication_handlers(
                 sort_keys=True,
                 separators=(",", ":"),
             )
+            body_bytes = body.encode("utf-8")
+            delivery_id = stable_delivery_id(context.job_id, context.stage_key)
+            receipt_delivery_id = context.idempotency_key
+            request_headers = {"Idempotency-Key": context.idempotency_key}
+            if signing_secret is not None:
+                request_headers.update(build_webhook_signature_headers(
+                    signing_secret, delivery_id, body_bytes
+                ))
+                request_headers["Idempotency-Key"] = delivery_id
+                receipt_delivery_id = delivery_id
             _check_active(context)
             try:
                 response = webhook_requester(
                     destination,
-                    body=body,
+                    body=body_bytes,
                     connect_timeout=settings.WEBHOOK_CONNECT_TIMEOUT_SECONDS,
                     read_timeout=settings.WEBHOOK_READ_TIMEOUT_SECONDS,
                     allow_loopback=settings.WEBHOOK_ALLOW_LOOPBACK_CALLBACKS,
-                    headers={"Idempotency-Key": context.idempotency_key},
+                    headers=request_headers,
                 )
             except WebhookDestinationError as exc:
                 raise PermanentOperationError(
@@ -652,7 +698,7 @@ def build_publication_handlers(
                     receipt = {
                         "schema_version": 1,
                         "status": "delivered",
-                        "delivery_id": context.idempotency_key,
+                        "delivery_id": receipt_delivery_id,
                         "http_status": status,
                     }
                 elif 500 <= status <= 599:
@@ -666,6 +712,7 @@ def build_publication_handlers(
             finally:
                 response.close()
             destination = None
+            signing_secret = None
             _check_active(context)
 
         stored = artifact_store.put_bytes(

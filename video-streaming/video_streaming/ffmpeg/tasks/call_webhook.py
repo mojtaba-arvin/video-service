@@ -18,7 +18,8 @@ class CallWebhookTask(
     base=CallWebhookTask,
     **TASK_DECORATOR_KWARGS
 )
-def call_webhook(self, *args, request_id: str = None):
+def call_webhook(
+        self, *args, request_id: str = None, delivery_stage_key: str = None):
     """Deliver a callback after resolving its encrypted Job-scoped secret.
 
     Raw callback URLs are never read from Redis or accepted as task arguments.
@@ -53,6 +54,25 @@ def call_webhook(self, *args, request_id: str = None):
         webhook_url = resolve_job_webhook_secret(
             request_id, secret_refs.pop(), repository=repository
         )
+        signing_refs = {
+            node["parameters"].get("webhook_signing_secret_ref")
+            for node in persisted_plan["plan"]["nodes"]
+            if node["operation"] == "video.webhook.deliver"
+            and node["parameters"].get("enabled") is True
+        }
+        signing_refs.discard(None)
+        if len(signing_refs) > 1:
+            raise RuntimeError("persisted webhook signing secret reference is ambiguous")
+        signing_secret = None
+        if signing_refs:
+            from video_streaming.workflows.secret_runtime import (
+                resolve_job_webhook_signing_secret,
+            )
+            signing_secret = resolve_job_webhook_signing_secret(
+                request_id, signing_refs.pop(), repository=repository
+            )
+        if signing_secret is not None and not delivery_stage_key:
+            raise RuntimeError("signed callback requires a stable delivery stage key")
     except Exception as exc:
         # Never log exception strings: KMS/HTTP libraries may include secrets.
         self.logger.error(
@@ -64,7 +84,13 @@ def call_webhook(self, *args, request_id: str = None):
             request_kwargs=self.request.kwargs,
         )
 
-    is_delivered = self.call_webhook(request_id, webhook_url=webhook_url)
-    # Drop the only application reference immediately after the HTTP call.
+    is_delivered = self.call_webhook(
+        request_id,
+        webhook_url=webhook_url,
+        signing_secret=signing_secret,
+        delivery_stage_key=delivery_stage_key,
+    )
+    # Drop the only application references immediately after the HTTP call.
     webhook_url = None
+    signing_secret = None
     return dict(is_delivered=is_delivered)

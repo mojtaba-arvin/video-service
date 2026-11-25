@@ -165,7 +165,7 @@ _CONTRACTS = (
     OperationContract(
         "video.webhook.deliver",
         frozenset({"enabled"}),
-        frozenset({"webhook_secret_ref"}),
+        frozenset({"webhook_secret_ref", "webhook_signing_secret_ref"}),
         frozenset(), frozenset(), frozenset(),
         frozenset({"webhook.delivery_receipt"}),
         "transient_remote", "between_requests", "stable_delivery_id",
