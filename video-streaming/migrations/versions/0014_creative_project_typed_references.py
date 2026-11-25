@@ -311,17 +311,24 @@ def upgrade():
                 RAISE EXCEPTION 'creative entity identity is immutable';
             END IF;
             IF TG_TABLE_NAME = 'workflow_creative_shots'
-               AND NEW.scene_id IS DISTINCT FROM OLD.scene_id THEN
+               AND (to_jsonb(NEW)->>'scene_id')
+                   IS DISTINCT FROM (to_jsonb(OLD)->>'scene_id') THEN
                 RAISE EXCEPTION 'creative shot scene identity is immutable';
             END IF;
             IF TG_TABLE_NAME = 'workflow_creative_assets'
                AND (
-                   NEW.artifact_id IS DISTINCT FROM OLD.artifact_id
-                   OR NEW.source_job_id IS DISTINCT FROM OLD.source_job_id
-                   OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256
-                   OR NEW.asset_type IS DISTINCT FROM OLD.asset_type
-                   OR NEW.media_type IS DISTINCT FROM OLD.media_type
-                   OR NEW.size_bytes IS DISTINCT FROM OLD.size_bytes
+                   (to_jsonb(NEW)->>'artifact_id')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'artifact_id')
+                   OR (to_jsonb(NEW)->>'source_job_id')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'source_job_id')
+                   OR (to_jsonb(NEW)->>'content_sha256')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'content_sha256')
+                   OR (to_jsonb(NEW)->>'asset_type')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'asset_type')
+                   OR (to_jsonb(NEW)->>'media_type')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'media_type')
+                   OR (to_jsonb(NEW)->>'size_bytes')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'size_bytes')
                ) THEN
                 RAISE EXCEPTION 'creative asset source identity is immutable';
             END IF;
