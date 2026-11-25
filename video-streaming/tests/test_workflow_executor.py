@@ -11,7 +11,6 @@ from uuid import uuid4
 from sqlalchemy import create_engine, event
 
 from video_streaming.workflows.execution_plan import PLAN_OPERATIONS
-from video_streaming.workflows.operation_contracts import OPERATION_CONTRACTS
 from video_streaming.workflows.domain import AttemptLeaseLost, InvalidStateTransition
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.errors import PermanentOperationError
@@ -273,8 +272,12 @@ class WorkflowNodeExecutorTests(unittest.TestCase):
         from unittest.mock import patch
 
         calls = []
-        current = OPERATION_CONTRACTS["video.input.check"]
-        with patch.dict(OPERATION_CONTRACTS, {
+        from video_streaming.workflows import executor as executor_module
+
+        current = executor_module.OPERATION_CONTRACTS["video.input.check"]
+        persisted_stage = self.repository.get_stage_snapshot(self.job_id, "check")
+        self.assertEqual(persisted_stage["operation_contract_version"], current.version)
+        with patch.dict(executor_module.OPERATION_CONTRACTS, {
             "video.input.check": SimpleNamespace(
                 version=current.version + 1,
                 retry_class=current.retry_class,
