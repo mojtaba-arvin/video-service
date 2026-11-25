@@ -18,7 +18,7 @@ from video_streaming.execution.process_control import run_streaming_process
 
 
 CGROUP_ROOT = "/sys/fs/cgroup"
-REQUIRED_CONTROLLERS = ("cpu", "memory")
+REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
 
 
 def _read_words(path):
@@ -103,11 +103,12 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
         os.rmdir(root)
 
     @contextmanager
-    def attempt(self, memory_max=96 * 1024 * 1024, cpu_max="20000 100000"):
+    def attempt(self, memory_max=96 * 1024 * 1024, cpu_max="20000 100000", pids_max=64):
         cgroup = AttemptCgroupV2(
             delegated_root=self.delegated_root,
             cpu_max=cpu_max,
             memory_max=memory_max,
+            pids_max=pids_max,
             attempt_id=uuid.uuid4().hex,
         )
         try:
@@ -152,6 +153,30 @@ class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
             self.assertTrue(lines)
             self.assertGreater(usage["cpu"].get("nr_periods", 0), 0)
             self.assertGreater(usage["cpu"].get("nr_throttled", 0), 0)
+
+    def test_pids_max_rejects_fork_from_an_atomically_admitted_process(self):
+        with self.attempt(pids_max=1) as cgroup:
+            process = cgroup.spawn(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import errno,subprocess,sys\\n"
+                        "try:\\n"
+                        " subprocess.Popen([sys.executable,'-c','pass'])\\n"
+                        "except OSError as exc:\\n"
+                        " print(exc.errno, flush=True)\\n"
+                        " sys.exit(0 if exc.errno == errno.EAGAIN else 2)\\n"
+                        "sys.exit(3)\\n"
+                    ),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, _stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stdout.decode("ascii", "replace"))
+            events = _read_cgroup_values(os.path.join(cgroup.path, "pids.events"))
+            self.assertGreater(events.get("max", 0), 0)
 
     def test_memory_max_causes_a_kernel_oom_kill_inside_the_attempt(self):
         with self.attempt(memory_max=96 * 1024 * 1024) as cgroup:
