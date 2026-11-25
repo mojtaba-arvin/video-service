@@ -103,7 +103,8 @@ Validate and retain redacted evidence for:
 2. The callback worker assumes the exact configured role and passes
    `GetCallerIdentity`; the role has `kms:Decrypt` only for the intended key.
 3. KMS key policy and IAM policy enforce the required encryption-context
-   conditions (`purpose=webhook.callback`, `algorithm=AES-256-GCM`, and
+   conditions (`purpose=webhook.callback` for destination URLs and
+   `purpose=webhook.signing` for HMAC keys, `algorithm=AES-256-GCM`, and
    required identity/context keys).
 4. Wrong role, wrong key, missing context, revoked/disabled key, STS outage,
    and KMS denial fail closed. No plaintext fallback is allowed.
@@ -160,6 +161,26 @@ reason; never replay poison messages blindly.
 
 Assign an on-call owner, escalation path, dashboard, alert routing, retention
 policy, backup owner, and a tested incident procedure.
+
+## Gate 5A — Linux cgroup v2 process-isolation acceptance
+
+The required CI job `Linux cgroup v2 kernel acceptance (Python 3.12)` runs on
+an Ubuntu 24.04 host as root. It creates a dedicated child cgroup, enables only
+the CPU and memory controllers needed by the test, and exercises the actual
+kernel interface through `AttemptCgroupV2` and the process supervisor.
+
+The test verifies CPU quota throttling via `cpu.stat`, memory-limit OOM
+accounting via `memory.events`, termination of a detached descendant via
+`cgroup.kill`, and refusal to remove a populated cgroup. The cgroup is removed
+only after the kernel reports `populated 0`.
+
+This is evidence for the CI host's Linux kernel and delegated cgroup setup; it
+does not prove the production host has the same delegation or limits. Before
+enabling `ATTEMPT_CGROUP_V2_ENABLED` in production, provision and verify the
+service user's delegated root and controller policy on the actual worker host.
+PID admission and disk quotas remain unimplemented and must not be claimed as
+enforced. The durable Workflow executor also remains a separate integration
+gate until its Attempts are wrapped in the same cgroup lifecycle.
 
 ## Gate 6 — staged activation (separate approval)
 
