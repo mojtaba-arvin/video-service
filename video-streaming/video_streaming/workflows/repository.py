@@ -1489,6 +1489,12 @@ class WorkflowRepository:
             raise ValueError("sort_order must be a nonnegative integer")
         now = utcnow()
         with self._session.begin() as session:
+            project = session.execute(
+                select(CreativeProjectRecord).where(
+                    CreativeProjectRecord.id == project_id,
+                    CreativeProjectRecord.tenant_id == principal.tenant_id,
+                )
+            ).scalar_one_or_none()
             row = session.execute(
                 select(model).where(
                     model.id == entity_id,
@@ -1496,13 +1502,14 @@ class WorkflowRepository:
                     model.tenant_id == principal.tenant_id,
                 )
             ).scalar_one_or_none()
-            if row is None:
+            if project is None or row is None:
                 raise AuthorizationError("Resource not found or access denied")
             if name is not None:
                 row.name = name
             if sort_order is not None:
                 row.sort_order = sort_order
             row.updated_at = now
+            project.updated_at = now
             result = {
                 "id": entity_id, "project_id": project_id,
                 "tenant_id": principal.tenant_id, "name": row.name,
