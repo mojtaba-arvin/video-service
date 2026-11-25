@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from video_streaming.workflows.errors import PermanentOperationError
+from video_streaming.workflows.errors import (\n    PermanentOperationError, RetryableOperationError,\n)
 from video_streaming.workflows.publication_handlers import (
     build_publication_handlers,
 )
@@ -98,8 +98,17 @@ class _S3:
 
 
 class _Repository:
+    def __init__(self):
+        self.webhook_events = []
+
     def get_job_snapshot(self, job_id):
         return {"id": job_id, "reference_id": "reference-456"}
+
+    def record_webhook_delivery_event(self, job_id, attempt_id, event_type, payload):
+        self.webhook_events.append({
+            "job_id": job_id, "attempt_id": attempt_id,
+            "event_type": event_type, "payload": dict(payload),
+        })
 
 
 class _Response:
@@ -301,6 +310,58 @@ class DurablePublicationHandlerTests(unittest.TestCase):
         receipt = json.loads(self.store.objects[receipt_uri].decode("utf-8"))
         self.assertEqual(receipt["status"], "delivered")
         self.assertEqual(receipt["delivery_id"], context.idempotency_key)
+        self.assertEqual(
+            [event["event_type"] for event in self.repository.webhook_events],
+            [
+                "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+                "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
+            ],
+        )
+        self.assertEqual(
+            self.repository.webhook_events[-1]["payload"],
+            {"delivery_id": context.idempotency_key, "http_status": 202},
+        )
+        self.assertTrue(all(
+            set(event["payload"]).issubset({
+                "delivery_id", "http_status", "failure_code",
+            }) for event in self.repository.webhook_events
+        ))
+
+    def test_webhook_http_5xx_is_recorded_before_retryable_failure(self):
+        class ServerErrorResponse:
+            status = 503
+
+            def close(self):
+                self.closed = True
+
+        handlers = self.build(
+            webhook_secret_resolver=lambda *_args: "https://callback.example/hook",
+            webhook_requester=lambda *_args, **_kwargs: ServerErrorResponse(),
+        )
+        context = _Context()
+        with self.assertRaises(RetryableOperationError):
+            handlers["video.webhook.deliver"](
+                {"parameters": {
+                    "enabled": True,
+                    "webhook_secret_ref": "opaque-secret-reference",
+                }},
+                context,
+            )
+        self.assertEqual(
+            [event["event_type"] for event in self.repository.webhook_events],
+            [
+                "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
+                "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
+            ],
+        )
+        self.assertEqual(
+            self.repository.webhook_events[-1]["payload"],
+            {
+                "delivery_id": context.idempotency_key,
+                "failure_code": "HTTP_5XX",
+                "http_status": 503,
+            },
+        )
 
     def test_signed_webhook_uses_distinct_key_and_exact_transmitted_body(self):
         calls = []
