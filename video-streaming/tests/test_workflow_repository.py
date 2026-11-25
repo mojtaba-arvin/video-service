@@ -546,9 +546,13 @@ class WorkflowRepositoryTests(unittest.TestCase):
             stored["content"]["references"]["assets"], [asset["id"]]
         )
         entities = self.repository.list_creative_project_entities(
-            project_id, owner
+            project_id, owner, limit=10
         )
         self.assertEqual([item["id"] for item in entities["scenes"]], [scene["id"]])
+        with self.assertRaises(ValueError):
+            self.repository.list_creative_project_entities(
+                project_id, owner, limit=1001
+            )
         self.assertEqual(entities["shots"][0]["scene_id"], scene["id"])
         self.assertEqual(entities["assets"][0]["content_sha256"], "b" * 64)
 
@@ -708,6 +712,18 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(first["revision_number"], 1)
         self.assertEqual(second["revision_number"], 2)
         self.assertEqual(first["content_sha256"], second["content_sha256"])
+        project_snapshot = self.repository.get_creative_project(project["id"], owner)
+        self.assertEqual(project_snapshot["latest_revision_number"], 2)
+        projects = self.repository.list_creative_projects(owner, limit=10)
+        self.assertIn(project["id"], [item["id"] for item in projects])
+        revisions = self.repository.list_creative_project_revisions(
+            project["id"], owner, limit=10
+        )
+        self.assertEqual(
+            [item["revision_number"] for item in revisions], [2, 1]
+        )
+        with self.assertRaises(ValueError):
+            self.repository.list_creative_projects(owner, limit=1001)
         loaded = self.repository.get_creative_project_revision(project["id"], 1, owner)
         self.assertEqual(loaded["content"], first_content)
         self.assertEqual(loaded["content_sha256"], first["content_sha256"])

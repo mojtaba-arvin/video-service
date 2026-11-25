@@ -12,6 +12,19 @@ service Streaming{
   rpc list_tenant_job_quota_policies(ListTenantJobQuotaPoliciesRequest) returns (ListTenantJobQuotaPoliciesResponse) {}
   rpc list_tenant_job_quota_audit_events(ListTenantJobQuotaAuditEventsRequest) returns (ListTenantJobQuotaAuditEventsResponse) {}
   rpc get_webhook_delivery_history(GetWebhookDeliveryHistoryRequest) returns (WebhookDeliveryHistoryResponse) {}
+
+  rpc create_creative_project(CreateCreativeProjectRequest) returns (CreativeProjectResponse) {}
+  rpc get_creative_project(GetCreativeProjectRequest) returns (CreativeProjectResponse) {}
+  rpc list_creative_projects(ListCreativeProjectsRequest) returns (ListCreativeProjectsResponse) {}
+  rpc create_creative_project_revision(CreateCreativeProjectRevisionRequest) returns (CreativeProjectRevisionResponse) {}
+  rpc get_creative_project_revision(GetCreativeProjectRevisionRequest) returns (CreativeProjectRevisionResponse) {}
+  rpc list_creative_project_revisions(ListCreativeProjectRevisionsRequest) returns (ListCreativeProjectRevisionsResponse) {}
+  rpc create_creative_scene(CreateCreativeSceneRequest) returns (CreativeProjectEntityResponse) {}
+  rpc create_creative_shot(CreateCreativeShotRequest) returns (CreativeProjectEntityResponse) {}
+  rpc create_creative_character(CreateCreativeCharacterRequest) returns (CreativeProjectEntityResponse) {}
+  rpc create_creative_asset(CreateCreativeAssetRequest) returns (CreativeProjectEntityResponse) {}
+  rpc update_creative_project_entity(UpdateCreativeProjectEntityRequest) returns (CreativeProjectEntityResponse) {}
+  rpc list_creative_project_entities(ListCreativeProjectEntitiesRequest) returns (ListCreativeProjectEntitiesResponse) {}
 }
 
 message JobRequest {
@@ -558,4 +571,130 @@ message WebhookDeliveryAttemptEvent {
 message WebhookDeliveryHistoryResponse {
   string tracking_id = 1;
   repeated WebhookDeliveryAttemptEvent events = 2;
+}
+
+
+// Tenant-owned creative Project and immutable revision API.
+// Names and sort order are presentation metadata; IDs and revision snapshots are stable.
+message CreateCreativeProjectRequest {
+  string name = 1;
+  string project_id = 2;
+}
+message GetCreativeProjectRequest { string project_id = 1; }
+message ListCreativeProjectsRequest {
+  // Zero selects the server default (100); maximum is 1000.
+  int32 limit = 1;
+}
+message CreativeProjectResponse {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string created_at = 4;
+  string updated_at = 5;
+  int32 latest_revision_number = 6;
+}
+message ListCreativeProjectsResponse {
+  repeated CreativeProjectResponse projects = 1;
+}
+message CreateCreativeProjectRevisionRequest {
+  string project_id = 1;
+  // JSON object; canonicalized and validated by the repository.
+  string content_json = 2;
+}
+message GetCreativeProjectRevisionRequest {
+  string project_id = 1;
+  int32 revision_number = 2;
+}
+message ListCreativeProjectRevisionsRequest {
+  string project_id = 1;
+  // Zero selects the server default (100); maximum is 1000.
+  int32 limit = 2;
+}
+message CreativeProjectRevisionResponse {
+  string id = 1;
+  string project_id = 2;
+  string tenant_id = 3;
+  int32 revision_number = 4;
+  string content_json = 5;
+  string content_sha256 = 6;
+  string created_at = 7;
+}
+message CreativeProjectRevisionSummary {
+  string id = 1;
+  string project_id = 2;
+  string tenant_id = 3;
+  int32 revision_number = 4;
+  string content_sha256 = 5;
+  string created_at = 6;
+}
+message ListCreativeProjectRevisionsResponse {
+  repeated CreativeProjectRevisionSummary revisions = 1;
+}
+message CreateCreativeSceneRequest {
+  string project_id = 1;
+  string name = 2;
+  int32 sort_order = 3;
+  string scene_id = 4;
+}
+message CreateCreativeShotRequest {
+  string project_id = 1;
+  string scene_id = 2;
+  string name = 3;
+  int32 sort_order = 4;
+  string shot_id = 5;
+}
+message CreateCreativeCharacterRequest {
+  string project_id = 1;
+  string name = 2;
+  int32 sort_order = 3;
+  string character_id = 4;
+}
+message CreateCreativeAssetRequest {
+  string project_id = 1;
+  string artifact_id = 2;
+  string name = 3;
+  string asset_type = 4;
+  int32 sort_order = 5;
+  string asset_id = 6;
+}
+message CreativeProjectEntity {
+  string id = 1;
+  string project_id = 2;
+  string tenant_id = 3;
+  string name = 4;
+  int32 sort_order = 5;
+  string scene_id = 6;
+  string artifact_id = 7;
+  string source_job_id = 8;
+  string asset_type = 9;
+  string content_sha256 = 10;
+  string media_type = 11;
+  int64 size_bytes = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+message CreativeProjectEntityResponse {
+  CreativeProjectEntity entity = 1;
+}
+message ListCreativeProjectEntitiesRequest {
+  string project_id = 1;
+  // Zero selects the server default (500); maximum is 1000 per entity type.
+  int32 limit = 2;
+}
+message ListCreativeProjectEntitiesResponse {
+  repeated CreativeProjectEntity scenes = 1;
+  repeated CreativeProjectEntity shots = 2;
+  repeated CreativeProjectEntity characters = 3;
+  repeated CreativeProjectEntity assets = 4;
+}
+
+message UpdateCreativeProjectEntityRequest {
+  string project_id = 1;
+  // One of: scene, shot, character, asset.
+  string entity_type = 2;
+  string entity_id = 3;
+  string name = 4;
+  int32 sort_order = 5;
+  bool update_name = 6;
+  bool update_sort_order = 7;
 }

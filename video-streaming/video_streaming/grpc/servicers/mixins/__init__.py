@@ -10,6 +10,7 @@ _EXPORTS = {
     "RevokeOutputsMixin": ".revoke_outputs",
     "PlaybackQoEMixin": ".playback_qoe",
     "OperationsAdminMixin": ".operations_admin",
+    "CreativeProjectsMixin": ".creative_projects",
 }
 
 __all__ = list(_EXPORTS)
