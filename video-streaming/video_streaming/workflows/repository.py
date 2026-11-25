@@ -66,6 +66,34 @@ class JobRecord(Base):
             "id", "owner_tenant_id",
             name="uq_workflow_jobs_tenant_identity",
         ),
+        ForeignKeyConstraint(
+            ["project_id", "owner_tenant_id"],
+            [
+                "workflow_creative_projects.id",
+                "workflow_creative_projects.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_job_project_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["project_revision_id", "project_id", "owner_tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_job_project_revision_tenant",
+        ),
+        CheckConstraint(
+            "(project_id IS NULL AND project_revision_id IS NULL) OR "
+            "(project_id IS NOT NULL AND project_revision_id IS NOT NULL)",
+            name="ck_workflow_job_project_revision_pin_complete",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "project_revision_id", "owner_tenant_id",
+            name="uq_workflow_job_project_revision_pin",
+        ),
         Index(
             "ix_workflow_jobs_owner_tenant_created",
             "owner_tenant_id",
@@ -78,6 +106,8 @@ class JobRecord(Base):
     request_hash = Column(String(64), nullable=False)
     reference_id = Column(String(255), nullable=False, default="")
     owner_tenant_id = Column(String(255), nullable=True)
+    project_id = Column(String(36), nullable=True)
+    project_revision_id = Column(String(36), nullable=True)
     owner_issuer = Column(String(512), nullable=True)
     owner_subject = Column(String(255), nullable=True)
     state = Column(String(24), nullable=False, default=JobState.QUEUED.value)
@@ -500,6 +530,17 @@ class CreativeAssetProvenanceRecord(Base):
             ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
             ondelete="RESTRICT",
             name="fk_workflow_creative_provenance_job_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["job_id", "project_id", "project_revision_id", "tenant_id"],
+            [
+                "workflow_jobs.id",
+                "workflow_jobs.project_id",
+                "workflow_jobs.project_revision_id",
+                "workflow_jobs.owner_tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_job_revision_pin",
         ),
         ForeignKeyConstraint(
             ["workflow_id", "job_id"],
