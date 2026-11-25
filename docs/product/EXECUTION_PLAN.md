@@ -1,8 +1,8 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `d546607e20ea6fcec4859688ebed9286bcf0b3da` (current `develop` base at review time)
-- **Last reviewed:** 2026-11-24
+- **Baseline:** `c54f60a3c43acfecae4c68bc047a7e74fa417443` (merged PR #171)
+- **Last reviewed:** 2026-11-25
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
 
@@ -160,16 +160,18 @@ Baseline on `develop` as verified on 2026-11-24 (post-merge state):
 - **PR #152 merged** as `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`: provider-neutral workload classification for typed operations, including `NETWORK_IO` webhook delivery.
 - **PR #153 merged** as `a2ce4d8afe4d82241025c9bc77e5eb9d08c80803`: reusable versioned creative workflow definitions, canonical fingerprints, DAG validation and Job-specific instantiation.
 - **PR #154 merged** as `4062b6998b5fd6b1e0bd7b01de900f01f4137663`: Python 3.12.11 Alpine 3.22 production image, refreshed pins, same-base FFmpeg/FFprobe and startup Protobuf generation. Image/import/media-tool smoke and CI passed; full broker-backed VOD and migrations inside this image remain operational acceptance work.
-- **PR #156 merged** as `d546607e20ea6fcec4859688ebed9286bcf0b3da`: fail-closed Attempt cgroup v2 CPU/memory primitive and optional process-runner integration. PID admission is explicitly not implemented; Celery lifecycle wiring and delegated-Linux acceptance remain open.
+- **PR #156/#168 merged** as `d546607e20ea6fcec4859688ebed9286bcf0b3da` / `06a53f51b1fad0ea1dd0a1eaac6ffeb2c69097ba`: Attempt-scoped cgroup v2 CPU/memory limits are wired through durable playlist, thumbnail and watermark processing; kernel counters persist on success and failure.
+- **PR #171 merged** as `c54f60a3c43acfecae4c68bc047a7e74fa417443`: native `clone3(CLONE_INTO_CGROUP)` admission enforces per-Attempt `pids.max` from process creation. The Linux acceptance job verifies CPU, memory/OOM, PID rejection, descendant termination and cleanup. Disk quotas and production delegated-root verification remain open.
 - **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
+- **PR #170 merged** as `6c375c52dc28d181c9d5ea69c291ceecd640044b`: atomic per-tenant active-Job admission uses the authenticated tenant for both legacy and durable CreateJob paths. The flag remains off until every tenant has an explicit policy; operator provisioning and policy-change audit history are not yet delivered.
 - **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Keep the issue open until a PR targeting `develop` demonstrates the exact required check is reported and enforced.
-- **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection and sensitive-log redaction exist. Production identity configuration, legacy-resource reconciliation, atomic tenant quotas, signed/replay-protected callbacks and delivery history remain open.
+- **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection, sensitive-log redaction, HMAC callback signing and atomic tenant quotas are merged. Quota policy provisioning/audit, bounded sender-side delivery-attempt history, receiver-side durable replay suppression, production issuer/audience/JWKS evidence and legacy-resource reconciliation remain open.
 - **Durable dispatch rollout remains disabled**: CI does not establish production KMS/STS/IAM policy, live S3 behavior, legacy callback migration or automatic broker redelivery in the deployed topology.
 
 Next execution order:
 
-1. **#72 — finish Attempt-scoped isolation.** Wire one cgroup to the durable Celery Attempt lifecycle and every FFmpeg/FFprobe subprocess; handle success/failure/timeout/cancel/lease loss; collect final kernel counters; add delegated-Linux tests. Keep PID limits unclaimed until atomic in-cgroup admission is available. Do not enable worker policy before these gates pass.
-2. **#73 — finish security.** Add atomic tenant quota reservation before both legacy and durable dispatch; implement the separate `webhook.signing` secret purpose, canonical HMAC(timestamp + delivery ID + exact body), receiver replay contract and durable bounded delivery history. Verify production issuer/audience/JWKS and legacy ownership reconciliation.
+1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. Define and implement per-Attempt scratch-disk limits/high-water accounting without broad shared-filesystem deletion; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
+2. **#73 — complete security operations.** Build an audited quota-policy provisioning path (operator identity, reason, version/history and inventory) before enabling `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED`; add bounded webhook attempt history without storing URLs, secrets, signatures or bodies; document/test the receiver's atomic Delivery-ID dedup transaction. Verify production issuer/audience/JWKS and legacy ownership reconciliation.
 3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
 4. **#74 — close runtime migration acceptance.** Run migrations and full gRPC/Celery/PostgreSQL/Redis/S3 VOD E2E inside the exact Python 3.12 production image; retire Python 3.9 only after operational acceptance.
 5. **#80 — implement deterministic CPU admission and tenant fairness** before GPU/Spot policies.
