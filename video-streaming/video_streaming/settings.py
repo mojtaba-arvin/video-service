@@ -263,6 +263,11 @@ ATTEMPT_CGROUP_V2_CPU_MAX = env_config.get(
 ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES = env_config.get(
     "ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES",
     default=2 * 1024 * 1024 * 1024, cast=int)
+ATTEMPT_CGROUP_V2_PIDS_MAX = env_config.get(
+    "ATTEMPT_CGROUP_V2_PIDS_MAX", default=64, cast=int)
+ATTEMPT_CGROUP_V2_EXECUTABLE = env_config.get(
+    "ATTEMPT_CGROUP_V2_EXECUTABLE",
+    default="/usr/local/bin/video-cgroup-exec", cast=str)
 ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS = env_config.get(
     "ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS", default=5.0, cast=float)
 
@@ -273,6 +278,8 @@ if ATTEMPT_CGROUP_V2_ENABLED:
         )
     if ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES <= 0:
         raise ValueError("ATTEMPT_CGROUP_V2_MEMORY_MAX_BYTES must be positive")
+    if ATTEMPT_CGROUP_V2_PIDS_MAX <= 0:
+        raise ValueError("ATTEMPT_CGROUP_V2_PIDS_MAX must be positive")
     if ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS <= 0:
         raise ValueError(
             "ATTEMPT_CGROUP_V2_CLEANUP_TIMEOUT_SECONDS must be positive"
