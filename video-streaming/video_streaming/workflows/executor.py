@@ -65,10 +65,7 @@ class WorkflowNodeExecutor:
     @staticmethod
     def _uses_cgroup(operation):
         contract = OPERATION_CONTRACTS[operation]
-        return contract.cancellation in (
-            "process_group_termination",
-            "before_and_after_probe",
-        )
+        return contract.cancellation == "process_group_termination"
 
     @staticmethod
     def _merge_cgroup_metrics(metrics, usage):
