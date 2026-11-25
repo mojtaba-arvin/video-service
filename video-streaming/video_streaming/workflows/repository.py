@@ -757,6 +757,18 @@ class WorkflowRepository:
         """Return a detached JSON value and its deterministic SHA-256 digest."""
         if not isinstance(content, dict):
             raise ValueError("project revision content must be a JSON object")
+
+        def validate_string_keys(value):
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if not isinstance(key, str):
+                        raise ValueError("project revision object keys must be strings")
+                    validate_string_keys(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    validate_string_keys(nested)
+
+        validate_string_keys(content)
         try:
             canonical = json.dumps(
                 content, sort_keys=True, separators=(",", ":"),
