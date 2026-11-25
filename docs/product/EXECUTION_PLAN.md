@@ -174,7 +174,7 @@ Next execution order:
 1. **#72 — close the remaining resource-isolation gap.** PID admission is now atomic and tested with `clone3(CLONE_INTO_CGROUP)`. ADR 0011 records the disk-isolation constraints. Implement a real per-Attempt filesystem quota backend only after worker mount/quota capability evidence; verify delegated CPU/memory/PID controllers and limits on the actual worker host. Keep the feature flag off until this evidence exists.
 2. **#73 — complete security operations.** Configure the production OIDC issuer/audience/JWKS and ensure only the operator identity receives `video.tenant.quota.admin`; provision and reconcile an explicit policy for every active tenant through the new RPCs. Keep `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until that inventory is complete and legacy ownership is reconciled. Document and test the receiver's atomic Delivery-ID dedup transaction in the receiving system; sender-side history is already merged in PR #178.
 3. **#71 — complete operational acceptance.** Keep `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`; rehearse migrations and the complete broker-backed VOD path inside the exact Python 3.12 production image, then verify live KMS/STS/IAM, legacy callback inventory/drain, deployed broker redelivery, worker-loss recovery, observability and rollback in staging before activation.
-4. **#79 — complete the remaining P0 long-running workflow surface.** PR #176/#181 provide tenant-owned Projects/Revisions and typed references; PR #184 now adds attempt-bound immutable Asset provenance and exact Job ProjectRevision pinning. Next expose those operations through the authenticated application/gRPC boundary. Retention/deletion remains blocked on explicit customer/legal policy; do not invent a retention period or automate deletion.
+4. **#79 — complete the remaining P0 long-running workflow surface.** PR #176/#181 provide tenant-owned Projects/Revisions and typed references; PR #184 adds attempt-bound immutable Asset provenance and exact Job ProjectRevision pinning; PR #187 now exposes those operations through authenticated tenant-scoped gRPC. The remaining gate is customer/legal-approved retention/deletion policy; do not invent a retention period or automate deletion.
 5. **#80 — implement deterministic CPU admission and tenant fairness** after quota provisioning/audit and resource metrics are operational; defer GPU/Spot policies.
 6. **#75/#82 — prepare licensed benchmark corpus and CDN telemetry correlation in parallel**, with privacy/retention controls.
 7. **#76 — implement MCP only after shared authorization, quota and audit contracts are complete.**
@@ -209,9 +209,10 @@ Delivered:
 
 **Delivered by PR #184:** append-only provenance for derived Assets, including source Asset IDs/content hashes, operation and contract version, workflow/plan snapshot identity, prompt/config revision ID, validation evidence and source Attempt; exact ProjectRevision pins on Jobs; pin checks on all idempotency replay paths; and database-enforced immutable/sealed parent lineage. The provenance header and all parent rows must be committed as one sealed transaction. Direct SQL cannot append parents after commit; recursive lineage checks reject cycles. Worker contract-version mismatch records a non-retryable failed Attempt before handler execution, while completed Stages remain idempotently readable.
 
-Remaining #79 increments:
-1. Expose Project, ProjectRevision and typed Scene/Shot/Character/Asset operations through the authenticated application/gRPC boundary without duplicating domain authorization.
-2. Define customer/legal retention policy before any retention automation or deletion path.
+**Delivered by PR #187:** authenticated gRPC create/read/list operations for tenant-owned Projects and immutable ProjectRevisions, typed Scene/Shot/Character/Asset creation and listing, and presentation-only name/order updates. The boundary requires `video.projects:create`, `video.projects:read` or `video.projects:write`; foreign resources are non-enumerating, revision JSON rejects duplicate object keys, and list responses are bounded. Asset creation still requires an existing AVAILABLE content-addressed Artifact from the same tenant.
+
+Remaining #79 increment:
+1. Define and approve customer/legal retention/deletion policy, including legal hold, audit retention and deletion scope, before implementing automation. Until then, keep retention/deletion disabled and keep #79 open.
 
 Asset registration still requires an existing AVAILABLE content-addressed Artifact; source ingestion remains #84. Do not add model-provider payloads to the domain schema, mutable revision identity/relationships, guessed retention periods, or duplicate the existing versioned workflow-definition/execution-plan contracts.
 
@@ -264,3 +265,18 @@ Remaining #79 work is the authenticated public Project/Revision/typed-entity gRP
 The runbook `docs/operations/security-and-webhook-receiver-release-runbook.md` records exact OIDC trust settings and negative token tests, least-privilege `video.tenant.quota.admin` provisioning, full active-tenant quota/legacy ownership reconciliation, and the receiving system's atomic Delivery-ID deduplication contract with concurrency/crash acceptance criteria.
 
 This is an operational contract, not proof of external deployment. Production IdP values, operator scope grants, tenant inventory/policies and receiver-side implementation evidence remain external release gates. Keep `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until they are verified; sender-side webhook history does not prevent receiver replay.
+
+
+## 13. Authenticated public Creative Project API (Issue #79)
+
+**Merged:** PR #187, squash commit `e4b3b0bd7bcc51a1c09e55f2b62e628ef73d4879` (2026-11-25). The synchronized head passed the full required CI matrix and Dependency Review.
+
+Delivered:
+- Authenticated tenant-scoped gRPC create/read/list operations for Projects and immutable ProjectRevisions.
+- Typed Scene, Shot, Character and Artifact-backed Asset creation; bounded per-type entity listing; presentation-only name/order updates.
+- Explicit scope checks: `video.projects:create`, `video.projects:read`, `video.projects:write`.
+- Foreign/missing Project resources return non-enumerating NOT_FOUND; missing scopes return PERMISSION_DENIED.
+- Revision JSON rejects duplicate object keys and is canonicalized by the repository. Revision-history lists return bounded metadata summaries rather than large snapshots.
+- List limits are bounded; caller-supplied Project/Asset/entity IDs are validated.
+
+#79 is not closed: customer/legal retention policy is still required before any retention/deletion automation. No delete RPC was added, and no retention flag was enabled.
