@@ -333,6 +333,14 @@ class CreativeAssetRecord(Base):
             "artifact_id", "project_id", "tenant_id",
             name="uq_workflow_creative_asset_artifact_project",
         ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id", "artifact_id", "source_job_id",
+            name="uq_workflow_creative_asset_source_identity",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id", "content_sha256",
+            name="uq_workflow_creative_asset_content_identity",
+        ),
         CheckConstraint("sort_order >= 0", name="ck_workflow_creative_asset_order"),
         CheckConstraint(
             "length(content_sha256) = 64",
@@ -460,6 +468,171 @@ class CreativeProjectRevisionReferenceRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class CreativeAssetProvenanceRecord(Base):
+    """Immutable lineage for one committed project Asset."""
+
+    __tablename__ = "workflow_creative_asset_provenance"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["asset_id", "project_id", "tenant_id", "artifact_id", "job_id"],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.artifact_id",
+                "workflow_creative_assets.source_job_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_asset",
+        ),
+        ForeignKeyConstraint(
+            ["project_revision_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_project_revisions.id",
+                "workflow_creative_project_revisions.project_id",
+                "workflow_creative_project_revisions.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_revision",
+        ),
+        ForeignKeyConstraint(
+            ["job_id", "tenant_id"],
+            ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_job_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "job_id"],
+            ["workflow_workflows.id", "workflow_workflows.job_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_workflow_job",
+        ),
+        ForeignKeyConstraint(
+            ["stage_id", "workflow_id"],
+            ["workflow_stages.id", "workflow_stages.workflow_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_stage_workflow",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id", "stage_id"],
+            ["workflow_attempts.id", "workflow_attempts.stage_id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_attempt_stage",
+        ),
+        ForeignKeyConstraint(
+            ["artifact_id", "job_id", "stage_id", "attempt_id"],
+            [
+                "workflow_artifacts.id",
+                "workflow_artifacts.job_id",
+                "workflow_artifacts.stage_id",
+                "workflow_artifacts.attempt_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_artifact_execution",
+        ),
+        CheckConstraint(
+            "operation_contract_version >= 1",
+            name="ck_workflow_creative_provenance_operation_version",
+        ),
+        CheckConstraint(
+            "execution_plan_schema_version >= 1",
+            name="ck_workflow_creative_provenance_plan_schema_version",
+        ),
+        CheckConstraint(
+            "length(execution_plan_fingerprint) = 64",
+            name="ck_workflow_creative_provenance_plan_fingerprint",
+        ),
+        CheckConstraint(
+            "length(validation_evidence_sha256) = 64",
+            name="ck_workflow_creative_provenance_validation_hash",
+        ),
+        CheckConstraint(
+            "validation_evidence_json->>'status' = 'PASSED'",
+            name="ck_workflow_creative_provenance_validation_passed",
+        ),
+        UniqueConstraint(
+            "asset_id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_asset",
+        ),
+        UniqueConstraint(
+            "id", "project_id", "tenant_id",
+            name="uq_workflow_creative_asset_provenance_identity",
+        ),
+        Index(
+            "ix_workflow_creative_asset_provenance_project_created",
+            "project_id", "tenant_id", "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    asset_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    artifact_id = Column(String(36), nullable=False)
+    job_id = Column(String(36), nullable=False)
+    workflow_id = Column(String(36), nullable=False)
+    stage_id = Column(String(36), nullable=False)
+    attempt_id = Column(String(36), nullable=False)
+    project_revision_id = Column(String(36), nullable=False)
+    operation_id = Column(String(128), nullable=False)
+    operation_contract_version = Column(Integer, nullable=False)
+    workflow_version = Column(String(64), nullable=False)
+    execution_plan_schema_version = Column(Integer, nullable=False)
+    execution_plan_fingerprint = Column(String(64), nullable=False)
+    prompt_config_revision_id = Column(String(128), nullable=False)
+    validation_evidence_json = Column(JSON, nullable=False)
+    validation_evidence_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CreativeAssetProvenanceParentRecord(Base):
+    """Immutable input Asset IDs and content hashes for one lineage record."""
+
+    __tablename__ = "workflow_creative_asset_provenance_parents"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["provenance_id", "project_id", "tenant_id"],
+            [
+                "workflow_creative_asset_provenance.id",
+                "workflow_creative_asset_provenance.project_id",
+                "workflow_creative_asset_provenance.tenant_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_parent_provenance",
+        ),
+        ForeignKeyConstraint(
+            [
+                "parent_asset_id", "project_id", "tenant_id",
+                "parent_content_sha256",
+            ],
+            [
+                "workflow_creative_assets.id",
+                "workflow_creative_assets.project_id",
+                "workflow_creative_assets.tenant_id",
+                "workflow_creative_assets.content_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="fk_workflow_creative_provenance_parent_asset_hash",
+        ),
+        CheckConstraint(
+            "length(parent_content_sha256) = 64",
+            name="ck_workflow_creative_provenance_parent_hash",
+        ),
+        PrimaryKeyConstraint("provenance_id", "parent_asset_id"),
+        Index(
+            "ix_workflow_creative_provenance_parents_project",
+            "project_id", "tenant_id", "parent_asset_id",
+        ),
+    )
+
+    provenance_id = Column(String(36), nullable=False)
+    project_id = Column(String(36), nullable=False)
+    tenant_id = Column(String(255), nullable=False)
+    parent_asset_id = Column(String(36), nullable=False)
+    parent_content_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class JobSecretRecord(Base):
     """Encrypted callback material bound to the exact durable Job owner."""
 
@@ -521,6 +694,9 @@ class WorkflowRecord(Base):
             "execution_plan_schema_version IS NOT NULL AND workflow_version IS NOT NULL)",
             name="ck_workflow_execution_plan_snapshot_complete",
         ),
+        UniqueConstraint(
+            "id", "job_id", name="uq_workflow_workflow_job_identity"
+        ),
     )
 
     id = Column(String(36), primary_key=True)
@@ -561,6 +737,7 @@ class StageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     version = Column(Integer, nullable=False, default=1)
+    operation_contract_version = Column(Integer, nullable=False, default=1)
 
 
 class StageDependencyRecord(Base):
@@ -599,6 +776,7 @@ class AttemptRecord(Base):
     __tablename__ = "workflow_attempts"
     __table_args__ = (
         UniqueConstraint("stage_id", "attempt_number", name="uq_stage_attempt_number"),
+        UniqueConstraint("id", "stage_id", name="uq_workflow_attempt_stage_identity"),
         CheckConstraint(
             "(lease_owner IS NULL AND lease_token_hash IS NULL AND "
             "lease_expires_at IS NULL AND heartbeat_at IS NULL) OR "
@@ -650,6 +828,10 @@ class ArtifactRecord(Base):
         ),
         UniqueConstraint(
             "id", "job_id", name="uq_workflow_artifact_job_identity"
+        ),
+        UniqueConstraint(
+            "id", "job_id", "stage_id", "attempt_id",
+            name="uq_workflow_artifact_execution_identity",
         ),
         Index("ix_workflow_artifacts_job_type", "job_id", "artifact_type"),
     )
