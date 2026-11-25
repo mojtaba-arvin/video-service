@@ -957,26 +957,21 @@ class WorkflowRepository:
     def list_webhook_delivery_history(
             self, job_id, principal, limit=50):
         """List a bounded, tenant-authorized webhook delivery event window."""
-        from video_streaming.security import (
-            AuthorizationError, authorize_tenant_resource,
-        )
         from video_streaming.security import require_scope
 
         require_scope(principal, "video.jobs:read")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100):
             raise ValueError("limit must be between 1 and 100")
+        self.authorize_job_access(job_id, principal, "video.jobs:read")
         event_types = (
             "WEBHOOK_DELIVERY_ATTEMPT_STARTED",
             "WEBHOOK_DELIVERY_ATTEMPT_SUCCEEDED",
             "WEBHOOK_DELIVERY_ATTEMPT_FAILED",
         )
         with self._session() as session:
-            job = session.get(JobRecord, job_id)
-            if job is None:
-                raise AuthorizationError("Resource not found or access denied")
-            authorize_tenant_resource(
-                principal, job.owner_tenant_id, "video.jobs:read"
-            )
             rows = session.execute(
                 select(WorkflowEventRecord)
                 .where(
