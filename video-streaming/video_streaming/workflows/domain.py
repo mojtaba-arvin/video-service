@@ -80,3 +80,11 @@ class StageAlreadyRunning(RuntimeError):
 
 class AttemptLeaseLost(RuntimeError):
     """Raised when a worker no longer owns a live durable attempt lease."""
+
+
+class TenantQuotaPolicyMissing(RuntimeError):
+    """Admission is enabled but the authenticated tenant has no policy."""
+
+
+class TenantQuotaExceeded(RuntimeError):
+    """The authenticated tenant has reached its active Job limit."""
