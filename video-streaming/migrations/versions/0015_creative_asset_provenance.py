@@ -263,7 +263,7 @@ def upgrade():
 
     op.execute("""
         CREATE FUNCTION workflow_guard_creative_provenance_header()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         BEGIN
             IF TG_OP = 'INSERT' THEN
                 IF NEW.is_sealed THEN
@@ -282,7 +282,7 @@ def upgrade():
             END IF;
             RAISE EXCEPTION 'creative asset provenance is immutable';
         END;
-        $ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_creative_asset_provenance_immutable
@@ -291,7 +291,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_require_creative_provenance_sealed()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         DECLARE
             current_sealed boolean;
         BEGIN
@@ -303,7 +303,7 @@ def upgrade():
             END IF;
             RETURN NULL;
         END;
-        $ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE CONSTRAINT TRIGGER trg_workflow_creative_provenance_must_be_sealed
@@ -313,7 +313,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_guard_creative_provenance_parent_insert()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         DECLARE
             child_asset_id varchar(36);
             header_sealed boolean;
@@ -351,7 +351,7 @@ def upgrade():
             END IF;
             RETURN NEW;
         END;
-        $ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_creative_provenance_parent_insert_guard
@@ -360,11 +360,11 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_creative_provenance_parent_mutation()
-        RETURNS trigger AS $
+        RETURNS trigger AS $fn$
         BEGIN
             RAISE EXCEPTION 'creative asset provenance is immutable';
         END;
-        $ LANGUAGE plpgsql
+        $fn$ LANGUAGE plpgsql
     """)
     op.execute("""
         CREATE TRIGGER trg_workflow_creative_asset_provenance_parents_immutable
@@ -373,7 +373,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_job_project_revision_pin_mutation()
-        RETURNS trigger AS $$
+        RETURNS trigger AS $fn$$
         BEGIN
             IF NEW.project_id IS DISTINCT FROM OLD.project_id
                OR NEW.project_revision_id IS DISTINCT FROM OLD.project_revision_id THEN
@@ -390,7 +390,7 @@ def upgrade():
     """)
     op.execute("""
         CREATE FUNCTION workflow_reject_stage_operation_contract_mutation()
-        RETURNS trigger AS $$
+        RETURNS trigger AS $fn$$
         BEGIN
             IF NEW.operation IS DISTINCT FROM OLD.operation
                OR NEW.operation_contract_version
