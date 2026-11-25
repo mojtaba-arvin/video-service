@@ -54,6 +54,9 @@ def _enable_controllers(path):
         )
 
 
+@unittest.skipUnless(
+    os.geteuid() == 0, "requires root and a delegated Linux cgroup v2 hierarchy"
+)
 class LinuxCgroupV2AcceptanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
