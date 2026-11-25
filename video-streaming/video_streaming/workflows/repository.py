@@ -719,6 +719,7 @@ class WorkflowRepository:
         if len(reason) > 1000:
             raise ValueError("reason must contain at most 1000 characters")
 
+        updated_at = utcnow()
         with self._session.begin() as session:
             policy = session.execute(
                 select(TenantJobQuotaPolicyRecord)
@@ -732,12 +733,12 @@ class WorkflowRepository:
                     tenant_id=tenant_id,
                     max_active_jobs=max_active_jobs,
                     policy_version=next_version,
-                    updated_at=utcnow(),
+                    updated_at=updated_at,
                 ))
             else:
                 policy.max_active_jobs = max_active_jobs
                 policy.policy_version = next_version
-                policy.updated_at = utcnow()
+                policy.updated_at = updated_at
             session.add(TenantJobQuotaAuditRecord(
                 id=new_id(),
                 tenant_id=tenant_id,
@@ -749,8 +750,12 @@ class WorkflowRepository:
                 policy_version=next_version,
                 created_at=utcnow(),
             ))
-        return {"tenant_id": tenant_id, "max_active_jobs": max_active_jobs,
-                "policy_version": next_version}
+        return {
+            "tenant_id": tenant_id,
+            "max_active_jobs": max_active_jobs,
+            "policy_version": next_version,
+            "updated_at": updated_at,
+        }
 
     @staticmethod
     def _canonical_project_content(content):
@@ -1021,6 +1026,46 @@ class WorkflowRepository:
                 }
                 for row in rows
             ]
+
+    def list_tenant_job_quota_audit_events(
+            self, operator_principal, tenant_id=None, limit=100):
+        """Return a bounded, explicitly scoped quota-policy audit history."""
+        from video_streaming.security import require_scope
+
+        require_scope(operator_principal, "video.tenant.quota.admin")
+        if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 1000):
+            raise ValueError("limit must be between 1 and 1000")
+        if tenant_id is not None:
+            if not isinstance(tenant_id, str) or not tenant_id.strip():
+                raise ValueError("tenant_id must be a non-empty string")
+            tenant_id = tenant_id.strip()
+            if len(tenant_id) > 255:
+                raise ValueError("tenant_id must contain at most 255 characters")
+
+        statement = select(TenantJobQuotaAuditRecord)
+        if tenant_id is not None:
+            statement = statement.where(
+                TenantJobQuotaAuditRecord.tenant_id == tenant_id
+            )
+        statement = statement.order_by(
+            TenantJobQuotaAuditRecord.created_at.desc(),
+            TenantJobQuotaAuditRecord.id.desc(),
+        ).limit(limit)
+        with self._session() as session:
+            rows = session.execute(statement).scalars().all()
+            return [{
+                "tenant_id": row.tenant_id,
+                "operator_issuer": row.operator_issuer,
+                "operator_subject": row.operator_subject,
+                "reason": row.reason,
+                "previous_max_active_jobs": row.previous_max_active_jobs,
+                "max_active_jobs": row.max_active_jobs,
+                "policy_version": row.policy_version,
+                "created_at": row.created_at,
+            } for row in rows]
 
     def find_idempotent_job(
             self, idempotency_key, request_hash, owner_principal=None):

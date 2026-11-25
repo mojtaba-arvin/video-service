@@ -80,6 +80,29 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(events[1].operator_subject, operator.subject)
         self.assertEqual(events[1].reason, "Approved capacity increase")
 
+        latest = self.repository.list_tenant_job_quota_audit_events(
+            operator, tenant_id=tenant, limit=1
+        )
+        self.assertEqual(len(latest), 1)
+        self.assertEqual(latest[0]["policy_version"], 2)
+        self.assertEqual(latest[0]["previous_max_active_jobs"], 3)
+        self.assertEqual(latest[0]["max_active_jobs"], 5)
+        self.assertEqual(latest[0]["reason"], "Approved capacity increase")
+        self.assertEqual(
+            len(self.repository.list_tenant_job_quota_audit_events(
+                operator, tenant_id=tenant, limit=10
+            )),
+            2,
+        )
+        with self.assertRaises(AuthorizationError):
+            self.repository.list_tenant_job_quota_audit_events(
+                self.make_owner_principal(), tenant_id=tenant
+            )
+        with self.assertRaises(ValueError):
+            self.repository.list_tenant_job_quota_audit_events(
+                operator, tenant_id=tenant, limit=1001
+            )
+
     def test_quota_provisioning_requires_operator_and_reason(self):
         with self.assertRaises(AuthorizationError):
             self.repository.provision_tenant_job_quota_policy(
