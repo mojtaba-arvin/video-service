@@ -23,10 +23,50 @@ def upgrade():
             server_default="1",
         ),
     )
+    op.add_column(
+        "workflow_jobs",
+        sa.Column("project_id", sa.String(length=36), nullable=True),
+    )
+    op.add_column(
+        "workflow_jobs",
+        sa.Column("project_revision_id", sa.String(length=36), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_workflow_job_project_tenant",
+        "workflow_jobs",
+        "workflow_creative_projects",
+        ["project_id", "owner_tenant_id"],
+        ["id", "tenant_id"],
+        ondelete="RESTRICT",
+    )
+    op.create_foreign_key(
+        "fk_workflow_job_project_revision_tenant",
+        "workflow_jobs",
+        "workflow_creative_project_revisions",
+        ["project_revision_id", "project_id", "owner_tenant_id"],
+        ["id", "project_id", "tenant_id"],
+        ondelete="RESTRICT",
+    )
+    op.create_check_constraint(
+        "ck_workflow_job_project_revision_pin_complete",
+        "workflow_jobs",
+        "(project_id IS NULL AND project_revision_id IS NULL) OR "
+        "(project_id IS NOT NULL AND project_revision_id IS NOT NULL)",
+    )
+    op.create_unique_constraint(
+        "uq_workflow_job_project_revision_pin",
+        "workflow_jobs",
+        ["id", "project_id", "project_revision_id", "owner_tenant_id"],
+    )
     op.create_unique_constraint(
         "uq_workflow_workflow_job_identity",
         "workflow_workflows",
         ["id", "job_id"],
+    )
+    op.create_unique_constraint(
+        "uq_workflow_job_project_revision_pin",
+        "workflow_jobs",
+        ["id", "project_id", "project_revision_id", "owner_tenant_id"],
     )
     op.create_unique_constraint(
         "uq_workflow_attempt_stage_identity",
@@ -99,6 +139,17 @@ def upgrade():
             ["job_id", "tenant_id"],
             ["workflow_jobs.id", "workflow_jobs.owner_tenant_id"],
             name="fk_workflow_creative_provenance_job_tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["job_id", "project_id", "project_revision_id", "tenant_id"],
+            [
+                "workflow_jobs.id",
+                "workflow_jobs.project_id",
+                "workflow_jobs.project_revision_id",
+                "workflow_jobs.owner_tenant_id",
+            ],
+            name="fk_workflow_creative_provenance_job_revision_pin",
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
@@ -232,6 +283,23 @@ def upgrade():
         FOR EACH ROW EXECUTE FUNCTION workflow_reject_creative_provenance_mutation()
     """)
     op.execute("""
+        CREATE FUNCTION workflow_reject_job_project_revision_pin_mutation()
+        RETURNS trigger AS $
+        BEGIN
+            IF NEW.project_id IS DISTINCT FROM OLD.project_id
+               OR NEW.project_revision_id IS DISTINCT FROM OLD.project_revision_id THEN
+                RAISE EXCEPTION 'Job ProjectRevision pin is immutable';
+            END IF;
+            RETURN NEW;
+        END;
+        $ LANGUAGE plpgsql
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_workflow_job_project_revision_pin_immutable
+        BEFORE UPDATE ON workflow_jobs
+        FOR EACH ROW EXECUTE FUNCTION workflow_reject_job_project_revision_pin_mutation()
+    """)
+    op.execute("""
         CREATE FUNCTION workflow_reject_stage_operation_contract_mutation()
         RETURNS trigger AS $$
         BEGIN
@@ -270,6 +338,11 @@ def downgrade():
             "Refusing to drop operation contract versions after they have advanced"
         )
 
+    op.execute(
+        "DROP TRIGGER trg_workflow_job_project_revision_pin_immutable "
+        "ON workflow_jobs"
+    )
+    op.execute("DROP FUNCTION workflow_reject_job_project_revision_pin_mutation()")
     op.execute(
         "DROP TRIGGER trg_workflow_stage_operation_contract_immutable "
         "ON workflow_stages"
@@ -324,4 +397,26 @@ def downgrade():
         "workflow_workflows",
         type_="unique",
     )
+    op.drop_constraint(
+        "uq_workflow_job_project_revision_pin",
+        "workflow_jobs",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "ck_workflow_job_project_revision_pin_complete",
+        "workflow_jobs",
+        type_="check",
+    )
+    op.drop_constraint(
+        "fk_workflow_job_project_revision_tenant",
+        "workflow_jobs",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "fk_workflow_job_project_tenant",
+        "workflow_jobs",
+        type_="foreignkey",
+    )
+    op.drop_column("workflow_jobs", "project_revision_id")
+    op.drop_column("workflow_jobs", "project_id")
     op.drop_column("workflow_stages", "operation_contract_version")
