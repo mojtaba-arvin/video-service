@@ -1395,7 +1395,6 @@ class WorkflowRepository:
                 "project_id": row.project_id,
                 "tenant_id": row.tenant_id,
                 "revision_number": row.revision_number,
-                "content": deepcopy(row.content_json),
                 "content_sha256": row.content_sha256,
                 "created_at": row.created_at,
             } for row in rows]
@@ -1725,10 +1724,12 @@ class WorkflowRepository:
             "sort_order": sort_order, "created_at": now,
         }
 
-    def list_creative_project_entities(self, project_id, principal):
+    def list_creative_project_entities(self, project_id, principal, limit=500):
         from video_streaming.security import AuthorizationError, require_scope
 
         require_scope(principal, "video.projects:read")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("entity limit must be between 1 and 1000")
         models = {
             "scenes": CreativeSceneRecord,
             "shots": CreativeShotRecord,
@@ -1751,6 +1752,7 @@ class WorkflowRepository:
                         model.project_id == project_id,
                         model.tenant_id == principal.tenant_id,
                     ).order_by(model.sort_order, model.created_at, model.id)
+                    .limit(limit)
                 ).scalars().all()
                 result[key] = [{
                     "id": row.id,
