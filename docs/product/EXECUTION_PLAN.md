@@ -1,7 +1,7 @@
 # Product execution plan
 
 - **Status:** Active product plan
-- **Baseline:** `c54f60a3c43acfecae4c68bc047a7e74fa417443` (merged PR #171)
+- **Baseline:** `8d196f36c113d60101cc8a7309efb56173f0db3e` (merged PR #172)
 - **Last reviewed:** 2026-11-25
 - **Parent backlog:** [Issue #54](https://github.com/mojtaba-arvin/video-service/issues/54)
 - **Planning rule:** Sequence by dependency and risk; execute independent workstreams in parallel.
@@ -154,7 +154,7 @@ Every parallel PR must name its owning issue, affected contracts, files/migratio
 
 ## 6. Current portfolio state and next execution order
 
-Baseline on `develop` as verified on 2026-11-24 (post-merge state):
+Baseline on `develop` as verified on 2026-11-25 (post-merge state):
 
 - **PR #151 merged** as `ead3c17de2f74223f25908f05f2600574b515b41`: transactional dispatch outbox, PostgreSQL Attempt leases/recovery, artifact handoff, KMS envelope secret storage and opt-in durable gRPC CreateJob path. CI and Dependency Review passed on the merged head. Durable dispatch remains disabled by default; live KMS/STS/IAM, legacy callback Job reconciliation and deployed broker redelivery remain release gates.
 - **PR #152 merged** as `0ec1a13a4e7a9c1ca2dfcfe1399761ea758a1c1b`: provider-neutral workload classification for typed operations, including `NETWORK_IO` webhook delivery.
@@ -164,7 +164,7 @@ Baseline on `develop` as verified on 2026-11-24 (post-merge state):
 - **PR #171 merged** as `c54f60a3c43acfecae4c68bc047a7e74fa417443`: native `clone3(CLONE_INTO_CGROUP)` admission enforces per-Attempt `pids.max` from process creation. The Linux acceptance job verifies CPU, memory/OOM, PID rejection, descendant termination and cleanup. Disk quotas and production delegated-root verification remain open.
 - **PR #157 merged** as `f75a332ef6a06d2230ef147f593b9e535e7b9f01`: full VOD + Redis/Celery recovery matrix on Python 3.9 and 3.12.
 - **PR #170 merged** as `6c375c52dc28d181c9d5ea69c291ceecd640044b`: atomic per-tenant active-Job admission uses the authenticated tenant for both legacy and durable CreateJob paths. The flag remains off until every tenant has an explicit policy; operator provisioning and policy-change audit history are not yet delivered.
-- **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Keep the issue open until a PR targeting `develop` demonstrates the exact required check is reported and enforced.
+- **Governance #148:** ruleset `Protect develop` now requires PRs and `Quality gates`, with no bypass actors. Issue #148 is closed; PR #171 demonstrated the required `Quality gates` check on a PR targeting `develop`.
 - **Security #73 remains partial**: OIDC gRPC authentication, request principals, scope checks, durable Job ownership, DNS-pinned SSRF-resistant webhook transport, bounded timeouts, redirect rejection, sensitive-log redaction, HMAC callback signing and atomic tenant quotas are merged. Quota policy provisioning/audit, bounded sender-side delivery-attempt history, receiver-side durable replay suppression, production issuer/audience/JWKS evidence and legacy-resource reconciliation remain open.
 - **Durable dispatch rollout remains disabled**: CI does not establish production KMS/STS/IAM policy, live S3 behavior, legacy callback migration or automatic broker redelivery in the deployed topology.
 
