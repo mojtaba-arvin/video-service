@@ -83,6 +83,23 @@ class JobRecord(Base):
     version = Column(Integer, nullable=False, default=1)
 
 
+class TenantJobQuotaPolicyRecord(Base):
+    """Provisioned per-tenant cap for active durable and legacy Jobs."""
+
+    __tablename__ = "workflow_tenant_job_quota_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "max_active_jobs >= 0",
+            name="ck_workflow_tenant_job_quota_nonnegative",
+        ),
+    )
+
+    tenant_id = Column(String(255), primary_key=True)
+    max_active_jobs = Column(Integer, nullable=False)
+    policy_version = Column(Integer, nullable=False, default=1)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class JobSecretRecord(Base):
     """Encrypted callback material bound to the exact durable Job owner."""
 
@@ -589,6 +606,42 @@ class WorkflowRepository:
     def close(self):
         self.engine.dispose()
 
+    def set_tenant_job_quota_policy(
+            self, tenant_id, max_active_jobs, policy_version=1):
+        """Provision or replace a tenant's admission policy.
+
+        This is an administrative operation; callers must authorize the
+        operator before invoking it. A zero limit intentionally suspends
+        new admissions for the tenant.
+        """
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("tenant_id must be a non-empty string")
+        if len(tenant_id) > 255:
+            raise ValueError("tenant_id must contain at most 255 characters")
+        if (
+                isinstance(max_active_jobs, bool)
+                or not isinstance(max_active_jobs, int)
+                or max_active_jobs < 0):
+            raise ValueError("max_active_jobs must be a nonnegative integer")
+        if (
+                isinstance(policy_version, bool)
+                or not isinstance(policy_version, int)
+                or policy_version < 1):
+            raise ValueError("policy_version must be a positive integer")
+        with self._session.begin() as session:
+            policy = session.get(TenantJobQuotaPolicyRecord, tenant_id.strip())
+            if policy is None:
+                session.add(TenantJobQuotaPolicyRecord(
+                    tenant_id=tenant_id.strip(),
+                    max_active_jobs=max_active_jobs,
+                    policy_version=policy_version,
+                    updated_at=utcnow(),
+                ))
+            else:
+                policy.max_active_jobs = max_active_jobs
+                policy.policy_version = policy_version
+                policy.updated_at = utcnow()
+
     def find_idempotent_job(
             self, idempotency_key, request_hash, owner_principal=None):
         """Return an existing accepted Job after enforcing idempotency ownership.
@@ -669,7 +722,8 @@ class WorkflowRepository:
             secret_envelopes=None,
             enqueue_dispatch=False,
             outbox_dedupe_key=None,
-            execution_backend=None):
+            execution_backend=None,
+            quota_enforcement_enabled=False):
         """Atomically create job, workflow, stages and optional owner/plan.
 
         owner_principal must be a trusted RequestPrincipal established by the
@@ -763,6 +817,8 @@ class WorkflowRepository:
             raise ValueError("execution_backend must contain 1 to 64 characters")
         if not isinstance(enqueue_dispatch, bool):
             raise TypeError("enqueue_dispatch must be a boolean")
+        if not isinstance(quota_enforcement_enabled, bool):
+            raise TypeError("quota_enforcement_enabled must be a boolean")
         if enqueue_dispatch and plan is None:
             raise ValueError(
                 "dispatch outbox requires a persisted immutable execution plan"
@@ -852,6 +908,105 @@ class WorkflowRepository:
                     # A legacy workflow without a plan remains legacy on replay;
                     # never mutate already-accepted work during a deployment.
                     return existing.id, False
+
+                # A policy-row lock serializes admissions for this tenant.
+                # Re-check idempotency after acquiring the lock: another
+                # identical request may have committed while this transaction
+                # waited, and a replay must not consume a second quota slot.
+                if owner_principal is not None and quota_enforcement_enabled:
+                    quota_policy = session.execute(
+                        select(TenantJobQuotaPolicyRecord).where(
+                            TenantJobQuotaPolicyRecord.tenant_id
+                            == owner_principal.tenant_id
+                        ).with_for_update()
+                    ).scalar_one_or_none()
+                    if quota_policy is None:
+                        from video_streaming.workflows.domain import (
+                            TenantQuotaPolicyMissing,
+                        )
+                        raise TenantQuotaPolicyMissing(
+                            "Tenant quota policy is not provisioned"
+                        )
+
+                    concurrent_existing = session.execute(
+                        select(JobRecord).where(
+                            JobRecord.idempotency_key == idempotency_key
+                        )
+                    ).scalar_one_or_none()
+                    if concurrent_existing is not None:
+                        if concurrent_existing.request_hash != request_hash:
+                            raise IdempotencyConflict(
+                                "Idempotency key was already used with a different request"
+                            )
+                        if (
+                                concurrent_existing.owner_tenant_id
+                                != owner_principal.tenant_id
+                                or concurrent_existing.owner_issuer
+                                != owner_principal.issuer
+                                or concurrent_existing.owner_subject
+                                != owner_principal.subject):
+                            from video_streaming.security import AuthorizationError
+                            raise AuthorizationError(
+                                "Resource not found or access denied"
+                            )
+                        concurrent_workflow = session.execute(
+                            select(WorkflowRecord).where(
+                                WorkflowRecord.job_id == concurrent_existing.id
+                            )
+                        ).scalar_one()
+                        replay_plan = None
+                        if plan is not None:
+                            replay_plan = deepcopy(plan)
+                            replay_plan["job_id"] = concurrent_existing.id
+                            self._rebind_webhook_secret_references(
+                                session, concurrent_existing.id, replay_plan
+                            )
+                        replay_fingerprint = (
+                            execution_plan_sha256(replay_plan)
+                            if replay_plan is not None else None
+                        )
+                        if (
+                                replay_fingerprint is not None
+                                and concurrent_workflow.execution_plan_fingerprint
+                                is not None
+                                and concurrent_workflow.execution_plan_fingerprint
+                                != replay_fingerprint):
+                            raise IdempotencyConflict(
+                                "Idempotency key resolves to a different execution plan"
+                            )
+                        for envelope in secret_envelopes:
+                            active_secret = session.execute(
+                                select(JobSecretRecord).where(
+                                    JobSecretRecord.job_id == concurrent_existing.id,
+                                    JobSecretRecord.purpose == envelope.context.purpose,
+                                    JobSecretRecord.status == "ACTIVE",
+                                    JobSecretRecord.deleted_at.is_(None),
+                                    (JobSecretRecord.expires_at.is_(None)
+                                     | (JobSecretRecord.expires_at > utcnow())),
+                                )
+                            ).scalar_one_or_none()
+                            if active_secret is None:
+                                raise IdempotencyConflict(
+                                    "Idempotent replay cannot add or replace a Job secret"
+                                )
+                        return concurrent_existing.id, False
+
+                    active_jobs = session.execute(
+                        select(func.count()).select_from(JobRecord).where(
+                            JobRecord.owner_tenant_id == owner_principal.tenant_id,
+                            JobRecord.state.in_([
+                                JobState.QUEUED.value,
+                                JobState.RUNNING.value,
+                            ]),
+                        )
+                    ).scalar_one()
+                    if active_jobs >= quota_policy.max_active_jobs:
+                        from video_streaming.workflows.domain import (
+                            TenantQuotaExceeded,
+                        )
+                        raise TenantQuotaExceeded(
+                            "Tenant active Job quota has been reached"
+                        )
 
                 # Validate the candidate identity only after idempotency
                 # lookup. Replays may carry a newly generated candidate Job ID;

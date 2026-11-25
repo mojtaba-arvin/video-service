@@ -607,7 +607,7 @@ jobs:
               with connection.cursor() as cursor:
                   cursor.execute("SELECT version_num FROM alembic_version")
                   revisions = [row[0] for row in cursor.fetchall()]
-                  if revisions != ["0010_workflow_stage_dependencies"]:
+                  if revisions != ["0011_tenant_job_quotas"]:
                       raise SystemExit(
                           "Re-upgrade did not reach the expected head: {!r}".format(
                               revisions

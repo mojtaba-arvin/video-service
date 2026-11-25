@@ -61,7 +61,7 @@ dependency edges (PR #160). The PostgreSQL CI lane now also creates a separate,
 empty rehearsal database and executes the complete Alembic chain:
 `upgrade head → downgrade base → upgrade head`. It verifies that representative
 workflow tables are absent at base and that the final revision is
-`0010_workflow_stage_dependencies`. This proves empty-database schema-chain
+`0011_tenant_job_quotas`. This proves empty-database schema-chain
 reversibility on PostgreSQL; it does **not** prove rollback with populated
 production data, deployment rollback safety, or application compatibility with
 a downgraded schema. Prefer rolling application components back while

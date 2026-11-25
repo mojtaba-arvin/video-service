@@ -158,6 +158,24 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
                 "SELECT to_regclass('pg_temp.workflow_outbox') IS NULL",
             ),
             (
+                "0011_tenant_job_quotas.py",
+                [
+                    """CREATE TEMP TABLE workflow_tenant_job_quota_policies (
+                        tenant_id varchar(255) PRIMARY KEY,
+                        max_active_jobs integer NOT NULL,
+                        policy_version integer NOT NULL,
+                        updated_at timestamptz NOT NULL,
+                        CONSTRAINT ck_workflow_tenant_job_quota_nonnegative
+                        CHECK (max_active_jobs >= 0)
+                    )""",
+                ],
+                "INSERT INTO workflow_tenant_job_quota_policies "
+                "VALUES ('tenant-a', 3, 1, CURRENT_TIMESTAMP)",
+                "tenant quota policies",
+                "DELETE FROM workflow_tenant_job_quota_policies",
+                "SELECT to_regclass('pg_temp.workflow_tenant_job_quota_policies') IS NULL",
+            ),
+            (
                 "0010_workflow_stage_dependencies.py",
                 [
                     """CREATE TEMP TABLE workflow_stages (
