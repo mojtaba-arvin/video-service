@@ -1,8 +1,8 @@
-"""Fail-closed KMS and IAM integration for workflow callback secrets.
+"""Fail-closed KMS and IAM integration for workflow webhook secrets.
 
-Call resolve_job_webhook_secret only inside a trusted worker process. The
-returned URL exists only in that process's memory and must never be written
-to Redis, task arguments, logs, or durable result metadata.
+Resolve callback destinations and signing keys only inside a trusted worker
+process. Plaintext values exist only in that process's memory and must never
+be written to Redis, task arguments, logs, or durable result metadata.
 """
 from functools import lru_cache
 

@@ -156,10 +156,30 @@ class JobSecretRepositoryTests(unittest.TestCase):
             owner_principal=self.principal,
             secret_envelopes=[callback, signing],
         )
-        for purpose, envelope in (("webhook.callback", callback), ("webhook.signing", signing)):
-            stored = self.repository.get_job_secret_envelope(job_id, self.principal, purpose)
+        worker = WorkflowWorkerIdentity(
+            account_id="123456789012",
+            arn=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/worker-1"
+            ),
+            role_arn_prefix=(
+                "arn:aws:sts::123456789012:assumed-role/"
+                "video-workflow-worker/"
+            ),
+        )
+        for purpose, envelope, expected in (
+            ("webhook.callback", callback, "https://callback.invalid/hook"),
+            ("webhook.signing", signing, "s" * 48),
+        ):
+            stored = self.repository.get_job_secret_envelope_for_worker(
+                job_id, worker, purpose, envelope.secret_id
+            )
             self.assertEqual(stored.secret_id, envelope.secret_id)
             self.assertEqual(stored.context.purpose, purpose)
+            self.assertEqual(
+                resolve_secret(stored, envelope.context, self.provider),
+                expected,
+            )
 
     def test_secret_write_requires_authenticated_owner_and_exact_scope(self):
         job_id = str(uuid4())

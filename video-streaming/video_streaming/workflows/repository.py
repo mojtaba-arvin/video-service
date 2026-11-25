@@ -1500,7 +1500,7 @@ class WorkflowRepository:
 
         if not isinstance(worker_identity, WorkflowWorkerIdentity):
             raise AuthorizationError("Workflow worker identity is required")
-        if purpose != "webhook.callback":
+        if purpose not in ("webhook.callback", "webhook.signing"):
             raise ValueError("unsupported Job secret purpose")
         if (
                 not isinstance(secret_id, str)
