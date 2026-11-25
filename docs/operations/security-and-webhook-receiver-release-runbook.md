@@ -40,7 +40,7 @@ Do not place client secrets, private keys, bearer tokens or signed test tokens i
 
 ## Gate 1 — operator identity and least privilege
 
-The quota-administration RPCs require the verified principal to carry the exact scope `video.tenant.quota.admin`. The target tenant, cap and mandatory reason are request data; operator issuer and subject are derived from the verified token and persisted in the audit record.
+The quota-administration RPCs require the verified principal to carry the exact scope `video.tenant.quota.admin`. The public creative Project API separately uses `video.projects:create`, `video.projects:read` and `video.projects:write`; grant these only to tenant-scoped application identities that need Project/Revision or typed-entity access. The target tenant, cap and mandatory reason are request data; operator issuer and subject are derived from the verified token and persisted in the audit record.
 
 Create a dedicated operator identity or tightly controlled operator group:
 
