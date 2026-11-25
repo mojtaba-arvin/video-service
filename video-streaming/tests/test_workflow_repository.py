@@ -24,7 +24,8 @@ from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
     StageDependencyRecord, TenantJobQuotaPolicyRecord, TenantJobQuotaAuditRecord,
-    CreativeSceneRecord, CreativeProjectRevisionReferenceRecord, utcnow
+    CreativeSceneRecord, CreativeAssetRecord,
+    CreativeProjectRevisionReferenceRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -367,6 +368,20 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 owner,
             )
 
+        empty_revision = self.repository.create_creative_project_revision(
+            first["id"], {"title": "DB constraint target"}, owner
+        )
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                session.add(CreativeProjectRevisionReferenceRecord(
+                    id=str(uuid4()),
+                    revision_id=empty_revision["id"],
+                    project_id=first["id"],
+                    tenant_id=tenant,
+                    scene_id=foreign_scene["id"],
+                    created_at=utcnow(),
+                ))
+
     def test_creative_asset_rejects_artifact_owned_by_another_tenant(self):
         owner = self.make_owner_principal(
             tenant="creative-asset-owner-" + str(uuid4()),
@@ -400,6 +415,23 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.repository.create_creative_asset(
                 project["id"], artifact_id, "Foreign asset", "image", owner
             )
+        with self.assertRaises(DBAPIError):
+            with self.repository._session.begin() as session:
+                session.add(CreativeAssetRecord(
+                    id=str(uuid4()),
+                    project_id=project["id"],
+                    tenant_id=owner.tenant_id,
+                    artifact_id=artifact_id,
+                    source_job_id=job_id,
+                    name="Invalid cross-tenant asset",
+                    asset_type="image",
+                    content_sha256="d" * 64,
+                    sort_order=0,
+                    created_by_issuer=owner.issuer,
+                    created_by_subject=owner.subject,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                ))
 
     def test_creative_project_revisions_are_tenant_scoped_canonical_and_immutable(self):
         owner = self.make_owner_principal(
