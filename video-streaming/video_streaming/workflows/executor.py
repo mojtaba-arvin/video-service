@@ -38,6 +38,12 @@ class NodeExecutionContext:
     input_artifacts: dict = None
 
 
+class OperationContractVersionMismatch(RuntimeError):
+    """The worker cannot safely execute a Stage pinned to another contract."""
+
+    retryable = False
+
+
 class WorkflowNodeExecutor:
     """Execute one persisted node after its dependencies and lease are checked."""
 
@@ -137,12 +143,8 @@ class WorkflowNodeExecutor:
         if stage.get("status") == "FINISHED":
             return {"status": "already_completed", "node_id": node_id}
         contract = OPERATION_CONTRACTS.get(operation)
-        if (
-                contract is None
-                or stage.get("operation_contract_version") != contract.version):
-            raise ValueError(
-                "persisted Stage operation contract version is not supported by this worker"
-            )
+        if contract is None:
+            raise ValueError("workflow operation contract is not registered")
         input_artifacts = self.repository.get_dependency_artifacts(
             job_id, node_id
         )
@@ -230,6 +232,10 @@ class WorkflowNodeExecutor:
             )
             with scope as cgroup:
                 try:
+                    if stage.get("operation_contract_version") != contract.version:
+                        raise OperationContractVersionMismatch(
+                            "persisted Stage operation contract version is not supported by this worker"
+                        )
                     result = self.handlers[operation](node, context)
                 finally:
                     # Read kernel counters before the scope removes its cgroup.
