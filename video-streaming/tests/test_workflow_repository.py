@@ -16,11 +16,13 @@ from video_streaming.workflows.domain import (
     StageAlreadyRunning,
     StageState,
     JobState,
+    TenantQuotaExceeded,
+    TenantQuotaPolicyMissing,
 )
 from video_streaming.workflows.repository import (
     WorkflowRepository, WorkflowRecord, JobRecord, AttemptRecord,
     ArtifactRecord, WorkflowEventRecord, StageRecord, OutboxRecord,
-    StageDependencyRecord, utcnow
+    StageDependencyRecord, TenantJobQuotaPolicyRecord, utcnow
 )
 from video_streaming.security import RequestPrincipal, AuthorizationError
 from video_streaming.workflows.execution_plan import execution_plan_sha256
@@ -3307,6 +3309,118 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertNotIn("lease_token_hash", serialized_snapshot)
         self.assertEqual(snapshot["attempts"][0]["id"], attempt_id)
 
+
+
+    def test_tenant_quota_fails_closed_without_policy_and_zero_disables_admission(self):
+        principal = self.make_owner_principal(tenant="quota-missing")
+        with self.assertRaises(TenantQuotaPolicyMissing):
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key="quota-missing-" + str(uuid4()),
+                request_hash="q" * 64,
+                owner_principal=principal,
+                quota_enforcement_enabled=True,
+            )
+
+        self.repository.set_tenant_job_quota_policy("quota-zero", 0)
+        with self.assertRaises(TenantQuotaExceeded):
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key="quota-zero-" + str(uuid4()),
+                request_hash="z" * 64,
+                owner_principal=self.make_owner_principal(tenant="quota-zero"),
+                quota_enforcement_enabled=True,
+            )
+
+    def test_tenant_quota_counts_nonterminal_jobs_and_releases_on_terminal_state(self):
+        tenant = "quota-lifecycle-" + str(uuid4())
+        principal = self.make_owner_principal(tenant=tenant)
+        self.repository.set_tenant_job_quota_policy(tenant, 1)
+        idempotency_key = "quota-first-" + str(uuid4())
+        job_id = str(uuid4())
+        self.assertEqual(
+            self.repository.create_job(
+                job_id=job_id,
+                idempotency_key=idempotency_key,
+                request_hash="a" * 64,
+                owner_principal=principal,
+                quota_enforcement_enabled=True,
+            ),
+            (job_id, True),
+        )
+
+        # Replays do not consume another slot, even at the quota boundary.
+        self.assertEqual(
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key=idempotency_key,
+                request_hash="a" * 64,
+                owner_principal=principal,
+                quota_enforcement_enabled=True,
+            ),
+            (job_id, False),
+        )
+        with self.assertRaises(TenantQuotaExceeded):
+            self.repository.create_job(
+                job_id=str(uuid4()),
+                idempotency_key="quota-second-" + str(uuid4()),
+                request_hash="b" * 64,
+                owner_principal=principal,
+                quota_enforcement_enabled=True,
+            )
+
+        with self.repository._session.begin() as session:
+            job = session.get(JobRecord, job_id)
+            job.state = JobState.FINISHED.value
+
+        second_id = str(uuid4())
+        self.assertEqual(
+            self.repository.create_job(
+                job_id=second_id,
+                idempotency_key="quota-after-terminal-" + str(uuid4()),
+                request_hash="c" * 64,
+                owner_principal=principal,
+                quota_enforcement_enabled=True,
+            ),
+            (second_id, True),
+        )
+
+    def test_concurrent_tenant_admissions_cannot_exceed_policy(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        tenant = "quota-race-" + str(uuid4())
+        principal = self.make_owner_principal(tenant=tenant)
+        self.repository.set_tenant_job_quota_policy(tenant, 1)
+        barrier = Barrier(2)
+
+        def submit(index):
+            barrier.wait(timeout=10)
+            try:
+                return self.repository.create_job(
+                    job_id=str(uuid4()),
+                    idempotency_key="quota-race-{}-{}".format(tenant, index),
+                    request_hash=str(index) * 64,
+                    owner_principal=principal,
+                    quota_enforcement_enabled=True,
+                )
+            except TenantQuotaExceeded:
+                return "rejected"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(submit, (1, 2)))
+        self.assertEqual(sum(result != "rejected" for result in results), 1)
+        self.assertEqual(results.count("rejected"), 1)
+        with self.repository._session() as session:
+            active = session.execute(
+                select(func.count()).select_from(JobRecord).where(
+                    JobRecord.owner_tenant_id == tenant,
+                    JobRecord.state.in_([
+                        JobState.QUEUED.value, JobState.RUNNING.value,
+                    ]),
+                )
+            ).scalar_one()
+        self.assertEqual(active, 1)
 
 
 
