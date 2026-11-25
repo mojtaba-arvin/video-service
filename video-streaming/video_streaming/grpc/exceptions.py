@@ -76,3 +76,17 @@ class WebhookSigningSecretInvalidException(GrpcBaseException):
 
     status_code = grpc.StatusCode.INVALID_ARGUMENT
     message = "Webhook signing secret is invalid"
+
+
+class TenantJobQuotaExceededException(GrpcBaseException):
+    """The authenticated tenant has no remaining active Job capacity."""
+
+    status_code = grpc.StatusCode.RESOURCE_EXHAUSTED
+    message = "Tenant active Job quota has been reached"
+
+
+class TenantQuotaPolicyMissingException(GrpcBaseException):
+    """Quota enforcement is enabled but tenant policy provisioning is incomplete."""
+
+    status_code = grpc.StatusCode.FAILED_PRECONDITION
+    message = "Tenant quota policy is not provisioned"
