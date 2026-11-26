@@ -7,22 +7,31 @@ from video_streaming.workflows.application import GetJobStatusService
 class GetJobStatusServiceTests(unittest.TestCase):
     def setUp(self):
         self.repository = Mock()
-        self.principal = Mock(tenant_id="tenant-a", issuer="issuer-a", subject="subject-a")
+        self.principal = Mock(
+            tenant_id="tenant-a", issuer="issuer-a", subject="subject-a"
+        )
 
     def test_authorizes_entire_batch_before_loading_any_snapshot(self):
         events = []
         self.repository.authorize_job_access.side_effect = (
-            lambda job_id, principal, scope: events.append(("authorize", job_id))
+            lambda job_id, principal, scope: events.append(
+                ("authorize", job_id)
+            )
         )
         self.repository.get_job_snapshot.side_effect = (
-            lambda job_id: events.append(("snapshot", job_id)) or {"id": job_id}
+            lambda job_id: (
+                events.append(("snapshot", job_id)) or {"id": job_id}
+            )
         )
 
         result = GetJobStatusService(self.repository).execute(
             ["job-a", "job-b"], self.principal
         )
 
-        self.assertEqual(result, {"job-a": {"id": "job-a"}, "job-b": {"id": "job-b"}})
+        self.assertEqual(
+            result,
+            {"job-a": {"id": "job-a"}, "job-b": {"id": "job-b"}},
+        )
         self.assertEqual(
             events,
             [
