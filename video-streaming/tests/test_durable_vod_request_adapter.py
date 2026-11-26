@@ -287,7 +287,7 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
             "video_streaming.grpc.servicers.mixins.create_job.get_request_principal",
             return_value=principal,
         ), patch(
-            "video_streaming.grpc.servicers.mixins.create_job.require_scope"
+            "video_streaming.workflows.application.require_scope"
         ), patch(
             "video_streaming.grpc.servicers.mixins.create_job.get_workflow_repository",
             return_value=repository,
@@ -334,7 +334,7 @@ class DurableVODRequestAdapterTests(unittest.TestCase):
             "video_streaming.grpc.servicers.mixins.create_job.get_request_principal",
             return_value=principal,
         ), patch(
-            "video_streaming.grpc.servicers.mixins.create_job.require_scope"
+            "video_streaming.workflows.application.require_scope"
         ), patch(
             "video_streaming.grpc.servicers.mixins.create_job.get_workflow_repository",
             return_value=repository,
