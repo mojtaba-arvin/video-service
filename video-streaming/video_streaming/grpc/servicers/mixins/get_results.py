@@ -580,6 +580,8 @@ class GetResultsMixin(object):
         # Authorize the complete batch and load durable snapshots in the
         # application layer before reading any Redis projection.
         request_ids = tuple(request.tracking_ids)
+        if not request_ids:
+            return self.pb2.JobsResultsResponse(results=[])
         repository = get_workflow_repository(required=True)
         try:
             snapshots = GetJobStatusService(repository).execute(
