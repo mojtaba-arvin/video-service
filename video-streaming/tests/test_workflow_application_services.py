@@ -9,7 +9,9 @@ from video_streaming.workflows.application import (
 
 class SubmitJobServiceTests(unittest.TestCase):
     def setUp(self):
-        self.principal = Mock(tenant_id="tenant-a", issuer="issuer-a", subject="subject-a")
+        self.principal = Mock(
+            tenant_id="tenant-a", issuer="issuer-a", subject="subject-a"
+        )
         self.repository = Mock()
         self.command = SubmitJobCommand(
             job_id="job-new",
@@ -29,7 +31,9 @@ class SubmitJobServiceTests(unittest.TestCase):
         )
 
     @patch("video_streaming.workflows.application.require_scope")
-    def test_existing_idempotent_job_is_returned_without_creating_another(self, require_scope):
+    def test_existing_idempotent_job_is_returned_without_creating_another(
+        self, require_scope
+    ):
         self.repository.find_idempotent_job.return_value = "job-existing"
 
         result = SubmitJobService(self.repository).execute(self.command)
@@ -40,7 +44,9 @@ class SubmitJobServiceTests(unittest.TestCase):
         self.repository.create_job.assert_not_called()
 
     @patch("video_streaming.workflows.application.require_scope")
-    def test_new_job_is_persisted_with_dispatch_and_security_options(self, require_scope):
+    def test_new_job_is_persisted_with_dispatch_and_security_options(
+        self, require_scope
+    ):
         self.repository.find_idempotent_job.return_value = None
         self.repository.create_job.return_value = ("job-new", True)
 
@@ -79,7 +85,9 @@ class SubmitJobServiceTests(unittest.TestCase):
         )
 
     @patch("video_streaming.workflows.application.require_scope")
-    def test_partial_project_reference_is_rejected_before_repository_access(self, require_scope):
+    def test_partial_project_reference_is_rejected_before_repository_access(
+        self, require_scope
+    ):
         command = SubmitJobCommand(
             **{**self.command.__dict__, "project_id": "project-a"}
         )
