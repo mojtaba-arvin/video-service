@@ -91,6 +91,28 @@ class SubmitJobServiceTests(unittest.TestCase):
         self.repository.create_job.assert_not_called()
 
     @patch("video_streaming.workflows.application.require_scope")
+    def test_durable_dispatch_configuration_is_passed_through(self, require_scope):
+        self.repository.find_idempotent_job.return_value = None
+        self.repository.create_job.return_value = ("job-new", True)
+        command = SubmitJobCommand(
+            **{
+                **self.command.__dict__,
+                "execution_backend": "durable_vod_v1",
+                "enqueue_dispatch": True,
+                "outbox_dedupe_key": "workflow.dispatch:job-new",
+            }
+        )
+
+        SubmitJobService(self.repository).execute(command)
+
+        kwargs = self.repository.create_job.call_args.kwargs
+        self.assertEqual(kwargs["execution_backend"], "durable_vod_v1")
+        self.assertTrue(kwargs["enqueue_dispatch"])
+        self.assertEqual(
+            kwargs["outbox_dedupe_key"], "workflow.dispatch:job-new"
+        )
+
+    @patch("video_streaming.workflows.application.require_scope")
     def test_scope_failure_prevents_repository_access(self, require_scope):
         require_scope.side_effect = PermissionError("denied")
 
