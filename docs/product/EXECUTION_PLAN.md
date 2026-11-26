@@ -294,7 +294,8 @@ This checkpoint incorporates the merges completed after the earlier baseline abo
 - **PR #184 — creative Asset provenance:** immutable source lineage, exact Job ProjectRevision pins and sealed database-enforced parent relationships.
 - **PR #187 — public creative Project API:** authenticated tenant-scoped Project/Revision and typed Scene/Shot/Character/Asset gRPC operations. No deletion API or retention automation.
 - **PR #189 — runtime configuration boundary:** OIDC issuer/audience/JWKS are supplied by the deployed identity provider; the repository has no deployment workflow or declared GitHub Environment. Do not use `gh variable set` as a substitute for configuring the running service.
-- **PR #190 — Keycloak reference IdP decision:** ADR 0010 selects Keycloak 26.6+ Organizations for the reference deployment profile. This is a provider selection only, not a provisioned IdP or production-ready trust configuration. Keycloak's organization claim is an object; a tested mapping must emit exactly one selected immutable organization ID as the service's top-level string `tenant_id`. Never use `organization:*` for tenant-scoped API tokens.
+- **PR #190 — Keycloak reference IdP decision:** ADR 0010 selects Keycloak 26.6+ Organizations for the reference deployment profile. This is a provider selection only, not a provisioned IdP or production-ready trust configuration. Never use `organization:*` for tenant-scoped API tokens.
+- **PR #192 — native Keycloak organization tenant claims:** the OIDC verifier accepts `OIDC_TENANT_CLAIM=organization`, derives the principal's tenant ID from the immutable `id` in exactly one selected organization, and rejects missing, malformed, ID-less or multi-organization claims. Configure the Organization Membership mapper's Add organization id option; no custom mapper/SPI is required. Quota-admin authorization uses the exact `video.tenant.quota.admin` scope, not the informational `roles` claim. PR #192 merged as `31795c5e3b8b584b093bc689d16890e7a1d4f5a3`; CI and Dependency Review passed.
 
 Issue #74 is closed after the supported Python 3.12 runtime and compatibility work. Its remaining production-shaped staging verification is tracked under #71.
 
@@ -320,5 +321,5 @@ Issue #74 is closed after the supported Python 3.12 runtime and compatibility wo
 - `WORKFLOW_DURABLE_DISPATCH_ENABLED=false`
 - `ATTEMPT_CGROUP_V2_ENABLED=false` until production worker delegation is verified
 - `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until all active tenants and legacy ownership are reconciled
-- No production OIDC activation until the selected IdP supplies exact trust metadata and the Keycloak organization-to-`tenant_id` mapping is tested
+- No production OIDC activation until the selected IdP supplies exact trust metadata and real tokens verify the configured `organization` claim, immutable organization ID, issuer, audience and JWKS behavior
 - No retention/deletion automation until customer/legal policy is approved
