@@ -20,6 +20,10 @@ from video_streaming.ffmpeg.constants import VideoEncodingFormats, \
 from video_streaming.grpc import exceptions
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.workflows.service import get_workflow_repository
+from video_streaming.workflows.application import (
+    SubmitJobCommand,
+    SubmitJobService,
+)
 from video_streaming.grpc.authentication import get_request_principal
 from video_streaming.security import require_scope
 
@@ -435,13 +439,6 @@ class CreateJobMixin(object):
 
     def _create_job(self, request, context):
         principal = get_request_principal()
-        require_scope(principal, "video.jobs:create")
-        if bool(request.project_id) != bool(request.project_revision_id):
-            raise ValueError(
-                "project_id and project_revision_id must be supplied together"
-            )
-        if request.project_revision_id:
-            require_scope(principal, "video.projects:read")
         request_id: str = str(uuid.uuid4())
         logger.info(
             "Accepted video job",
@@ -639,12 +636,6 @@ class CreateJobMixin(object):
         ).hexdigest()
         client_idempotency_key = request.idempotency_key.strip()
         durable_idempotency_key = client_idempotency_key or request_id
-        existing_job_id = get_workflow_repository().find_idempotent_job(
-            durable_idempotency_key, request_hash, owner_principal=principal
-        )
-        if existing_job_id is not None:
-            return self._job_response(existing_job_id)
-
         # Encrypt callback material before opening the Job transaction. Only
         # the opaque reference enters the immutable plan; ciphertext is
         # persisted atomically with Job/Workflow/Stages by create_job().
@@ -706,13 +697,14 @@ class CreateJobMixin(object):
             webhook_signing_secret_ref=webhook_signing_secret_ref,
         )
 
-        persisted_request_id, is_new_job = (
-            get_workflow_repository().create_job(
+        submission = SubmitJobService(
+            get_workflow_repository()
+        ).execute(
+            SubmitJobCommand(
                 job_id=request_id,
                 idempotency_key=durable_idempotency_key,
                 request_hash=request_hash,
                 reference_id=request.reference_id,
-                workflow_name="video.vod",
                 execution_plan=execution_plan,
                 execution_backend=(
                     "durable_vod_v1" if
@@ -724,7 +716,7 @@ class CreateJobMixin(object):
                     "workflow.dispatch:{}".format(request_id)
                     if settings.WORKFLOW_DURABLE_DISPATCH_ENABLED else None
                 ),
-                owner_principal=principal,
+                principal=principal,
                 project_id=request.project_id or None,
                 project_revision_id=request.project_revision_id or None,
                 secret_envelopes=webhook_envelopes,
@@ -740,8 +732,6 @@ class CreateJobMixin(object):
                         )
                         for node in execution_plan["nodes"]
                     ),
-                    # Persist non-secret result metadata so the status API can
-                    # reconstruct durable job/output state after Redis expires.
                     "result_details": {
                         "reference_id": request.reference_id,
                         "total_checks": len(first_level) + len(second_level),
@@ -760,6 +750,8 @@ class CreateJobMixin(object):
                 },
             )
         )
+        persisted_request_id = submission.job_id
+        is_new_job = submission.created
         if not is_new_job:
             return self._job_response(persisted_request_id)
 
