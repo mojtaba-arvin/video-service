@@ -1,6 +1,8 @@
 import unittest
-from unittest.mock import Mock, call
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
+from video_streaming.grpc.servicers.mixins.get_results import GetResultsMixin
 from video_streaming.workflows.application import GetJobStatusService
 
 
@@ -61,6 +63,26 @@ class GetJobStatusServiceTests(unittest.TestCase):
             )
 
         self.repository.get_job_snapshot.assert_not_called()
+
+    @patch(
+        "video_streaming.grpc.servicers.mixins.get_results."
+        "get_workflow_repository"
+    )
+    def test_empty_grpc_status_batch_does_not_require_repository(
+        self, get_repository
+    ):
+        mixin = GetResultsMixin()
+        mixin.pb2 = Mock()
+        response = object()
+        mixin.pb2.JobsResultsResponse.return_value = response
+
+        result = mixin._get_results(
+            SimpleNamespace(tracking_ids=[]), context=None
+        )
+
+        self.assertIs(result, response)
+        mixin.pb2.JobsResultsResponse.assert_called_once_with(results=[])
+        get_repository.assert_not_called()
 
     def test_empty_batch_does_not_touch_repository(self):
         self.assertEqual(
