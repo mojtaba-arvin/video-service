@@ -88,6 +88,9 @@ class DeliveryEventContractTests(unittest.TestCase):
     def test_rejects_invalid_metrics_and_cache_status(self):
         for values in (
             {"cache_status": "PRIVATE"},
+            {"cache_status": []},
+            {"schema_version": "1"},
+            {"schema_version": 1.0},
             {"http_status": 99},
             {"http_status": True},
             {"response_time_ms": -1},
