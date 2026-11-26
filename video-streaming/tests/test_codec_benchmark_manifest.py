@@ -5,16 +5,42 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.benchmark_codecs import BenchmarkError, load_manifest, sha256_file
+from scripts.benchmark_codecs import (
+    BenchmarkError,
+    load_manifest,
+    probe_media,
+    sha256_file,
+)
 
 
 class CodecBenchmarkManifestTests(unittest.TestCase):
+
+    @patch("scripts.benchmark_codecs.run_command")
+    def test_probe_media_returns_container_bitrate(self, run_command):
+        run_command.return_value = Mock(stdout=json.dumps({
+            "streams": [{
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "25/1",
+                "codec_name": "h264",
+            }],
+            "format": {
+                "duration": "12.0",
+                "bit_rate": "4500000",
+            },
+        }))
+
+        result = probe_media("ffprobe", "/tmp/reference.mp4", 30)
+
+        self.assertEqual(result["bit_rate"], 4500000)
+        self.assertEqual(result["duration_seconds"], 12.0)
 
     def test_manifest_resolves_sources_and_records_content_hashes(self):
         with tempfile.TemporaryDirectory(prefix="codec-benchmark-manifest-") as directory:
