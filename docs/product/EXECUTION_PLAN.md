@@ -309,7 +309,7 @@ Issue #74 is closed after the supported Python 3.12 runtime and compatibility wo
 
 ### Revised product execution order
 
-- **Parallel engineering lane 1 — #76 application-service extraction before MCP:** do not implement the MCP server yet. The current `OperationRequest`/`OperationResult`/`OperationError` types are DTO contracts, not reusable use cases; `CreateJobMixin._create_job` still combines protobuf validation, Celery Canvas construction and dispatch, while status/cancel remain in gRPC mixins. First extract versioned submit/status/cancel application services with an explicit principal, shared authorization/quota/audit boundary and dispatcher port; make gRPC consume those same services and add contract tests. Only then add the MCP adapter. Public MCP exposure remains blocked until production OIDC/runtime acceptance.
+- **Parallel engineering lane 1 — #76 application-service extraction before MCP:** PR #196 has now extracted authenticated Job submission, scope checks, ProjectRevision authorization, idempotency and durable repository creation into `SubmitJobService`; gRPC retains protobuf mapping, Redis response metadata and the legacy Celery adapter. This is the first slice only. Status still combines durable snapshots with Redis projections in `GetResultsMixin`; cancellation currently authorizes through the durable repository but performs legacy Redis/Celery signaling without a durable Job cancellation transition. Extract status read/authorization next. Before extracting cancellation or exposing MCP, define a durable cancellation state transition and worker/relay cancellation semantics so a durable Job cannot remain RUNNING after a successful-looking revoke response. Keep MCP deferred until submit/status/cancel share tested application contracts and production OIDC/runtime acceptance is proven.
 - **Parallel engineering lane 2 — #82 CDN/QoE correlation:** PR #194 has merged the pure normalized `DeliveryEvent` contract and deterministic fingerprint tests. Next select a real CDN log source and obtain customer-approved retention/privacy policy; only then add bounded persistence, idempotent ingestion, manifest/session correlation and query windows. Do not claim real CDN coverage or production QoE before an end-to-end provider event is verified.
 - **Parallel engineering lane 3 — #75 benchmark harness:** prepare deterministic corpus manifests, pinned tool/config metadata, matched-quality execution and raw-result reporting. Synthetic fixtures validate the harness only. Codec conclusions require legally approved representative source media; no codec-default change or savings claim before then.
 - **Operational lane — #71/#72/#73/#79:** prepare evidence checklists and keep the feature flags off. These cannot be completed by repository code or GitHub settings alone; they require the actual worker host, staging broker/cloud identity/storage, a provisioned IdP, active-tenant inventory, receiving application and customer/legal policy.
@@ -324,3 +324,16 @@ Issue #74 is closed after the supported Python 3.12 runtime and compatibility wo
 - `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED=false` until all active tenants and legacy ownership are reconciled
 - No production OIDC activation until the selected IdP supplies exact trust metadata and real tokens verify the configured `organization` claim, immutable organization ID, issuer, audience and JWKS behavior
 - No retention/deletion automation until customer/legal policy is approved
+
+
+## 15. Job submission application service increment (Issue #76)
+
+**Merged:** PR #196, squash commit `fbbc63877489b975e5c68bed5bb48955bcbe7ede` (2026-11-26). The PR passed Quality gates, Dependency Review, Python 3.9/3.12 regression, PostgreSQL durable repository integration, gRPC/Celery/FFmpeg/storage integration, container build and Linux cgroup v2 acceptance. Documentation links was skipped by the change classifier; it was not a failed check.
+
+Delivered:
+- `SubmitJobService` is transport-neutral and owns create-scope authorization, Project/ProjectRevision scope and pair validation, idempotency lookup and workflow repository creation.
+- gRPC performs authorization before expensive request expansion/encryption, then maps protobuf input into the application command.
+- Legacy Celery dispatch and feature-gated durable outbox configuration remain adapter/repository concerns; no feature flag was enabled.
+- Isolated tests cover idempotent replay, repository option passthrough, project authorization, invalid project pairs and denied access.
+
+Next #76 slice: extract status authorization and durable snapshot retrieval while leaving protobuf/Redis projection mapping in gRPC. Cancellation requires a separate domain/repository design first: the current revoke adapter sends Redis/Celery signals but does not transition the durable Job state. Do not report cancellation as complete or expose it through MCP until durable state, active Attempt termination, dispatch suppression, terminal events and retry/idempotency behavior are defined and tested.
