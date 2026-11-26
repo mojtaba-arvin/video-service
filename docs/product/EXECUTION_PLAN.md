@@ -348,3 +348,10 @@ Cancellation remains intentionally incomplete. The existing revoke path sends Re
 ## 17. Codec benchmark output bitrate correction (Issue #75)
 
 **Merged:** PR #199, squash commit `9ebf8b495b5759e78cf5144651c756688a702136` (2026-11-26). The FFprobe media probe now returns container `format.bit_rate` when available; a regression test covers bitrate and duration. Quality gates and Dependency Review passed. This fixes a missing measurement field only. A legally approved representative corpus, repeated matched-quality runs, pinned hardware/toolchain and reconciled provider billing remain necessary before drawing codec or cost conclusions.
+
+
+## 18. Durable cancellation design boundary (Issue #76)
+
+The repository already implements `WorkflowRepository.cancel_attempt()` as a lease-fenced worker acknowledgement for one active Stage/Attempt. It transitions that Stage and Attempt to CANCELLED, clears the Attempt lease, records `STAGE_CANCELLED`, and may transition the owning Job/Workflow to CANCELLED. The durable executor supplies `is_cancelled`/`is_terminal` checks to operation handlers.
+
+This is not an external Job-level cancellation request. The gRPC `revoke_jobs` adapter still sets the Redis force-stop marker and sends a Celery revoke signal; it does not invoke a durable request operation, fan out cancellation to pending Stages, or suppress pending outbox dispatch. Do not duplicate or bypass the lease-fenced worker acknowledgement. The next implementation must define and test the transactional Job-level request, concurrent claim/cancel ordering, pending Stage/outbox suppression, active Attempt cooperative termination, terminal event/idempotency semantics, and legacy Celery compatibility. MCP cancel remains deferred until these are verified.
