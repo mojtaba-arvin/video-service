@@ -341,7 +341,7 @@ Next #76 slice: extract status authorization and durable snapshot retrieval whil
 
 ## 16. Job status application service increment (Issue #76)
 
-**Merged:** PR #198, squash commit `e8d1b8eec792da6625ac9305bf2d06e0e95d4bf8` (2026-11-26). Quality gates and Dependency Review passed on the PR head. `GetJobStatusService` authorizes the entire requested Job batch before loading durable snapshots; the gRPC adapter retains protobuf response mapping and Redis projection compatibility. Denied access prevents any snapshot read, and empty-batch gRPC behavior remains backward-compatible.
+**PR #198 — implementation and CI complete; merge pending (2026-11-26).** Quality gates and Dependency Review passed on head `909190d`, but strict required checks require the branch to be synchronized after PR #199 advanced `develop`; update the branch and rerun CI before merging. `GetJobStatusService` authorizes the entire requested Job batch before loading durable snapshots; the gRPC adapter retains protobuf response mapping and Redis projection compatibility. Denied access prevents any snapshot read, and empty-batch gRPC behavior remains backward-compatible.
 
 Cancellation remains intentionally incomplete. The existing revoke path sends Redis/Celery signals without a durable Job transition. Before extracting a shared cancellation service or exposing MCP cancellation, define and test the durable state transition, active Attempt termination, dispatch suppression, terminal event semantics, and retry/idempotency behavior.
 
