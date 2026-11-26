@@ -252,6 +252,9 @@ def probe_media(ffprobe_path, media_path, timeout_seconds):
         "height": int(streams[0].get("height") or 0),
         "frame_rate": streams[0].get("avg_frame_rate"),
         "duration_seconds": duration,
+        "bit_rate": (
+            int(info["bit_rate"]) if info.get("bit_rate") else None
+        ),
         "codec": streams[0].get("codec_name"),
     }
 
