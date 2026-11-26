@@ -90,6 +90,67 @@ class OIDCAuthenticatorTests(unittest.TestCase):
             self.make_authenticator().authenticate("signed.jwt.value")
 
     @patch("video_streaming.security.oidc.jwt.PyJWKClient")
+    @patch("video_streaming.security.oidc.jwt.decode")
+    def test_keycloak_single_organization_claim_resolves_immutable_tenant_id(
+            self, decode, jwks_client):
+        jwks_client.return_value.get_signing_key_from_jwt.return_value.key = object()
+        decode.return_value = {
+            "iss": "https://issuer.example.test/",
+            "aud": "video-api",
+            "sub": "subject-1",
+            "organization": {
+                "acme-alias": {"id": "immutable-org-uuid"}
+            },
+            "exp": (datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp(),
+            "scope": "video.jobs:read",
+        }
+
+        principal = self.make_authenticator(
+            tenant_claim="organization"
+        ).authenticate("signed.jwt.value")
+
+        self.assertEqual(principal.tenant_id, "immutable-org-uuid")
+
+    @patch("video_streaming.security.oidc.jwt.PyJWKClient")
+    @patch("video_streaming.security.oidc.jwt.decode")
+    def test_keycloak_multiple_organizations_fail_closed(
+            self, decode, jwks_client):
+        jwks_client.return_value.get_signing_key_from_jwt.return_value.key = object()
+        decode.return_value = {
+            "iss": "https://issuer.example.test/",
+            "aud": "video-api",
+            "sub": "subject-1",
+            "organization": {
+                "acme": {"id": "tenant-a"},
+                "globex": {"id": "tenant-b"},
+            },
+            "exp": (datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp(),
+        }
+
+        with self.assertRaises(AuthenticationError):
+            self.make_authenticator(
+                tenant_claim="organization"
+            ).authenticate("signed.jwt.value")
+
+    @patch("video_streaming.security.oidc.jwt.PyJWKClient")
+    @patch("video_streaming.security.oidc.jwt.decode")
+    def test_keycloak_organization_without_immutable_id_fails_closed(
+            self, decode, jwks_client):
+        jwks_client.return_value.get_signing_key_from_jwt.return_value.key = object()
+        decode.return_value = {
+            "iss": "https://issuer.example.test/",
+            "aud": "video-api",
+            "sub": "subject-1",
+            "organization": {"acme": {"name": "Acme"}},
+            "exp": (datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp(),
+        }
+
+        with self.assertRaises(AuthenticationError):
+            self.make_authenticator(
+                tenant_claim="organization"
+            ).authenticate("signed.jwt.value")
+
+    @patch("video_streaming.security.oidc.jwt.PyJWKClient")
     def test_jwks_failure_fails_closed(self, jwks_client):
         jwks_client.return_value.get_signing_key_from_jwt.side_effect = RuntimeError(
             "network failure"
