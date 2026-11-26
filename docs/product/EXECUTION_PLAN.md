@@ -337,3 +337,14 @@ Delivered:
 - Isolated tests cover idempotent replay, repository option passthrough, project authorization, invalid project pairs and denied access.
 
 Next #76 slice: extract status authorization and durable snapshot retrieval while leaving protobuf/Redis projection mapping in gRPC. Cancellation requires a separate domain/repository design first: the current revoke adapter sends Redis/Celery signals but does not transition the durable Job state. Do not report cancellation as complete or expose it through MCP until durable state, active Attempt termination, dispatch suppression, terminal events and retry/idempotency behavior are defined and tested.
+
+
+## 16. Job status application service increment (Issue #76)
+
+**PR #198 — implementation and CI complete; merge pending (2026-11-26).** Quality gates and Dependency Review passed on head `909190d`, but strict required checks require the branch to be synchronized after PR #199 advanced `develop`; update the branch and rerun CI before merging. `GetJobStatusService` authorizes the entire requested Job batch before loading durable snapshots; the gRPC adapter retains protobuf response mapping and Redis projection compatibility. Denied access prevents any snapshot read, and empty-batch gRPC behavior remains backward-compatible.
+
+Cancellation remains intentionally incomplete. The existing revoke path sends Redis/Celery signals without a durable Job transition. Before extracting a shared cancellation service or exposing MCP cancellation, define and test the durable state transition, active Attempt termination, dispatch suppression, terminal event semantics, and retry/idempotency behavior.
+
+## 17. Codec benchmark output bitrate correction (Issue #75)
+
+**Merged:** PR #199, squash commit `9ebf8b495b5759e78cf5144651c756688a702136` (2026-11-26). The FFprobe media probe now returns container `format.bit_rate` when available; a regression test covers bitrate and duration. Quality gates and Dependency Review passed. This fixes a missing measurement field only. A legally approved representative corpus, repeated matched-quality runs, pinned hardware/toolchain and reconciled provider billing remain necessary before drawing codec or cost conclusions.
