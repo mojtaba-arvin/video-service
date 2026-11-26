@@ -438,6 +438,11 @@ class CreateJobMixin(object):
 
     def _create_job(self, request, context):
         principal = get_request_principal()
+        SubmitJobService.authorize(
+            principal,
+            request.project_id or None,
+            request.project_revision_id or None,
+        )
         request_id: str = str(uuid.uuid4())
         logger.info(
             "Accepted video job",
