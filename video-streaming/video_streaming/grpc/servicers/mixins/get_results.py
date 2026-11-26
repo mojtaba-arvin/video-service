@@ -5,9 +5,12 @@ from ffmpeg_streaming.ffprobe import Streams
 from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates, \
     PrimaryStatus
+from video_streaming.grpc import exceptions
+from video_streaming.grpc.authentication import get_request_principal
 from video_streaming.grpc.protos import streaming_pb2
+from video_streaming.security import AuthorizationError
+from video_streaming.workflows.application import GetJobStatusService
 from video_streaming.workflows.service import get_workflow_repository
-from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
 
 
 class GetResultsMixin(object):
@@ -445,14 +448,17 @@ class GetResultsMixin(object):
                     self.pb2.InputDetails(**input_details))
         return inputs
 
-    def _get_result(self,
-                    request_id: str
-                    ) -> None or streaming_pb2.ResultDetails:
-        repository = get_workflow_repository(required=False)
-        durable_snapshot = (
-            repository.get_job_snapshot(request_id)
-            if repository is not None else None
-        )
+    def _get_result(
+            self,
+            request_id: str,
+            durable_snapshot=None
+            ) -> None or streaming_pb2.ResultDetails:
+        if durable_snapshot is None:
+            repository = get_workflow_repository(required=False)
+            durable_snapshot = (
+                repository.get_job_snapshot(request_id)
+                if repository is not None else None
+            )
         durable_stages = {
             stage["key"]: stage
             for stage in (durable_snapshot or {}).get("stages", [])
@@ -571,13 +577,21 @@ class GetResultsMixin(object):
             return self.pb2.ResultDetails(**result_details)
 
     def _get_results(self, request, context):
-        # Authorize the complete batch before reading any Redis projection.
+        # Authorize the complete batch and load durable snapshots in the
+        # application layer before reading any Redis projection.
         request_ids = tuple(request.tracking_ids)
-        for request_id in request_ids:
-            require_job_access(request_id, "video.jobs:read", context)
+        repository = get_workflow_repository(required=True)
+        try:
+            snapshots = GetJobStatusService(repository).execute(
+                request_ids, get_request_principal()
+            )
+        except AuthorizationError:
+            raise exceptions.ResourceNotFoundOrDeniedException(context=context)
         results: list[streaming_pb2.ResultDetails] = []
         for request_id in request_ids:
-            result = self._get_result(request_id)
+            result = self._get_result(
+                request_id, durable_snapshot=snapshots.get(request_id)
+            )
             if result:
                 results.append(result)
         return self.pb2.JobsResultsResponse(results=results)
