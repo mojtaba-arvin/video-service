@@ -43,6 +43,17 @@ class SubmitJobService:
             raise ValueError("workflow repository is required")
         self._repository = repository
 
+    @staticmethod
+    def authorize(principal, project_id=None, project_revision_id=None) -> None:
+        """Fail before request expansion, encryption or other expensive work."""
+        require_scope(principal, "video.jobs:create")
+        if bool(project_id) != bool(project_revision_id):
+            raise ValueError(
+                "project_id and project_revision_id must be supplied together"
+            )
+        if project_revision_id:
+            require_scope(principal, "video.projects:read")
+
     def execute(self, command: SubmitJobCommand) -> SubmitJobResult:
         if not command.job_id:
             raise ValueError("job_id is required")
@@ -53,13 +64,11 @@ class SubmitJobService:
         if not command.execution_plan:
             raise ValueError("execution_plan is required")
 
-        require_scope(command.principal, "video.jobs:create")
-        if bool(command.project_id) != bool(command.project_revision_id):
-            raise ValueError(
-                "project_id and project_revision_id must be supplied together"
-            )
-        if command.project_revision_id:
-            require_scope(command.principal, "video.projects:read")
+        self.authorize(
+            command.principal,
+            command.project_id,
+            command.project_revision_id,
+        )
 
         existing_job_id = self._repository.find_idempotent_job(
             command.idempotency_key,
