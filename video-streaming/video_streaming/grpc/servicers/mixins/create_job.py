@@ -25,7 +25,6 @@ from video_streaming.workflows.application import (
     SubmitJobService,
 )
 from video_streaming.grpc.authentication import get_request_principal
-from video_streaming.security import require_scope
 
 
 class CreateJobMixin(object):
