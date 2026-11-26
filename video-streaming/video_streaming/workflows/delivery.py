@@ -87,7 +87,9 @@ class DeliveryEvent:
             self, "source_timestamp", timestamp.astimezone(timezone.utc)
         )
 
-        if self.cache_status not in _CACHE_STATUSES:
+        if (
+                not isinstance(self.cache_status, str)
+                or self.cache_status not in _CACHE_STATUSES):
             raise DeliveryEventContractError("cache_status is invalid")
         _optional_non_negative_integer(
             self.http_status, "http_status", 599
@@ -103,6 +105,7 @@ class DeliveryEvent:
         )
         if (
                 isinstance(self.schema_version, bool)
+                or not isinstance(self.schema_version, int)
                 or self.schema_version != 1):
             raise DeliveryEventContractError("schema_version is unsupported")
 
