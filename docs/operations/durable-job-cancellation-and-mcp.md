@@ -1,6 +1,6 @@
 # Durable Job cancellation and MCP interface
 
-- **Status:** Implemented in the Issue #76 work branch; pending repository review
+- **Status:** Pending CI and repository review
 - **Scope:** Durable Job cancellation and a typed, authenticated MCP adapter
 - **Depends on:** status application service (PR #198), Attempt leases, transactional outbox, OIDC/JWKS authentication
 
@@ -52,9 +52,9 @@ Install the optional Python 3.12+ dependencies with `pip install -r requirements
 | `video_job_get` | `video.jobs:read` | Uses the shared `GetJobStatusService`; returns a sanitized status projection |
 | `video_job_cancel` | `video.jobs:cancel` | Uses the shared `CancelJobService` and durable cancellation contract |
 
-Submission delegates to `VideoOperationService` and `SubmitJobService`, reusing the existing versioned execution-plan validator and `build_vod_execution_plan`. The probe plan uses the existing allow-listed input check/download/analyze operations. Job creation uses the configured tenant quota policy and the transactional outbox. Submission fails closed while `WORKFLOW_DURABLE_DISPATCH_ENABLED` is false; MCP does not bypass the rollout gate.
+Submission delegates to `VideoOperationService` and `SubmitJobService`, reusing the existing versioned execution-plan validator and `build_vod_execution_plan`. The probe plan uses the existing allow-listed input check/download/analyze operations. Job creation uses the configured tenant quota policy and the transactional outbox. Caller-provided idempotency keys are hashed with the verified tenant/issuer/subject tuple before persistence, preventing cross-tenant collisions. Submission fails closed while `WORKFLOW_DURABLE_DISPATCH_ENABLED` is false; MCP does not bypass the rollout gate.
 
-Tool schemas intentionally omit shell commands, arbitrary FFmpeg arguments, raw execution plans, callback URLs and provider credentials. The status projection omits artifact URIs, event payloads, secret references and raw metadata. Tenant ownership and per-operation scopes remain enforced by the application services and repository, not by MCP tool descriptions.
+Tool schemas intentionally omit shell commands, arbitrary FFmpeg arguments, raw execution plans, callback URLs and provider credentials. The existing bounded resource profiles and retry policies are selected by the application service; callers cannot raise limits or request an overwrite. The status projection omits artifact URIs, event payloads, secret references and raw metadata. Tenant ownership and per-operation scopes remain enforced by the application services and repository, not by MCP tool descriptions.
 
 ## Compatibility
 
