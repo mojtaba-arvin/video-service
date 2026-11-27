@@ -4991,9 +4991,9 @@ class WorkflowRepository:
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
             self._assert_attempt_lease(attempt, lease_token)
-            if stage.status == StageState.PUBLISHING.value:
-                if attempt.state == AttemptState.RUNNING.value:
-                    return False
+            if (
+                    stage.status == StageState.PUBLISHING.value
+                    and attempt.state != AttemptState.RUNNING.value):
                 raise StageAlreadyRunning(
                     "Stage {} is already being published by another attempt"
                     .format(stage_key)
@@ -5017,6 +5017,8 @@ class WorkflowRepository:
                     session, job, workflow, stage, attempt,
                     "JOB_{}_BEFORE_PUBLICATION".format(job.state),
                 )
+            if stage.status == StageState.PUBLISHING.value:
+                return False
             previous_status = stage.status
             self._transition(stage, StageState.PUBLISHING)
             _record_event(
