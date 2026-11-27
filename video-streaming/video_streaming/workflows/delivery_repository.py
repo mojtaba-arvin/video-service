@@ -436,17 +436,20 @@ class DeliveryTelemetryRepository:
 
             delivery_sessions_query = select(
                 func.count(distinct(DeliveryEventRecord.session_id))
+            ).select_from(DeliveryEventRecord).join(
+                PlaybackSessionRecord,
+                DeliveryEventRecord.session_id == PlaybackSessionRecord.id,
             ).where(
                 DeliveryEventRecord.job_id == job_id,
-                DeliveryEventRecord.session_id.isnot(None),
+                PlaybackSessionRecord.job_id == job_id,
             )
             if stage_key:
                 delivery_sessions_query = delivery_sessions_query.join(
-                    StageRecord, DeliveryEventRecord.stage_id == StageRecord.id
+                    StageRecord, PlaybackSessionRecord.stage_id == StageRecord.id
                 ).where(StageRecord.stage_key == stage_key)
             if session_id:
                 delivery_sessions_query = delivery_sessions_query.where(
-                    DeliveryEventRecord.session_id == session_id
+                    PlaybackSessionRecord.id == session_id
                 )
             if artifact_id:
                 delivery_sessions_query = delivery_sessions_query.where(
@@ -476,9 +479,14 @@ class DeliveryTelemetryRepository:
                 delivery_sessions_query = delivery_sessions_query.where(
                     DeliveryEventRecord.source_timestamp >= start_time
                 )
+            if start_time:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    PlaybackSessionRecord.started_at >= start_time
+                )
             if end_time:
                 delivery_sessions_query = delivery_sessions_query.where(
-                    DeliveryEventRecord.source_timestamp < end_time
+                    DeliveryEventRecord.source_timestamp < end_time,
+                    PlaybackSessionRecord.started_at < end_time,
                 )
             sessions_with_delivery_signals = session.execute(
                 delivery_sessions_query
