@@ -18,6 +18,7 @@ from video_streaming.ffmpeg.jit_packaging import (
     package_or_fallback,
     validate_track_timing,
     run_ffmpeg_copy_package,
+    validate_package_files,
 )
 
 
@@ -138,6 +139,25 @@ class JitPackageCacheTests(unittest.TestCase):
              if path.is_dir()],
             [],
         )
+
+
+    def test_hls_manifest_references_must_exist_before_publication(self):
+        package = self.root / "hls"
+        package.mkdir()
+        (package / "init.mp4").write_bytes(b"init")
+        (package / "segment.m4s").write_bytes(b"segment")
+        manifest = package / "master.m3u8"
+        manifest.write_text(
+            '#EXTM3U\\n#EXT-X-MAP:URI="init.mp4"\\nsegment.m4s\\n',
+            encoding="utf-8",
+        )
+        self.assertTrue(validate_package_files(package, manifest))
+        manifest.write_text(
+            '#EXTM3U\\n#EXT-X-MAP:URI="missing.mp4"\\nsegment.m4s\\n',
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError):
+            validate_package_files(package, manifest)
 
     def test_manifest_path_cannot_escape_staging_directory(self):
         with self.assertRaises(ValueError):
