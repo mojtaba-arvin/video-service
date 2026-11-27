@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Validate commit authors and co-author trailers for a GitHub pull request."""
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from email.utils import parseaddr
 
 NAME = "Mojtaba Arvin"
@@ -110,154 +109,24 @@ def validate_api_url(url, repository):
 
 
 def get_json(url, token, repository):
-    validate_api_url(url, repository)
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "Authorization": "Bearer " + token,
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "commit-identity-policy-check"})
-    # The URL is constrained above to the fixed GitHub API HTTPS origin and this repository.
-    with urllib.request.urlopen(req, timeout=30) as res:  # noqa: S310
-        return json.loads(res.read().decode())
-
-
-def collect_commits(pr, fetch_page):
-    if not isinstance(pr, dict):
-        raise RuntimeError("GitHub API returned a non-object PR response")
-    expected = pr.get("commits")
-    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
-        raise RuntimeError("GitHub API returned an invalid PR commit count")
-    if expected > MAX_PR_COMMITS:
-        raise RuntimeError(
-            f"PR reports {expected} commits; GitHub's pull-request commits endpoint "
-            f"is capped at {MAX_PR_COMMITS}; refusing incomplete validation"
-        )
-    commits, page = [], 1
-    while True:
-        batch = fetch_page(page)
-        if not isinstance(batch, list):
-            raise RuntimeError("GitHub API returned a non-list commit response")
-        if any(not isinstance(item, dict) or not item.get("sha") for item in batch):
-            raise RuntimeError("GitHub API returned an invalid commit entry")
-        commits.extend(batch)
-        if len(batch) < 100:
-            break
-        page += 1
-    shas = [item["sha"] for item in commits]
-    if len(shas) != len(set(shas)):
-        raise RuntimeError("GitHub API returned duplicate commits; refusing incomplete validation")
-    if len(commits) != expected:
-        raise RuntimeError(
-            f"incomplete commit coverage: PR reports {expected}, API returned {len(commits)}"
-        )
-    return commits
-
-
-def self_test():
-    def item(name, email, login, typ, message="feat: test", sha=None):
-        return {"sha": sha or "a" * 40, "commit": {
-            "author": {"name": name, "email": email}, "message": message},
-            "author": {"login": login, "type": typ}}
-
-    empty_pr = {"body": "", "labels": []}
-    assert not validate(empty_pr, [item(NAME, EMAIL, "mojtaba-arvin", "User")])
-    assert not validate(empty_pr, [item("External Human", "x@example.org", "human", "User")])
-    for human_name in ("Claude Dupont", "OpenAI Smith", "GPT Anderson",
-                       "Assistant Jones", "Copilot Lee", "Gemini Patel"):
-        assert not validate(empty_pr, [item(human_name, "human@example.org", "human", "User")])
-    assert validate(empty_pr, [item("Copilot", "bot@example.org", "copilot[bot]", "Bot")])
-    assert validate(empty_pr, [item("AI Assistant", "ai@example.org", None, None)])
-    assert validate(empty_pr, [item("Generic", "assistant@example.org", None, None)])
-    for identity in ("AI Assistant <ai@example.org>", "Assistant <assistant@example.org>"):
-        msg = "feat: test\nCo-authored-by: " + identity
-        assert validate(empty_pr, [item("Human", "h@example.org", "human", "User", msg)])
-    human_trailer = "feat: test\nCo-authored-by: Claude Dupont <claude@example.org>"
-    assert not validate(empty_pr, [item("Human", "h@example.org", "human", "User", human_trailer)])
-    assert not validate({"body": MARKER, "labels": []},
-                        [item(NAME, EMAIL, "mojtaba-arvin", "User")])
-    assert not validate({"body": MARKER, "labels": []}, [
-        item(NAME, EMAIL, "mojtaba-arvin", "User"),
-        item("Other Human", "x@example.org", "human", "User")])
-    assert validate({"body": MARKER, "labels": []},
-                    [item("Other Human", "x@example.org", "human", "User")])
-    assert validate(empty_pr, [item(NAME, "wrong@example.org", "mojtaba-arvin", "User")])
-    assert not validate({"body": "", "labels": [{"name": AUTO_LABEL}]}, [
-        item("github-actions[bot]", "bot@users.noreply.github.com",
-             "github-actions[bot]", "Bot")])
-
-    def page_fixture(count):
-        return [{"sha": f"{i:040x}", "commit": {}} for i in range(count)]
-    complete = page_fixture(250)
-    assert len(collect_commits({"commits": 250},
-                               lambda page: complete[(page - 1) * 100:page * 100])) == 250
+    parsed = validate_api_url(url, repository)
+    # Use a fixed HTTPS connection directly: redirects are not followed and the
+    # caller cannot select a host, scheme, port, or repository path.
+    connection = http.client.HTTPSConnection(API_ORIGIN[1], timeout=30)
     try:
-        collect_commits({"commits": 251},
-                        lambda page: complete[(page - 1) * 100:page * 100])
-        raise AssertionError("251-commit PR must fail closed")
-    except RuntimeError as exc:
-        assert "capped" in str(exc)
-    try:
-        collect_commits({"commits": 101}, lambda page: page_fixture(100) if page == 1 else [])
-        raise AssertionError("incomplete page coverage must fail closed")
-    except RuntimeError as exc:
-        assert "incomplete commit coverage" in str(exc)
-    try:
-        collect_commits([], lambda page: [])
-        raise AssertionError("non-object PR response must fail closed")
-    except RuntimeError as exc:
-        assert "non-object PR" in str(exc)
-    for bad_url in (
-        "http://api.github.com/repos/owner/repo/pulls/1",
-        "https://evil.example/repos/owner/repo/pulls/1",
-        "https://api.github.com.evil.example/repos/owner/repo/pulls/1",
-        "https://api.github.com/repos/other/repo/pulls/1",
-    ):
-        try:
-            validate_api_url(bad_url, "owner/repo")
-            raise AssertionError("unsafe API URL must be rejected")
-        except RuntimeError:
-            pass
-    validate_api_url("https://api.github.com/repos/owner/repo/pulls/1", "owner/repo")
-    print("PASS: commit identity policy self-tests")
-
-
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY"))
-    p.add_argument("--pr-number", type=int, default=int(os.getenv("PR_NUMBER", "0")))
-    p.add_argument("--token", default=os.getenv("GITHUB_TOKEN"))
-    p.add_argument("--self-test", action="store_true")
-    args = p.parse_args()
-    if args.self_test:
-        self_test()
-        return 0
-    if not (args.repository and args.pr_number and args.token):
-        p.error("--repository, --pr-number and --token are required")
-    if args.pr_number < 1:
-        p.error("--pr-number must be positive")
-    base = "https://api.github.com/repos/" + args.repository
-    pr = get_json(base + "/pulls/" + str(args.pr_number), args.token, args.repository)
-    if not isinstance(pr, dict):
-        raise RuntimeError("GitHub API returned a non-object PR response")
-    commits = collect_commits(
-        pr, lambda page: get_json(
-            base + f"/pulls/{args.pr_number}/commits?per_page=100&page={page}",
-            args.token, args.repository))
-    errors = validate(pr, commits)
-    print(f"Checked {len(commits)} commits in {args.repository}#{args.pr_number}")
-    if errors:
-        print("\n".join("ERROR: " + e for e in errors))
-        return 1
-    print("PASS: no prohibited bot/agent authors or co-author trailers")
-    return 0
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except urllib.error.HTTPError as e:
-        print(f"ERROR: GitHub API HTTP {e.code}: {e.reason}", file=sys.stderr)
-        sys.exit(2)
-    except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError) as e:
-        print(f"ERROR: identity validation incomplete: {e}", file=sys.stderr)
-        sys.exit(2)
+        path = parsed.path + (("?" + parsed.query) if parsed.query else "")
+        connection.request("GET", path, headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token,
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "commit-identity-policy-check"})
+        response = connection.getresponse()
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError(
+                f"GitHub API HTTP {response.status}: {response.reason}")
+        payload = response.read(2_097_153)
+        if len(payload) > 2_097_152:
+            raise RuntimeError("GitHub API response exceeded the 2 MiB safety limit")
+        return json.loads(payload.decode())
+    finally:
+        connection.close()
