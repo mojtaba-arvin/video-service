@@ -11,6 +11,7 @@ from video_streaming.workflows.delivery_repository import (
     DeliveryEventConflictError,
     DeliveryEventRecord,
     DeliveryTelemetryRepository,
+    ProviderNeutralCDNAdapter,
 )
 from video_streaming.workflows.repository import (
     ArtifactRecord,
@@ -131,14 +132,19 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
 
     def test_ingestion_is_idempotent_and_conflicting_replay_is_rejected(self):
         event = self.event()
-        first = self.telemetry.ingest(event)
-        replay = self.telemetry.ingest(event)
+        adapter = ProviderNeutralCDNAdapter(self.telemetry, "cdn-a")
+        first = adapter.ingest(event)
+        replay = adapter.ingest(event)
 
         self.assertFalse(first["duplicate"])
         self.assertTrue(replay["duplicate"])
         self.assertEqual(first["event_id"], replay["event_id"])
         with self.assertRaises(DeliveryEventConflictError):
-            self.telemetry.ingest(self.event(bytes_sent=4097))
+            adapter.ingest(self.event(bytes_sent=4097))
+        with self.assertRaises(ValueError):
+            ProviderNeutralCDNAdapter(self.telemetry, "cdn-a").ingest(
+                self.event(source="cdn-b", source_event_id="request-2")
+            )
 
     def test_correlation_uses_exact_published_manifest_and_session(self):
         result = self.telemetry.ingest(self.event())
