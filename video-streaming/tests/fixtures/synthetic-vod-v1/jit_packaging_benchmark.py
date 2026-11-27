@@ -174,9 +174,14 @@ class AtomicPackageCache:
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
-    def get_or_build(self, key, builder):
-        if len(key) != 64 or any(c not in "0123456789abcdef" for c in key):
+    @staticmethod
+    def _validate_key(key):
+        if not isinstance(key, str) or len(key) != 64 or any(
+                character not in "0123456789abcdef" for character in key):
             raise ValueError("cache key must be a lowercase SHA-256 digest")
+
+    def get_or_build(self, key, builder):
+        self._validate_key(key)
         target = self.root / key
         lock_path = self.root / (key + ".lock")
         started = time.monotonic()
@@ -187,6 +192,9 @@ class AtomicPackageCache:
                 metadata = json.loads(marker.read_text(encoding="utf-8"))
                 if metadata.get("key") != key:
                     raise RuntimeError("cache completion marker does not match key")
+                if not any((target / name).is_file() and (target / name).stat().st_size
+                           for name in MANIFESTS.values()):
+                    raise RuntimeError("completed cache entry has no non-empty root manifest")
                 return target, True, (time.monotonic() - started) * 1000
             staging = Path(tempfile.mkdtemp(prefix=key + ".staging-", dir=str(self.root)))
             try:
@@ -209,6 +217,7 @@ class AtomicPackageCache:
             return target, False, (time.monotonic() - started) * 1000
 
     def invalidate(self, key):
+        self._validate_key(key)
         target = self.root / key
         lock_path = self.root / (key + ".lock")
         with lock_path.open("a+b") as lock:
