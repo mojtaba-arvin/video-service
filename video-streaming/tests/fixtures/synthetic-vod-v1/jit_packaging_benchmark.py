@@ -399,17 +399,20 @@ class AtomicPackageCache:
             shutil.rmtree(target, ignore_errors=True)
 
 
-def package_or_fallback(cache, key, builder, fallback_dir):
-    """Return a complete JIT package, or the pre-packaged artifact on any JIT error."""
+def package_or_fallback(cache, key, builder, fallback_dir, protocol):
+    """Return a complete JIT package, or validate and select the conventional fallback."""
+    if protocol not in MANIFESTS:
+        raise ValueError("unsupported fallback protocol")
     try:
         path, hit, elapsed_ms = cache.get_or_build(key, builder)
         return {"path": str(path), "mode": "jit-cache-hit" if hit else "jit-cold",
                 "elapsed_ms": elapsed_ms}
     except Exception as exc:
         fallback = Path(fallback_dir).resolve()
-        if not any((fallback / name).is_file() and (fallback / name).stat().st_size
-                   for name in MANIFESTS.values()):
+        manifest = fallback / MANIFESTS[protocol]
+        if not manifest.is_file() or manifest.stat().st_size == 0:
             raise RuntimeError("JIT failed and no valid pre-packaged fallback exists") from exc
+        validate_streaming_package(str(fallback), str(manifest), protocol)
         return {"path": str(fallback), "mode": "prepackaged-fallback",
                 "elapsed_ms": None, "fallback_reason": type(exc).__name__}
 
