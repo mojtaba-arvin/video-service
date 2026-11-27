@@ -70,6 +70,13 @@ class JitPackageCacheTests(unittest.TestCase):
             ).cache_key(),
         )
 
+        rotated_key = PackageIdentity(
+            asset_id="asset-1", asset_version="v3",
+            profile_version="h264-720p-v1", source_sha256="a" * 64,
+            protocol="hls", drm_profile="cbcs", drm_key_version="key-v2",
+        )
+        self.assertNotEqual(self.identity.cache_key(), rotated_key.cache_key())
+
     def test_concurrent_cache_fills_publish_one_complete_package(self):
         calls = []
         calls_lock = threading.Lock()
