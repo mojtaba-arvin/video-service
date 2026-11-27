@@ -214,6 +214,17 @@ def self_test():
     except RuntimeError as exc:
         assert "incomplete commit coverage" in str(exc)
     try:
+        collect_commits({"commits": 1}, lambda page: {"not": "a list"})
+        raise AssertionError("non-list commit response must fail closed")
+    except RuntimeError as exc:
+        assert "non-list commit response" in str(exc)
+    duplicate = page_fixture(1) * 2
+    try:
+        collect_commits({"commits": 2}, lambda page: duplicate if page == 1 else [])
+        raise AssertionError("duplicate commit response must fail closed")
+    except RuntimeError as exc:
+        assert "duplicate commits" in str(exc)
+    try:
         collect_commits([], lambda page: [])
         raise AssertionError("non-object PR response must fail closed")
     except RuntimeError as exc:
