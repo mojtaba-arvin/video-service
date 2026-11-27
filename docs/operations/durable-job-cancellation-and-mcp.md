@@ -60,7 +60,7 @@ Tool schemas intentionally omit shell commands, arbitrary FFmpeg arguments, raw 
 
 ## Compatibility
 
-The gRPC revoke adapter authorizes every Job in the batch before side effects, then invokes `CancelJobService` before setting the legacy Redis force-stop marker and sending the Celery revoke signal. gRPC status maps `CANCEL_REQUESTED` to its existing revoked projection. The existing status-service implementation in PR #198 remains the shared status read path and is not copied into the MCP adapter.
+The gRPC revoke adapter authorizes every Job in the batch before side effects, then invokes `CancelJobService` before setting the legacy Redis force-stop marker and sending the Celery revoke signal. MCP-created Jobs persist the bounded legacy `result_details` projection so existing gRPC GetResults clients can read their output stages. gRPC status maps `CANCEL_REQUESTED` to its existing revoked projection. The existing status-service implementation in PR #198 remains the shared status read path and is not copied into the MCP adapter.
 
 ## Required verification
 
