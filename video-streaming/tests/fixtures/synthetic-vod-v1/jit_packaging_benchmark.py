@@ -452,6 +452,43 @@ class AtomicPackageCache:
                 character not in "0123456789abcdef" for character in key):
             raise ValueError("cache key must be a lowercase SHA-256 digest")
 
+    @staticmethod
+    def _is_complete(target, key):
+        marker = target / ".complete.json"
+        if not marker.is_file():
+            return False
+        try:
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+            if metadata.get("key") != key or not isinstance(metadata.get("files"), list):
+                return False
+            expected = metadata["files"]
+            expected_paths = set()
+            for item in expected:
+                relative = Path(item["path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    return False
+                candidate = target / relative
+                if candidate.is_symlink() or not candidate.is_file():
+                    return False
+                if candidate.stat().st_size != item["size_bytes"]:
+                    return False
+                if sha256_file(candidate) != item["sha256"]:
+                    return False
+                expected_paths.add(relative.as_posix())
+            actual_paths = {
+                item.relative_to(target).as_posix()
+                for item in target.rglob("*")
+                if item.is_file() and item.name != ".complete.json"
+            }
+            if actual_paths != expected_paths:
+                return False
+            return any(
+                (target / name).is_file() and (target / name).stat().st_size
+                for name in MANIFESTS.values()
+            )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return False
+
     def get_or_build(self, key, builder):
         self._validate_key(key)
         target = self.root / key
@@ -460,14 +497,10 @@ class AtomicPackageCache:
         with lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             marker = target / ".complete.json"
-            if marker.is_file():
-                metadata = json.loads(marker.read_text(encoding="utf-8"))
-                if metadata.get("key") != key:
-                    raise RuntimeError("cache completion marker does not match key")
-                if not any((target / name).is_file() and (target / name).stat().st_size
-                           for name in MANIFESTS.values()):
-                    raise RuntimeError("completed cache entry has no non-empty root manifest")
+            if target.exists() and self._is_complete(target, key):
                 return target, True, (time.monotonic() - started) * 1000
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
             staging = Path(tempfile.mkdtemp(prefix=key + ".staging-", dir=str(self.root)))
             try:
                 builder(staging)
@@ -475,9 +508,13 @@ class AtomicPackageCache:
                 if not any((staging / name).is_file() and (staging / name).stat().st_size
                            for name in manifest_names):
                     raise RuntimeError("builder did not produce a root manifest")
+                inventory = tree_inventory(staging)
                 (staging / ".complete.json").write_text(
-                    json.dumps({"schema_version": SCHEMA_VERSION, "key": key},
-                               sort_keys=True) + "\n",
+                    json.dumps({
+                        "schema_version": SCHEMA_VERSION,
+                        "key": key,
+                        "files": inventory["files"],
+                    }, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
                 if target.exists():
