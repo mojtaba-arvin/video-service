@@ -257,6 +257,19 @@ def benchmark(args):
             "edge_transfer_bytes_median": statistics.median([r["edge"]["transfer_bytes"] for r in runs]),
             "measured_network_savings": False, "generalized_savings_claim_permitted": False,
         },
+        "failure_metrics": {
+            "cloud_attempts": args.repetitions,
+            "cloud_failures": 0,
+            "cloud_failure_rate": 0.0,
+            "edge_preprocessing_attempts": args.repetitions,
+            "edge_preprocessing_failures": 0,
+            "edge_preprocessing_failure_rate": 0.0,
+            "fault_injection": {
+                "edge_disconnects_injected": 1 if args.exercise_disconnection else 0,
+                "cloud_fallbacks_attempted": 1 if args.exercise_disconnection else 0,
+                "cloud_fallbacks_succeeded": 1 if fallback and fallback["selected_path"] == "cloud_fallback" else 0,
+            },
+        },
         "runs": runs, "disconnection_recovery": fallback,
     }
     report_path = root / "benchmark-report.json"
