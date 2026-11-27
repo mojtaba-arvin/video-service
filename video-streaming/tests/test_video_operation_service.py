@@ -97,6 +97,11 @@ class VideoOperationServiceTests(unittest.TestCase):
         operations = [node["operation"] for node in plan["nodes"]]
         self.assertIn("video.thumbnail.generate", operations)
         self.assertIn("video.output.upload_file", operations)
+        key_check = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.output.key.check"
+        )
+        self.assertTrue(key_check["parameters"]["dont_replace"])
         thumbnail = next(
             node for node in plan["nodes"]
             if node["operation"] == "video.thumbnail.generate"
@@ -120,6 +125,11 @@ class VideoOperationServiceTests(unittest.TestCase):
         self.assertEqual(package["parameters"]["protocol"], "hls")
         self.assertEqual(package["parameters"]["encode_format"], "hevc")
         self.assertEqual(package["parameters"]["quality_names"], ["360p", "720p"])
+        key_check = next(
+            node for node in plan["nodes"]
+            if node["operation"] == "video.output.key.check"
+        )
+        self.assertTrue(key_check["parameters"]["dont_replace"])
         self.assertNotIn("ffmpeg_args", package["parameters"])
 
         with self.assertRaises(ValueError):
