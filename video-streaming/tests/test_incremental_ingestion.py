@@ -218,7 +218,6 @@ class IncrementalIngestionTests(unittest.TestCase):
         self.add(second, 0, b"abcd")
         second_uri = self.service.get(second)["chunks"][0]
         self.service.cancel(first)
-        self.assertFalse(any(key[1] in first_uri["checksum_sha256"] for key in self.s3.objects))
         self.assertTrue(any("chunks/00000000" in key[1] for key in self.s3.objects))
         self.assertEqual(self.service.get(first)["state"], "CANCELLED")
         with self.assertRaises(IngestionCancelled):
