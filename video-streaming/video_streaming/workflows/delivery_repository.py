@@ -46,6 +46,10 @@ class DeliveryEventRecord(Base):
             name="ck_cdn_delivery_schema_version",
         ),
         CheckConstraint(
+            "cache_status IN ('HIT', 'MISS', 'BYPASS', 'REVALIDATED', 'STALE', 'UNKNOWN')",
+            name="ck_cdn_delivery_cache_status",
+        ),
+        CheckConstraint(
             "http_status IS NULL OR http_status BETWEEN 100 AND 599",
             name="ck_cdn_delivery_http_status",
         ),
@@ -496,6 +500,12 @@ class DeliveryTelemetryRepository:
                     ),
                     "missing_asset_version_count": sum(
                         1 for item in records if item.asset_version is None
+                    ),
+                    "missing_http_status_count": sum(
+                        1 for item in records if item.http_status is None
+                    ),
+                    "missing_edge_region_count": sum(
+                        1 for item in records if item.edge_region is None
                     ),
                     "missing_response_time_count": sum(
                         1 for item in records if item.response_time_ms is None
