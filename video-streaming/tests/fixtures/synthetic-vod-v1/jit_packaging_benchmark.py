@@ -230,7 +230,7 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
         "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.$ext$",
         "-y", str(mpd),
     ]
-    subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    execution_metrics = run_measured_command(command, output_dir, timeout_seconds=120)
     if not mpd.is_file() or mpd.stat().st_size == 0:
         raise RuntimeError("DASH muxer did not create a static CMAF MPD")
 
@@ -364,6 +364,7 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
         "shared_media_bytes": sum(item["size_bytes"] for item in media_files),
         "audio_video_sync": probe_av_sync(mpd),
         "audio_video_segment_duration_delta_seconds": audio_video_duration_delta,
+        "execution_metrics": execution_metrics,
         "inventory": inventory,
     }
 
@@ -399,7 +400,7 @@ def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds
             "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.$ext$",
             "-y", str(manifest),
         ]
-    subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    execution_metrics = run_measured_command(command, output_dir, timeout_seconds=120)
     if not manifest.is_file() or manifest.stat().st_size == 0:
         raise RuntimeError("packager did not create a non-empty root manifest")
     validation = validate_streaming_package(
@@ -411,6 +412,7 @@ def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds
         "manifest_sha256": sha256_file(manifest),
         "validation": validation,
         "audio_video_sync": av_sync,
+        "execution_metrics": execution_metrics,
         **tree_inventory(output_dir),
     }
 
@@ -515,9 +517,9 @@ def first_manifest_byte(path):
     return (time.monotonic() - started) * 1000
 
 
-def cpu_seconds():
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return usage.ru_utime + usage.ru_stime
+def median_known(values):
+    known = [value for value in values if value is not None]
+    return statistics.median(known) if known else None
 
 
 def percentile(values, percentile_value):
@@ -564,24 +566,25 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
     shared_dir = output_root / (source.stem + "-prepackaged-cmaf")
     if shared_dir.exists():
         shutil.rmtree(shared_dir)
-    shared_cpu_started = cpu_seconds()
     shared_wall_started = time.monotonic()
     shared_cmaf = build_shared_cmaf(source, shared_dir, ffmpeg)
     shared_cmaf["packaging_ms"] = (time.monotonic() - shared_wall_started) * 1000
-    shared_cmaf["cpu_seconds"] = max(0.0, cpu_seconds() - shared_cpu_started)
+    shared_cmaf["cpu_seconds"] = shared_cmaf["execution_metrics"]["cpu_seconds"]
 
     protocols = {}
     for protocol in ("hls", "dash"):
         prepackaged = output_root / (source.stem + "-prepackaged-" + protocol)
         if prepackaged.exists():
             shutil.rmtree(prepackaged)
-        pre_cpu = cpu_seconds()
         pre_started = time.monotonic()
         pre = build_package(source, prepackaged, protocol, ffmpeg)
         pre_latency = (time.monotonic() - pre_started) * 1000
-        pre_cpu_seconds = max(0.0, cpu_seconds() - pre_cpu)
+        pre_metrics = pre["execution_metrics"]
 
-        cold_latencies, cold_cpu, warm_latencies, cold_ttfb, warm_ttfb = [], [], [], [], []
+        cold_latencies, cold_cpu, cold_rss, cold_read, cold_write, cold_scratch = (
+            [], [], [], [], [], []
+        )
+        warm_latencies, cold_ttfb, warm_ttfb = [], [], []
         stable_hashes = []
         cache_bytes = None
         for repetition in range(repetitions):
@@ -593,13 +596,17 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 source_hash, protocol, "cmaf-copy-v1", PACKAGER_VERSION, build,
                 {"segment_seconds": 2},
             )
-            before_cpu = cpu_seconds()
-            path, hit, elapsed = cache.get_or_build(
-                key, lambda staging: build_package(source, staging, protocol, ffmpeg)
-            )
-            cpu_delta = max(0.0, cpu_seconds() - before_cpu)
+            execution = {}
+            def build_staging(staging):
+                execution.update(build_package(source, staging, protocol, ffmpeg))
+            path, hit, elapsed = cache.get_or_build(key, build_staging)
+            measured = execution["execution_metrics"]
             cold_latencies.append(elapsed)
-            cold_cpu.append(cpu_delta)
+            cold_cpu.append(measured["cpu_seconds"])
+            cold_rss.append(measured["peak_rss_bytes"])
+            cold_read.append(measured["read_bytes"])
+            cold_write.append(measured["write_bytes"])
+            cold_scratch.append(measured["scratch_peak_bytes"])
             cache_bytes = tree_inventory(path)["total_bytes"]
             cold_ttfb.append(elapsed + first_manifest_byte(path / MANIFESTS[protocol]))
             stable_hashes.append(sha256_file(path / MANIFESTS[protocol]))
@@ -618,7 +625,12 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
         protocols[protocol] = {
             "prepackaged": {
                 "bytes": pre["total_bytes"], "files": pre["file_count"],
-                "cold_packaging_ms": pre_latency, "cpu_seconds": pre_cpu_seconds,
+                "cold_packaging_ms": pre_latency,
+                "cpu_seconds": pre_metrics["cpu_seconds"],
+                "peak_rss_bytes": pre_metrics["peak_rss_bytes"],
+                "read_bytes": pre_metrics["read_bytes"],
+                "write_bytes": pre_metrics["write_bytes"],
+                "scratch_peak_bytes": pre_metrics["scratch_peak_bytes"],
                 "first_manifest_byte_ms": first_manifest_byte(
                     prepackaged / MANIFESTS[protocol]
                 ),
@@ -631,7 +643,11 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "warm_cache_lookup_ms_p50": statistics.median(warm_latencies),
                 "cold_time_to_first_manifest_byte_ms_p50": statistics.median(cold_ttfb),
                 "warm_time_to_first_manifest_byte_ms_p50": statistics.median(warm_ttfb),
-                "cpu_seconds_p50": statistics.median(cold_cpu),
+                "cpu_seconds_p50": median_known(cold_cpu),
+                "peak_rss_bytes_p50": median_known(cold_rss),
+                "read_bytes_p50": median_known(cold_read),
+                "write_bytes_p50": median_known(cold_write),
+                "scratch_peak_bytes_p50": median_known(cold_scratch),
                 "manifest_deterministic_across_runs": len(set(stable_hashes)) == 1,
                 "manifest_sha256_by_run": stable_hashes,
             },
@@ -668,6 +684,10 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
             "files": shared_cmaf["file_count"],
             "packaging_ms": shared_cmaf["packaging_ms"],
             "cpu_seconds": shared_cmaf["cpu_seconds"],
+            "peak_rss_bytes": shared_cmaf["execution_metrics"]["peak_rss_bytes"],
+            "read_bytes": shared_cmaf["execution_metrics"]["read_bytes"],
+            "write_bytes": shared_cmaf["execution_metrics"]["write_bytes"],
+            "scratch_peak_bytes": shared_cmaf["execution_metrics"]["scratch_peak_bytes"],
             "hls_first_manifest_byte_ms": shared_cmaf["hls_first_manifest_byte_ms"],
             "dash_first_manifest_byte_ms": shared_cmaf["dash_first_manifest_byte_ms"],
             "hls_manifest_sha256": shared_cmaf["hls_manifest_sha256"],
