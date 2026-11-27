@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from math import ceil
+from math import ceil, isfinite
 from typing import Optional, Tuple
 
 
@@ -87,8 +87,9 @@ class WorkloadRequirements:
         _aware(self.deadline_at, "deadline_at")
         if self.expected_runtime_seconds is not None and (
                 isinstance(self.expected_runtime_seconds, bool)
+                or not isfinite(float(self.expected_runtime_seconds))
                 or self.expected_runtime_seconds <= 0):
-            raise ValueError("expected_runtime_seconds must be positive")
+            raise ValueError("expected_runtime_seconds must be finite and positive")
         if self.max_cost is not None:
             object.__setattr__(self, "max_cost", _decimal(self.max_cost, "max_cost"))
         if not isinstance(self.cost_currency, str) or len(self.cost_currency) != 3:
@@ -113,8 +114,12 @@ class PoolEconomics:
             _decimal(self.cost_per_successful_output, "cost_per_successful_output"),
         )
         _positive_int(self.successful_outputs, "successful_outputs")
-        if self.p50_latency_seconds < 0 or self.p95_latency_seconds < self.p50_latency_seconds:
-            raise ValueError("latency percentiles must be non-negative and ordered")
+        if (
+                not isfinite(float(self.p50_latency_seconds))
+                or not isfinite(float(self.p95_latency_seconds))
+                or self.p50_latency_seconds < 0
+                or self.p95_latency_seconds < self.p50_latency_seconds):
+            raise ValueError("latency percentiles must be finite, non-negative and ordered")
         if not isinstance(self.corpus_id, str) or not self.corpus_id.strip():
             raise ValueError("corpus_id is required for measured economics")
         _aware(self.measured_at, "measured_at")
@@ -151,8 +156,10 @@ class CapacityPool:
         _positive_int(self.available_cpu_units, "available_cpu_units", allow_zero=True)
         if self.available_cpu_units > self.cpu_capacity_units:
             raise ValueError("available_cpu_units cannot exceed pool capacity")
-        if self.startup_delay_seconds < 0:
-            raise ValueError("startup_delay_seconds cannot be negative")
+        if (
+                not isfinite(float(self.startup_delay_seconds))
+                or self.startup_delay_seconds < 0):
+            raise ValueError("startup_delay_seconds must be finite and non-negative")
         if not isinstance(self.workload_classes, (set, frozenset)):
             raise TypeError("workload_classes must be a set")
         if not isinstance(self.capabilities, (set, frozenset)):
@@ -351,12 +358,19 @@ def fair_queue_order(requests):
     per round so a burst from one tenant cannot occupy the entire dispatch list.
     """
     grouped = {}
+    seen_job_ids = set()
     for request in requests:
         tenant = getattr(request, "tenant_id", None)
         enqueued = getattr(request, "enqueued_at", None)
         deadline = getattr(request, "deadline_at", None)
         if not isinstance(tenant, str) or not tenant.strip():
             raise ValueError("every queued request requires tenant_id")
+        job_id = getattr(request, "job_id", None)
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise ValueError("every queued request requires job_id")
+        if job_id in seen_job_ids:
+            raise ValueError("duplicate queued job identity")
+        seen_job_ids.add(job_id)
         _aware(enqueued, "enqueued_at")
         _aware(deadline, "deadline_at")
         if enqueued is None:
