@@ -179,6 +179,8 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.assertEqual(coverage["delivery_event_count"], 1)
         self.assertEqual(coverage["delivery_events_without_session"], 1)
         self.assertEqual(coverage["missing_asset_version_count"], 1)
+        self.assertEqual(coverage["missing_http_status_count"], 1)
+        self.assertEqual(coverage["missing_edge_region_count"], 1)
         self.assertEqual(coverage["missing_response_time_count"], 1)
         self.assertEqual(coverage["missing_bytes_count"], 1)
         self.assertEqual(coverage["unknown_cache_outcome_count"], 1)
