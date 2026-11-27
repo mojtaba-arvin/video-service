@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Callable
+from typing import Callable, Union
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class AtomicPackageCache:
     cannot observe a partially populated package.
     """
 
-    def __init__(self, root: str | Path, lock_timeout_seconds: float = 120.0):
+    def __init__(self, root: Union[str, Path], lock_timeout_seconds: float = 120.0):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock_timeout_seconds = lock_timeout_seconds
@@ -149,14 +149,17 @@ class AtomicPackageCache:
 
 def ffmpeg_copy_command(
     ffmpeg_bin: str,
-    input_path: str | Path,
-    output_dir: str | Path,
+    input_path: Union[str, Path],
+    output_dir: Union[str, Path],
     protocol: str,
     segment_seconds: int = 4,
+    drm_profile: str = "clear",
 ) -> list[str]:
     """Build a packaging-only command. -c copy is a hard no-reencode boundary."""
     if protocol not in ("hls", "dash"):
         raise ValueError("protocol must be hls or dash")
+    if drm_profile != "clear":
+        raise ValueError("DRM packaging is not implemented by this prototype")
     if segment_seconds < 1:
         raise ValueError("segment_seconds must be positive")
     source = str(Path(input_path).resolve())
@@ -192,11 +195,12 @@ def run_ffmpeg_copy_package(
     protocol: str,
     segment_seconds: int = 4,
     timeout_seconds: int = 180,
+    drm_profile: str = "clear",
 ) -> dict:
     command = ffmpeg_copy_command(
-        ffmpeg_bin, input_path, output_dir, protocol, segment_seconds
+        ffmpeg_bin, input_path, output_dir, protocol, segment_seconds, drm_profile
     )
-    before = time.process_time()
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.perf_counter()
     completed = subprocess.run(
         command, check=False, capture_output=True, text=True,
@@ -212,7 +216,7 @@ def run_ffmpeg_copy_package(
         )
     return {
         "wall_seconds": elapsed,
-        "process_cpu_seconds": max(0.0, time.process_time() - before),
+        "process_cpu_seconds": max(0.0, (lambda after: after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime)(resource.getrusage(resource.RUSAGE_CHILDREN))),
         "command": command,
     }
 
@@ -225,6 +229,24 @@ def package_or_fallback(jit_package, conventional_package):
         return conventional_package()
 
 
-def directory_bytes(directory: str | Path) -> int:
+def directory_bytes(directory: Union[str, Path]) -> int:
     root = Path(directory)
     return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+
+
+
+def validate_track_timing(streams, tolerance_seconds=0.25):
+    """Reject audio/video/subtitle tracks whose declared starts drift apart."""
+    timed = []
+    for stream in streams:
+        if stream.get("codec_type") not in ("video", "audio", "subtitle"):
+            continue
+        value = stream.get("start_time")
+        if value is None:
+            raise ValueError("timed media stream is missing start_time")
+        timed.append(float(value))
+    if len(timed) < 2:
+        return True
+    if max(timed) - min(timed) > tolerance_seconds:
+        raise ValueError("audio/video/subtitle start times are not synchronized")
+    return True
