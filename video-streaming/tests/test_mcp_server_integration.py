@@ -9,7 +9,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from video_streaming import settings
-from video_streaming.security import RequestPrincipal
+from video_streaming.security import AuthorizationError, RequestPrincipal, require_scope
 from video_streaming.mcp import server as mcp_server
 
 
@@ -20,16 +20,42 @@ class MCPFakeRepository:
     def __init__(self):
         self.commands = []
         self.cancellations = []
+        self.snapshots = {}
 
     def find_idempotent_job(self, key, request_hash, owner_principal=None):
         return None
 
     def create_job(self, **kwargs):
         self.commands.append(kwargs)
-        return kwargs["job_id"], True
+        job_id = kwargs["job_id"]
+        self.snapshots[job_id] = {
+            "id": job_id,
+            "status": "QUEUED",
+            "workflow": {"name": "video.vod", "status": "QUEUED"},
+            "stages": [{
+                "key": node["stage_key"],
+                "operation": node["operation"],
+                "status": "PENDING",
+                "attempts": [],
+            } for node in kwargs["execution_plan"]["nodes"]],
+            "events": [],
+        }
+        return job_id, True
+
+    def authorize_job_access(self, job_id, principal, scope):
+        require_scope(principal, scope)
+        snapshot = self.snapshots.get(job_id)
+        if snapshot is None or principal.tenant_id != "mcp-integration-tenant":
+            raise AuthorizationError("Resource not found or access denied")
+
+    def get_job_snapshot(self, job_id):
+        return self.snapshots.get(job_id)
 
     def request_job_cancellation(self, job_id, principal, reason):
         self.cancellations.append((job_id, principal.subject, reason))
+        if job_id in self.snapshots:
+            self.snapshots[job_id]["status"] = "CANCEL_REQUESTED"
+            self.snapshots[job_id]["workflow"]["status"] = "CANCEL_REQUESTED"
         return {
             "job_id": job_id,
             "status": "CANCEL_REQUESTED",
@@ -148,6 +174,13 @@ class MCPServerIntegrationTests(unittest.TestCase):
                         self.repository.commands[-1]["execution_backend"],
                         "durable_vod_v1",
                     )
+                    status = await client.call_tool(
+                        "video_job_get", {"job_id": job_id}
+                    )
+                    self.assertFalse(status.is_error)
+                    self.assertEqual(
+                        status.structured_content["status"], "QUEUED"
+                    )
 
                     cancelled = await client.call_tool(
                         "video_job_cancel",
@@ -160,6 +193,14 @@ class MCPServerIntegrationTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         self.repository.cancellations[-1][0], job_id
+                    )
+                    cancelled_status = await client.call_tool(
+                        "video_job_get", {"job_id": job_id}
+                    )
+                    self.assertFalse(cancelled_status.is_error)
+                    self.assertEqual(
+                        cancelled_status.structured_content["status"],
+                        "CANCEL_REQUESTED",
                     )
 
             asyncio.run(exercise())
