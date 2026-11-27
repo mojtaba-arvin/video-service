@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from video_streaming.ffmpeg.package_validation import validate_streaming_package
 
