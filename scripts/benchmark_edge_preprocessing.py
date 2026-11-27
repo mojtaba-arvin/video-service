@@ -28,6 +28,10 @@ from video_streaming.execution.process_control import ProcessUsageAccumulator, r
 POLICY_VERSION = "keyframes-v1"
 MAX_FRAME_WIDTH = 640
 MAX_FRAME_COUNT = 8
+MAX_DURATION_SECONDS = 600
+MAX_SOURCE_BYTES = 100 * 1024 * 1024
+MAX_REPETITIONS = 5
+MAX_BENCHMARK_OUTPUT_BYTES = 256 * 1024 * 1024
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
@@ -51,8 +55,8 @@ def sha256_file(path):
 
 
 def sampling_rate(duration, interval, max_frames):
-    if duration <= 0 or interval <= 0 or max_frames < 1 or max_frames > MAX_FRAME_COUNT:
-        raise ValueError("duration and interval must be positive; max_frames must be 1..{}".format(MAX_FRAME_COUNT))
+    if duration <= 0 or duration > MAX_DURATION_SECONDS or interval <= 0 or max_frames < 1 or max_frames > MAX_FRAME_COUNT:
+        raise ValueError("duration must be 1..{} seconds, interval positive and max_frames 1..{}".format(MAX_DURATION_SECONDS, MAX_FRAME_COUNT))
     return min(1.0 / interval, max_frames / duration)
 
 
@@ -97,6 +101,8 @@ def run_preprocessing(input_path, output_dir, mode, args):
     started = time.monotonic()
     source_hash = sha256_file(source)
     source_bytes = source.stat().st_size
+    if source_bytes <= 0 or source_bytes > MAX_SOURCE_BYTES:
+        raise BenchmarkError("source media exceeds the 100 MiB pilot input budget")
     with tempfile.TemporaryDirectory(prefix="edge-preprocess-limits-") as limits_dir:
         ffmpeg_bin = _limited_binary(args.ffmpeg, Path(limits_dir) / "ffmpeg")
         ffprobe_bin = _limited_binary(args.ffprobe, Path(limits_dir) / "ffprobe")
@@ -157,6 +163,8 @@ def run_preprocessing(input_path, output_dir, mode, args):
             "interval_seconds": args.interval, "max_frames": args.max_frames,
             "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
             "memory_limit_bytes": MEMORY_LIMIT_BYTES, "cpu_time_limit_seconds": 180,
+            "max_duration_seconds": MAX_DURATION_SECONDS, "max_source_bytes": MAX_SOURCE_BYTES,
+            "max_benchmark_output_bytes": MAX_BENCHMARK_OUTPUT_BYTES,
             "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
             "ffmpeg_version": ffmpeg_version, "ffprobe_version": ffprobe_version,
         },
@@ -172,7 +180,11 @@ def run_preprocessing(input_path, output_dir, mode, args):
     manifest_path.write_text(manifest_text, encoding="utf-8")
     payload_bytes = manifest_path.stat().st_size + sum(item["size_bytes"] for item in records)
     if payload_bytes > (MAX_FRAME_COUNT * MAX_FRAME_BYTES + MAX_MANIFEST_BYTES):
-        raise BenchmarkError("preprocessing output exceeded its total disk budget")
+        raise BenchmarkError("preprocessing output exceeded its per-path disk budget")
+    benchmark_root = output.parent.parent
+    total_output_bytes = sum(path.stat().st_size for path in benchmark_root.rglob("*") if path.is_file())
+    if total_output_bytes > MAX_BENCHMARK_OUTPUT_BYTES:
+        raise BenchmarkError("benchmark exceeded its 256 MiB total disk budget")
     return {
         "mode": mode, "source_sha256": source_hash, "source_bytes": source_bytes,
         "transfer_bytes": source_bytes if mode == "cloud" else payload_bytes,
@@ -304,8 +316,8 @@ def parse_args(argv=None):
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--exercise-disconnection", action="store_true")
     args = parser.parse_args(argv)
-    if args.interval <= 0 or args.max_frames < 1 or args.max_frames > MAX_FRAME_COUNT or args.repetitions < 1 or args.timeout < 1 or args.timeout > 3600:
-        parser.error("interval/repetitions must be positive; max-frames must be 1..8 and timeout 1..3600 seconds")
+    if args.interval <= 0 or args.max_frames < 1 or args.max_frames > MAX_FRAME_COUNT or args.repetitions < 1 or args.repetitions > MAX_REPETITIONS or args.timeout < 1 or args.timeout > 180:
+        parser.error("interval must be positive; max-frames 1..8, repetitions 1..5 and timeout 1..180 seconds")
     return args
 
 
