@@ -38,7 +38,7 @@ Configure:
 - `MCP_ALLOWED_HOSTS`: comma-separated exact Host values, including ports
 - `MCP_ALLOWED_ORIGINS`: comma-separated allowed browser origins; empty disables browser-origin access
 
-The deployment must also configure the existing `OIDC_ISSUER`, `OIDC_JWKS_URI`, `OIDC_ALLOWED_ALGORITHMS`, tenant/subject/scope/role claim names and clock/JWKS timeouts. Tokens must carry the MCP audience and the required per-tool scopes. The adapter converts only verified token claims into the shared `RequestPrincipal`.
+MCP submissions fail closed unless both `WORKFLOW_DURABLE_DISPATCH_ENABLED` and `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED` are true and the caller's tenant has a provisioned quota policy. MCP never overwrites existing output keys or creates buckets; outputs are create-only until a separately reviewed approval contract exists.\n\nThe deployment must also configure the existing `OIDC_ISSUER`, `OIDC_JWKS_URI`, `OIDC_ALLOWED_ALGORITHMS`, tenant/subject/scope/role claim names and clock/JWKS timeouts. Tokens must carry the MCP audience and the required per-tool scopes. The adapter converts only verified token claims into the shared `RequestPrincipal`.
 
 Install the optional Python 3.12+ dependencies with `pip install -r requirements-mcp-py312.txt`, then run `python -m video_streaming.mcp` from the application environment. Terminate TLS at a trusted reverse proxy for non-loopback deployments and configure the exact Host/Origin allowlists. Do not expose the service directly to an untrusted network with the local defaults.
 
@@ -46,11 +46,11 @@ Install the optional Python 3.12+ dependencies with `pip install -r requirements
 
 | Tool | Required scope | Behavior |
 |---|---|---|
-| `probe_video` | `video.jobs:create` | Checks, downloads and probes one input; returns an asynchronous Job ID |
-| `generate_thumbnail` | `video.jobs:create` | Creates one thumbnail with typed timestamp and dimensions |
-| `transcode_video` | `video.jobs:create` | Creates an HLS or DASH workflow with bounded codec/quality fields |
-| `get_job_status` | `video.jobs:read` | Uses the shared `GetJobStatusService`; returns a sanitized status projection |
-| `cancel_job` | `video.jobs:cancel` | Uses the shared `CancelJobService` and durable cancellation contract |
+| `video_probe` | `video.jobs:create` | Checks, downloads and probes one input; returns an asynchronous Job ID |
+| `video_thumbnail` | `video.jobs:create` | Creates one thumbnail with typed timestamp and dimensions |
+| `video_transcode` | `video.jobs:create` | Creates an HLS or DASH workflow with bounded codec/quality fields |
+| `video_job_get` | `video.jobs:read` | Uses the shared `GetJobStatusService`; returns a sanitized status projection |
+| `video_job_cancel` | `video.jobs:cancel` | Uses the shared `CancelJobService` and durable cancellation contract |
 
 Submission delegates to `VideoOperationService` and `SubmitJobService`, reusing the existing versioned execution-plan validator and `build_vod_execution_plan`. The probe plan uses the existing allow-listed input check/download/analyze operations. Job creation uses the configured tenant quota policy and the transactional outbox. Submission fails closed while `WORKFLOW_DURABLE_DISPATCH_ENABLED` is false; MCP does not bypass the rollout gate.
 
