@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import statistics
@@ -757,6 +758,15 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
         "schema_version": SCHEMA_VERSION,
         "experiment": "issue-81-jit-cmaf-packaging",
         "packager_version": PACKAGER_VERSION,
+        "environment": {
+            "os": platform.platform(),
+            "machine": platform.machine(),
+            "processor": platform.processor() or None,
+            "python": platform.python_version(),
+            "logical_cpu_count": psutil.cpu_count(logical=True),
+            "physical_cpu_count": psutil.cpu_count(logical=False),
+            "memory_total_bytes": psutil.virtual_memory().total,
+        },
         "request_path_reencoding": False,
         "methodology": {
             "input": "already-encoded synthetic H.264/AAC MP4 fixtures; all CMAF, HLS and DASH packaging commands use -c copy",
