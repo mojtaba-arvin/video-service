@@ -47,7 +47,7 @@ class CodecBenchmarkManifestTests(unittest.TestCase):
             output_dir = Path(directory)
             ensure_output_paths_available(output_dir)
             (output_dir / "measurements.jsonl").write_text(
-                '{"prior":"evidence"}\\n', encoding="utf-8"
+                '{"prior":"evidence"}\n', encoding="utf-8"
             )
 
             with self.assertRaisesRegex(BenchmarkError, "choose a new output directory"):
@@ -55,7 +55,7 @@ class CodecBenchmarkManifestTests(unittest.TestCase):
 
             self.assertEqual(
                 (output_dir / "measurements.jsonl").read_text(encoding="utf-8"),
-                '{"prior":"evidence"}\\n',
+                '{"prior":"evidence"}\n',
             )
 
     def test_unmeasured_gpu_and_scratch_resources_remain_unknown(self):
