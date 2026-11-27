@@ -74,12 +74,30 @@ class WorkflowOutboxRelay:
             "published": 0,
             "retried": 0,
             "dead": 0,
+            "cancelled": 0,
             "lease_lost": 0,
         }
         for item in claimed:
             outbox_id = item["id"]
             token = item["lease_token"]
             try:
+                cancellation = self.repository.cancel_outbox_if_job_cancelled(
+                    outbox_id, token
+                )
+                if cancellation == "CANCELLED":
+                    result["cancelled"] += 1
+                    logger.info(
+                        "workflow_outbox_cancelled_before_dispatch",
+                        extra={
+                            "outbox_id": outbox_id,
+                            "job_id": item["job_id"],
+                            "attempt": item["attempts"],
+                        },
+                    )
+                    continue
+                if cancellation == "LEASE_LOST":
+                    result["lease_lost"] += 1
+                    continue
                 if item["event_type"] != DISPATCH_EVENT_TYPE:
                     raise ValueError("unsupported_outbox_event")
                 snapshot = self.repository.get_execution_plan(item["job_id"])

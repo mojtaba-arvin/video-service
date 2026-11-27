@@ -10,7 +10,12 @@ from video_streaming.workflows.relay import (
     DISPATCH_TASK_NAME,
     WorkflowOutboxRelay,
 )
-from video_streaming.workflows.repository import OutboxRecord, WorkflowRepository
+from video_streaming.workflows.repository import (
+    JobRecord,
+    OutboxRecord,
+    WorkflowEventRecord,
+    WorkflowRepository,
+)
 
 
 class FakePublisher:
@@ -169,6 +174,33 @@ class WorkflowOutboxRelayTests(unittest.TestCase):
         ))
         with self.assertRaises(ValueError):
             self.repository.replay_dead_outbox(self.outbox_id, "", "reason")
+
+    def test_cancelled_job_is_suppressed_before_broker_publish(self):
+        with self.repository._session.begin() as session:
+            job = session.get(JobRecord, self.job_id)
+            job.state = "CANCELLED"
+
+        publisher = FakePublisher()
+        result = self.relay(publisher).run_once()
+
+        self.assertEqual(result["claimed"], 1)
+        self.assertEqual(result["cancelled"], 1)
+        self.assertEqual(result["published"], 0)
+        self.assertEqual(publisher.messages, [])
+        snapshot = self.repository.get_outbox_snapshot(self.outbox_id)
+        self.assertEqual(snapshot["state"], "CANCELLED")
+        self.assertEqual(snapshot["last_error"], "job_cancelled_before_dispatch")
+        metrics = self.repository.get_outbox_metrics()
+        self.assertEqual(metrics["cancelled"], 1)
+        self.assertEqual(
+            self.repository.list_outbox("CANCELLED", limit=10)[0]["id"],
+            self.outbox_id,
+        )
+        with self.repository._session() as session:
+            event = session.query(WorkflowEventRecord).filter_by(
+                event_type="OUTBOX_CANCELLED_BEFORE_DISPATCH"
+            ).one()
+            self.assertEqual(event.payload_json["outbox_id"], self.outbox_id)
 
     def test_plan_fingerprint_mismatch_is_retried_without_broker_publish(self):
         publisher = FakePublisher()
