@@ -64,7 +64,7 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
             self.assertTrue(connection.execute(text(postcondition)).scalar())
             connection.rollback()
 
-    def test_all_five_guards_refuse_live_state_then_downgrade_empty_state(self):
+    def test_all_destructive_guards_refuse_live_state_then_downgrade_empty_state(self):
         cases = (
             (
                 "0006_job_tenant_ownership.py",
@@ -199,6 +199,33 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
                 "dependency edges",
                 "DELETE FROM workflow_stage_dependencies",
                 "SELECT to_regclass('pg_temp.workflow_stage_dependencies') IS NULL",
+            ),
+,
+            (
+                "0016_cdn_delivery_telemetry.py",
+                [
+                    """CREATE TEMP TABLE cdn_delivery_events (
+                        id varchar(36) PRIMARY KEY,
+                        ingested_at timestamptz NOT NULL,
+                        expires_at timestamptz NOT NULL,
+                        CONSTRAINT ck_cdn_delivery_expiry
+                        CHECK (expires_at > ingested_at)
+                    )""",
+                    "CREATE INDEX ix_cdn_delivery_job_source_time "
+                    "ON cdn_delivery_events(id)",
+                    "CREATE INDEX ix_cdn_delivery_stage_time "
+                    "ON cdn_delivery_events(id)",
+                    "CREATE INDEX ix_cdn_delivery_session_time "
+                    "ON cdn_delivery_events(id)",
+                    "CREATE INDEX ix_cdn_delivery_expiry "
+                    "ON cdn_delivery_events(expires_at)",
+                ],
+                "INSERT INTO cdn_delivery_events "
+                "VALUES ('delivery-1', CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP + INTERVAL '1 day')",
+                "retained CDN delivery evidence",
+                "DELETE FROM cdn_delivery_events",
+                "SELECT to_regclass('pg_temp.cdn_delivery_events') IS NULL",
             ),
         )
         for case in cases:
