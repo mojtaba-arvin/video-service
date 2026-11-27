@@ -1,6 +1,9 @@
 """Regression tests for the isolated JIT CMAF packaging prototype."""
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import shutil
+import subprocess
 import hashlib
 import tempfile
 import threading
@@ -14,6 +17,7 @@ from video_streaming.ffmpeg.jit_packaging import (
     ffmpeg_copy_command,
     package_or_fallback,
     validate_track_timing,
+    run_ffmpeg_copy_package,
 )
 
 
@@ -181,6 +185,49 @@ class JitPackageCacheTests(unittest.TestCase):
                 {"codec_type": "video", "start_time": "0"},
                 {"codec_type": "audio"},
             ])
+
+
+class JitFfmpegIntegrationTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ffmpeg = shutil.which("ffmpeg")
+        cls.ffprobe = shutil.which("ffprobe")
+        cls.source = Path("/tmp/synthetic-vod-v1/portrait-audio-30fps.mp4")
+        if not cls.ffmpeg or not cls.ffprobe or not cls.source.is_file():
+            raise unittest.SkipTest(
+                "requires generated synthetic-vod-v1 fixture and FFmpeg/FFprobe"
+            )
+
+    def test_hls_and_dash_package_existing_encoded_audio_video_without_encoding(self):
+        for protocol, manifest_name in (
+            ("hls", "master.m3u8"),
+            ("dash", "manifest.mpd"),
+        ):
+            with self.subTest(protocol=protocol):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary)
+                    metrics = run_ffmpeg_copy_package(
+                        self.ffmpeg, self.source, output, protocol,
+                        segment_seconds=2,
+                    )
+                    manifest = output / manifest_name
+                    self.assertTrue(manifest.is_file())
+                    self.assertGreater(manifest.stat().st_size, 0)
+                    self.assertGreater(len(list(output.glob("*.m4s"))), 0)
+                    self.assertIn("-c", metrics["command"])
+                    self.assertIn("copy", metrics["command"])
+                    probed = subprocess.run(
+                        [self.ffprobe, "-v", "error", "-show_entries",
+                         "stream=codec_type,start_time,duration", "-of", "json",
+                         str(manifest)],
+                        check=True, capture_output=True, text=True, timeout=30,
+                    )
+                    streams = json.loads(probed.stdout).get("streams", [])
+                    kinds = {item.get("codec_type") for item in streams}
+                    self.assertIn("video", kinds)
+                    self.assertIn("audio", kinds)
+                    self.assertTrue(validate_track_timing(streams, 0.25))
 
 
 if __name__ == "__main__":
