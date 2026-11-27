@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Validate commit authors and co-author trailers for a GitHub pull request."""
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
 
 NAME = "Mojtaba Arvin"
 EMAIL = "m.arvin@live.com"
