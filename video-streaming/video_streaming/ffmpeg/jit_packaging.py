@@ -180,7 +180,7 @@ def ffmpeg_copy_command(
             "-hls_playlist_type", "vod",
             "-hls_segment_type", "fmp4",
             "-hls_fmp4_init_filename", "init.mp4",
-            "-hls_segment_filename", str(output / "segment_%05d.m4s"),
+            "-hls_segment_filename", "segment_%05d.m4s",
             "-hls_flags", "independent_segments",
             str(output / "master.m3u8"),
         ]
@@ -212,6 +212,7 @@ def run_ffmpeg_copy_package(
     completed = subprocess.run(
         command, check=False, capture_output=True, text=True,
         timeout=timeout_seconds,
+        cwd=str(Path(output_dir).resolve()),
     )
     elapsed = time.perf_counter() - started
     if completed.returncode:
