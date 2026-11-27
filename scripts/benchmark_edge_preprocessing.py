@@ -156,13 +156,20 @@ def run_preprocessing(input_path, output_dir, mode, args):
         "parameters": {
             "interval_seconds": args.interval, "max_frames": args.max_frames,
             "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
+            "memory_limit_bytes": MEMORY_LIMIT_BYTES, "cpu_time_limit_seconds": 180,
+            "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
             "ffmpeg_version": ffmpeg_version, "ffprobe_version": ffprobe_version,
         },
         "input_metadata": metadata,
         "frames": records,
     }
     manifest_path = output / "preprocessing-manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    if len(manifest_text.encode("utf-8")) > MAX_MANIFEST_BYTES:
+        raise BenchmarkError("preprocessing manifest exceeded its disk budget")
+    if any(item["size_bytes"] > MAX_FRAME_BYTES for item in records):
+        raise BenchmarkError("sampled frame exceeded its disk budget")
+    manifest_path.write_text(manifest_text, encoding="utf-8")
     payload_bytes = manifest_path.stat().st_size + sum(item["size_bytes"] for item in records)
     if payload_bytes > (MAX_FRAME_COUNT * MAX_FRAME_BYTES + MAX_MANIFEST_BYTES):
         raise BenchmarkError("preprocessing output exceeded its total disk budget")
