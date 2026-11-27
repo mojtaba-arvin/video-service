@@ -243,6 +243,7 @@ def benchmark(args):
             "edge_transfer_bytes": "manifest plus sampled JPEG bytes at hand-off boundary",
             "network_transfer_time_ms": None,
             "quality_measure": "exact SHA-256 parity of sampled JPEG outputs; not perceptual quality",
+            "failure_rate_scope": "zero failures among completed paired attempts; any path failure aborts the run and fails CI; injected disconnect is reported separately",
             "limitations": [
                 "network transfer time, provider egress charges and real edge hardware are not measured",
                 "resource measurements cover FFmpeg child processes; cloud storage/control-plane costs are excluded",
