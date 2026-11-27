@@ -19,6 +19,7 @@ import psutil
 
 POLICY_VERSION = "keyframes-v1"
 MAX_FRAME_WIDTH = 640
+MAX_FRAME_COUNT = 8
 
 
 class BenchmarkError(RuntimeError):
@@ -38,8 +39,8 @@ def sha256_file(path):
 
 
 def sampling_rate(duration, interval, max_frames):
-    if duration <= 0 or interval <= 0 or max_frames < 1:
-        raise ValueError("duration, interval and max_frames must be positive")
+    if duration <= 0 or interval <= 0 or max_frames < 1 or max_frames > MAX_FRAME_COUNT:
+        raise ValueError("duration and interval must be positive; max_frames must be 1..{}".format(MAX_FRAME_COUNT))
     return min(1.0 / interval, max_frames / duration)
 
 
@@ -166,7 +167,7 @@ def run_preprocessing(input_path, output_dir, mode, args):
         },
         "parameters": {
             "interval_seconds": args.interval, "max_frames": args.max_frames,
-            "max_frame_width": MAX_FRAME_WIDTH, "sampling_rate_fps": rate,
+            "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
             "ffmpeg_version": _version(args.ffmpeg), "ffprobe_version": _version(args.ffprobe),
         },
         "input_metadata": metadata,
@@ -297,8 +298,8 @@ def parse_args(argv=None):
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--exercise-disconnection", action="store_true")
     args = parser.parse_args(argv)
-    if args.interval <= 0 or args.max_frames < 1 or args.repetitions < 1:
-        parser.error("interval, max-frames and repetitions must be positive")
+    if args.interval <= 0 or args.max_frames < 1 or args.max_frames > MAX_FRAME_COUNT or args.repetitions < 1 or args.timeout < 1 or args.timeout > 3600:
+        parser.error("interval/repetitions must be positive; max-frames must be 1..8 and timeout 1..3600 seconds")
     return args
 
 
