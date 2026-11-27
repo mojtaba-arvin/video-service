@@ -534,6 +534,11 @@ message DerivedDeliveryAggregate {
   int32 http_error_count = 10;
   bool bytes_sent_available = 11;
   bool average_response_time_available = 12;
+  string source = 13;
+  string artifact_id = 14;
+  string manifest_version = 15;
+  string asset_version = 16;
+  string delivery_config_id = 17;
 }
 
 message DeliveryTelemetryCoverage {
