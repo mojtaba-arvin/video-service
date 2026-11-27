@@ -8,6 +8,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import resource
 import re
@@ -103,6 +104,161 @@ def probe_av_sync(manifest_path, ffprobe="ffprobe", tolerance_seconds=0.25):
                 "absolute_start_delta_seconds": delta,
                 "tolerance_seconds": tolerance_seconds, "passed": True}
     return {"passed": None, "reason": "audio or video stream absent"}
+
+
+def _expand_dash_template(template, representation_id, number, media_time):
+    value = template.replace("$RepresentationID$", representation_id)
+    value = value.replace("$Time$", str(media_time))
+    value = re.sub(
+        r"\$Number%0(\d+)d\$",
+        lambda match: str(number).zfill(int(match.group(1))),
+        value,
+    )
+    value = value.replace("$Number$", str(number))
+    return value
+
+
+def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
+    """Pre-package one CMAF media-object set and point both HLS and DASH at it."""
+    source = Path(source).resolve()
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mpd = output_dir / "manifest.mpd"
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(source),
+        "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
+        "-f", "dash", "-seg_duration", str(segment_seconds),
+        "-use_timeline", "1", "-use_template", "1",
+        "-adaptation_sets", "id=0,streams=v id=1,streams=a",
+        "-init_seg_name", "init-$RepresentationID$.$ext$",
+        "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.$ext$",
+        "-y", str(mpd),
+    ]
+    subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    if not mpd.is_file() or mpd.stat().st_size == 0:
+        raise RuntimeError("DASH muxer did not create a static CMAF MPD")
+
+    tree = ET.parse(str(mpd))
+    root = tree.getroot()
+    namespace = "{urn:mpeg:dash:schema:mpd:2011}"
+    tracks = []
+    for adaptation in root.findall(".//" + namespace + "AdaptationSet"):
+        representation = adaptation.find(namespace + "Representation")
+        if representation is None:
+            continue
+        template = representation.find(namespace + "SegmentTemplate")
+        if template is None:
+            template = adaptation.find(namespace + "SegmentTemplate")
+        if template is None:
+            raise RuntimeError("CMAF MPD is missing a SegmentTemplate")
+        timeline = template.find(namespace + "SegmentTimeline")
+        if timeline is None:
+            raise RuntimeError("CMAF MPD is missing a static SegmentTimeline")
+        rep_id = representation.get("id")
+        timescale = int(template.get("timescale", "1"))
+        start_number = int(template.get("startNumber", "1"))
+        initialization = _expand_dash_template(
+            template.get("initialization", ""), rep_id, start_number, 0
+        )
+        media_template = template.get("media", "")
+        segments = []
+        number = start_number
+        for item in timeline.findall(namespace + "S"):
+            duration_units = int(item.get("d", "0"))
+            repeat = int(item.get("r", "0"))
+            if duration_units <= 0 or repeat < 0:
+                raise RuntimeError("Unsupported CMAF segment timeline")
+            media_time = int(item.get("t", "0"))
+            for _ in range(repeat + 1):
+                segments.append({
+                    "path": _expand_dash_template(
+                        media_template, rep_id, number, media_time
+                    ),
+                    "duration_seconds": duration_units / float(timescale),
+                })
+                number += 1
+                media_time += duration_units
+        if not segments:
+            raise RuntimeError("CMAF MPD contains no media segments")
+        content_type = adaptation.get("contentType") or (
+            "audio" if "audio" in adaptation.get("mimeType", "") else "video"
+        )
+        tracks.append({
+            "content_type": content_type,
+            "representation_id": rep_id,
+            "initialization": initialization,
+            "segments": segments,
+            "bandwidth": int(representation.get("bandwidth", "0")),
+            "codecs": representation.get("codecs", ""),
+            "width": representation.get("width"),
+            "height": representation.get("height"),
+        })
+
+    video = next((track for track in tracks if track["content_type"] == "video"), None)
+    audio = next((track for track in tracks if track["content_type"] == "audio"), None)
+    if video is None:
+        raise RuntimeError("CMAF MPD has no video adaptation set")
+
+    def write_media_playlist(track, name):
+        durations = [item["duration_seconds"] for item in track["segments"]]
+        lines = [
+            "#EXTM3U", "#EXT-X-VERSION:7",
+            "#EXT-X-TARGETDURATION:{}".format(int(math.ceil(max(durations)))),
+            "#EXT-X-MEDIA-SEQUENCE:1", "#EXT-X-PLAYLIST-TYPE:VOD",
+            '#EXT-X-MAP:URI="{}"'.format(track["initialization"]),
+        ]
+        for segment in track["segments"]:
+            lines.extend([
+                "#EXTINF:{:.6f},".format(segment["duration_seconds"]),
+                segment["path"],
+            ])
+        lines.append("#EXT-X-ENDLIST")
+        (output_dir / name).write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+
+    write_media_playlist(video, "video.m3u8")
+    master = ["#EXTM3U", "#EXT-X-VERSION:7"]
+    if audio:
+        write_media_playlist(audio, "audio.m3u8")
+        master.append(
+            '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",'
+            'DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"'
+        )
+    codecs = [video["codecs"]]
+    if audio and audio["codecs"]:
+        codecs.append(audio["codecs"])
+    bandwidth = video["bandwidth"] + (audio["bandwidth"] if audio else 0)
+    attributes = ['BANDWIDTH={}'.format(max(1, bandwidth)),
+                  'CODECS="{}"'.format(",".join(item for item in codecs if item))]
+    if video.get("width") and video.get("height"):
+        attributes.append('RESOLUTION={}x{}'.format(video["width"], video["height"]))
+    if audio:
+        attributes.append('AUDIO="audio"')
+    master.extend(["#EXT-X-STREAM-INF:" + ",".join(attributes), "video.m3u8"])
+    (output_dir / "master.m3u8").write_text("\\n".join(master) + "\\n", encoding="utf-8")
+
+    hls_validation = validate_streaming_package(
+        str(output_dir), str(output_dir / "master.m3u8"), "hls"
+    )
+    dash_validation = validate_streaming_package(
+        str(output_dir), str(mpd), "dash"
+    )
+    inventory = tree_inventory(output_dir)
+    media_files = [
+        item for item in inventory["files"]
+        if item["path"].endswith((".m4s", ".mp4"))
+    ]
+    return {
+        "total_bytes": inventory["total_bytes"],
+        "file_count": inventory["file_count"],
+        "manifest_sha256": sha256_file(mpd),
+        "hls_manifest_sha256": sha256_file(output_dir / "master.m3u8"),
+        "hls_validation": hls_validation,
+        "dash_validation": dash_validation,
+        "shared_media_files": media_files,
+        "shared_media_bytes": sum(item["size_bytes"] for item in media_files),
+        "audio_video_sync": probe_av_sync(mpd),
+        "inventory": inventory,
+    }
 
 
 def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds=2):
