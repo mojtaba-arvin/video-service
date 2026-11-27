@@ -670,10 +670,17 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
         protocols[name]["workload_model"]["jit_cache_byte_hours"]
         for name in ("hls", "dash")
     )
-    modeled_cold_cpu_seconds = sum(
-        protocols[name]["jit"]["cpu_seconds_p50"]
-        * protocols[name]["workload_model"]["modeled_cache_misses"]
-        for name in ("hls", "dash")
+    cpu_p50_values = [
+        protocols[name]["jit"]["cpu_seconds_p50"] for name in ("hls", "dash")
+    ]
+    modeled_cold_cpu_seconds = (
+        sum(
+            protocols[name]["jit"]["cpu_seconds_p50"]
+            * protocols[name]["workload_model"]["modeled_cache_misses"]
+            for name in ("hls", "dash")
+        )
+        if all(value is not None for value in cpu_p50_values)
+        else None
     )
     return {
         "fixture": source.name, "source_sha256": source_hash,
@@ -754,6 +761,7 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
             "dash_requests_per_asset": dash_requests,
             "byte_hours": "pre-packaged CMAF media objects retained for the full horizon versus protocol-specific JIT cache objects retained over modeled request/TTL residency; canonical source bytes are common and excluded",
             "ttfb": "local filesystem first-byte measurement, not HTTP/CDN/player TTFB",
+            "quality_metrics": "not applicable; packaging copies encoded bitstreams and performs no perceptual re-encoding comparison",
         },
         "limitations": {
             "representative_storage_savings": "not established by synthetic fixtures",
@@ -761,6 +769,7 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
             "player_compatibility": "not tested; structural manifest/artifact validation only",
             "audio_subtitle_sync": "packaged audio/video start-time alignment is checked with FFprobe and synthetic WebVTT cue times are checked against media duration; this is not a real player subtitle-rendering test",
             "cache": "local filesystem prototype; not a distributed cache or object-store implementation",
+            "resource_metrics": "FFmpeg process CPU/RSS/I/O and output-directory scratch usage are sampled with psutil; unavailable counters remain null",
         },
         "fixtures": results,
     }
