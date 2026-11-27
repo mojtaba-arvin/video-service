@@ -200,7 +200,6 @@ class PostgresMigrationDowngradeTests(unittest.TestCase):
                 "DELETE FROM workflow_stage_dependencies",
                 "SELECT to_regclass('pg_temp.workflow_stage_dependencies') IS NULL",
             ),
-,
             (
                 "0016_cdn_delivery_telemetry.py",
                 [
