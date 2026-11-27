@@ -159,6 +159,25 @@ class JitPackageCacheTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_package_files(package, manifest)
 
+
+    def test_dash_template_references_are_resolved_per_adaptation_set(self):
+        package = self.root / "dash"
+        package.mkdir()
+        for name in ("init-video.m4s", "video-00001.m4s",
+                     "init-audio.m4s", "audio-00001.m4s"):
+            (package / name).write_bytes(b"segment")
+        manifest = package / "manifest.mpd"
+        manifest.write_text(
+            '<MPD><Period>'
+            '<AdaptationSet><SegmentTemplate initialization="init-video.m4s" media="video-$Number%05d$.m4s"/>'
+            '<Representation id="video"/></AdaptationSet>'
+            '<AdaptationSet><SegmentTemplate initialization="init-audio.m4s" media="audio-$Number%05d$.m4s"/>'
+            '<Representation id="audio"/></AdaptationSet>'
+            '</Period></MPD>',
+            encoding="utf-8",
+        )
+        self.assertTrue(validate_package_files(package, manifest))
+
     def test_manifest_path_cannot_escape_staging_directory(self):
         with self.assertRaises(ValueError):
             self.cache.get_or_create(
@@ -257,6 +276,7 @@ class JitFfmpegIntegrationTests(unittest.TestCase):
                     self.assertIn("video", kinds)
                     self.assertIn("audio", kinds)
                     self.assertTrue(validate_track_timing(streams, 0.25))
+                    self.assertTrue(validate_package_files(output, manifest))
 
 
 if __name__ == "__main__":
