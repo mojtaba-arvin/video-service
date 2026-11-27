@@ -177,17 +177,17 @@ def build_server():
         )
 
     @mcp.tool()
-    def probe_video(bucket: str, key: str, idempotency_key: str) -> dict:
+    def video_probe(bucket: str, key: str, idempotency_key: str) -> dict:
         """Probe a video and return its asynchronous durable Job ID."""
         return _safe_tool_call(
-            "probe_video",
+            "video_probe",
             lambda: operation_service().probe_video(
                 bucket, key, idempotency_key, principal()
             ),
         )
 
     @mcp.tool()
-    def generate_thumbnail(
+    def video_thumbnail(
             bucket: str,
             key: str,
             output_bucket: str,
@@ -195,21 +195,18 @@ def build_server():
             thumbnail_time: str,
             idempotency_key: str,
             scale_width: int = 0,
-            scale_height: int = 0,
-            dont_replace: bool = False,
-            create_bucket: bool = False) -> dict:
+            scale_height: int = 0) -> dict:
         """Generate one thumbnail using typed media settings; returns a Job ID."""
         return _safe_tool_call(
-            "generate_thumbnail",
+            "video_thumbnail",
             lambda: operation_service().generate_thumbnail(
                 bucket, key, output_bucket, output_key, thumbnail_time,
                 idempotency_key, principal(), scale_width, scale_height,
-                dont_replace, create_bucket,
             ),
         )
 
     @mcp.tool()
-    def transcode_video(
+    def video_transcode(
             bucket: str,
             key: str,
             output_bucket: str,
@@ -220,7 +217,7 @@ def build_server():
             encode_format: str = "h264") -> dict:
         """Create an HLS or DASH transcode Job with a bounded quality profile."""
         return _safe_tool_call(
-            "transcode_video",
+            "video_transcode",
             lambda: operation_service().transcode_video(
                 bucket, key, output_bucket, output_key, protocol,
                 idempotency_key, principal(), quality_names, encode_format,
@@ -228,7 +225,7 @@ def build_server():
         )
 
     @mcp.tool()
-    def get_job_status(job_id: str) -> dict:
+    def video_job_get(job_id: str) -> dict:
         """Read a tenant-authorized Job status without exposing artifact URLs."""
         def read_status():
             snapshot = GetJobStatusService(repository()).execute(
@@ -260,13 +257,13 @@ def build_server():
                     "occurred_at": event["occurred_at"],
                 } for event in snapshot["events"]],
             }
-        return _safe_tool_call("get_job_status", read_status)
+        return _safe_tool_call("video_job_get", read_status)
 
     @mcp.tool()
-    def cancel_job(job_id: str, reason: str = "mcp_operator_request") -> dict:
+    def video_job_cancel(job_id: str, reason: str = "mcp_operator_request") -> dict:
         """Request durable cancellation; active workers acknowledge their leases."""
         return _safe_tool_call(
-            "cancel_job",
+            "video_job_cancel",
             lambda: CancelJobService(repository()).execute(
                 job_id, principal(), reason=reason
             ).__dict__,
