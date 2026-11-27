@@ -1,7 +1,6 @@
 """Deterministic workload admission, fairness and economics policy tests."""
 
 import unittest
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -215,7 +214,35 @@ class SchedulingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tenant_id"):
             fair_queue_order([Request("", "job", NOW)])
 
-    def test_interruption_pool_requires_idempotency_checkpoint_and_recovery(self):
+    def test_interruption_pool_requires_every_recovery_guarantee(self):
+        for missing_guarantee in (
+                "supports_idempotency", "supports_checkpoints", "supports_recovery"):
+            values = {
+                "pool_id": "spot",
+                "kind": CapacityKind.SPOT,
+                "workload_classes": frozenset(["media_transform"]),
+                "capabilities": frozenset(["cpu", "ffmpeg"]),
+                "locality": "eu-central",
+                "privacy_levels": frozenset(["confidential"]),
+                "cpu_capacity_units": 8,
+                "available_cpu_units": 8,
+                "adapter_enabled": True,
+                "recovery_contract_verified": True,
+                "supports_idempotency": True,
+                "supports_checkpoints": True,
+                "supports_recovery": True,
+            }
+            values[missing_guarantee] = False
+            spot = CapacityPool(**values)
+            decision = select_capacity(
+                self.requirements(), [spot], budget(),
+                TenantConcurrencyUsage(), 8, NOW,
+            )
+            self.assertIn(
+                "INTERRUPTION_GUARANTEES_INCOMPLETE", decision.reason_codes
+            )
+
+    def test_spot_is_eligible_only_after_adapter_and_recovery_evidence(self):
         spot = CapacityPool(
             pool_id="spot",
             kind=CapacityKind.SPOT,
@@ -229,13 +256,19 @@ class SchedulingTests(unittest.TestCase):
             recovery_contract_verified=True,
             supports_idempotency=True,
             supports_checkpoints=True,
-            supports_recovery=False,
+            supports_recovery=True,
         )
         decision = select_capacity(
             self.requirements(), [spot], budget(),
             TenantConcurrencyUsage(), 8, NOW,
         )
-        self.assertIn("INTERRUPTION_GUARANTEES_INCOMPLETE", decision.reason_codes)
+        self.assertEqual(decision.status, AdmissionStatus.ADMITTED)
+        self.assertEqual(decision.pool_id, "spot")
+
+    def test_duplicate_queue_job_identity_is_rejected(self):
+        duplicate = Request("tenant-a", "same-job", NOW)
+        with self.assertRaisesRegex(ValueError, "duplicate queued job identity"):
+            fair_queue_order([duplicate, duplicate])
 
     def test_cost_per_successful_output_includes_failed_and_retry_cost(self):
         summary = summarize_workload_economics([
