@@ -3687,6 +3687,7 @@ class WorkflowRepository:
                 report.status = "INVALIDATED"
 
         if job is None or job.state in (
+                JobState.CANCEL_REQUESTED.value,
                 JobState.CANCELLED.value,
                 JobState.FAILED.value,
                 JobState.FINISHED.value):
@@ -3724,6 +3725,10 @@ class WorkflowRepository:
                     stage_id=stage.id,
                     attempt_id=attempt.id,
                     payload={"job_state": job.state},
+                )
+                self._finalize_job_cancellation_if_idle(
+                    session, job, workflow, now,
+                    "expired worker lease acknowledged cancellation",
                 )
             return True
 
@@ -4017,6 +4022,7 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None or job.state in (
                     JobState.CANCEL_REQUESTED.value,
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -4159,6 +4165,7 @@ class WorkflowRepository:
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
             if job.state in (
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -4355,7 +4362,7 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             job = session.get(JobRecord, job_id)
             if workflow is None or job is None or job.state in (
-                    JobState.CANCELLED.value, JobState.FAILED.value,
+                    JobState.CANCEL_REQUESTED.value, JobState.CANCELLED.value, JobState.FAILED.value,
                     JobState.FINISHED.value):
                 return []
             stages = session.execute(
@@ -5355,6 +5362,7 @@ class WorkflowRepository:
                 ).with_for_update()
             ).scalar_one_or_none()
             if job is None or job.state in (
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -5386,6 +5394,11 @@ class WorkflowRepository:
                     stage_id=stage.id,
                     attempt_id=attempt_id,
                     payload={"reason": "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE"},
+                )
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                self._finalize_job_cancellation_if_idle(
+                    session, job, workflow, now,
+                    "JOB_TERMINAL_BEFORE_ATTEMPT_FAILURE",
                 )
                 return False
             previous_status = stage.status
