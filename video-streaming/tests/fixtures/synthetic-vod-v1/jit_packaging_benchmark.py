@@ -483,6 +483,7 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
 
         cold_latencies, cold_cpu, warm_latencies, cold_ttfb, warm_ttfb = [], [], [], [], []
         stable_hashes = []
+        cache_bytes = None
         for repetition in range(repetitions):
             cache_root = output_root / (source.stem + "-jit-" + protocol + "-" + str(repetition))
             if cache_root.exists():
@@ -499,6 +500,7 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
             cpu_delta = max(0.0, cpu_seconds() - before_cpu)
             cold_latencies.append(elapsed)
             cold_cpu.append(cpu_delta)
+            cache_bytes = tree_inventory(path)["total_bytes"]
             cold_ttfb.append(elapsed + first_manifest_byte(path / MANIFESTS[protocol]))
             stable_hashes.append(sha256_file(path / MANIFESTS[protocol]))
             warm_path, warm_hit, warm_elapsed = cache.get_or_build(
@@ -520,7 +522,7 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "manifest_sha256": pre["manifest_sha256"],
             },
             "jit": {
-                "bytes": pre["total_bytes"],
+                "bytes": cache_bytes,
                 "cold_packaging_ms_p50": statistics.median(cold_latencies),
                 "cold_packaging_ms_p95": percentile(cold_latencies, 95),
                 "warm_cache_lookup_ms_p50": statistics.median(warm_latencies),
@@ -535,7 +537,7 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "modeled_cache_hit_ratio": (modeled_hits / requests) if requests else None,
                 "cache_ttl_hours": cache_ttl_hours,
                 "cache_resident_hours": resident_hours,
-                "jit_cache_byte_hours": pre["total_bytes"] * resident_hours,
+                "jit_cache_byte_hours": cache_bytes * resident_hours,
                 "modeled_cache_misses": max(0, requests - modeled_hits),
             },
             "structural_validation": pre["validation"],
