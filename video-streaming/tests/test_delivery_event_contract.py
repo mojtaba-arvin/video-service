@@ -83,6 +83,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             {"source_event_id": "x" * 129},
             {"artifact_id": "bad\nartifact"},
             {"edge_region": "x" * 65},
+            {"edge_region": "192.0.2.1"},
+            {"edge_region": "EU-WEST"},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(DeliveryEventContractError):
