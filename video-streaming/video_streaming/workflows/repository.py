@@ -5654,9 +5654,33 @@ class WorkflowRepository:
             metrics=None,
             pricing=None,
             lease_token=None):
-        """Acknowledge cancellation under the active Attempt's lease."""
+        """Acknowledge cancellation under a live Attempt lease.
+
+        A worker holding the lease may initiate a Job-wide cancellation when
+        it detects a local cancellation condition. The request and acknowledgement
+        share this transaction, and all Stage locks are acquired in the same
+        ordinal order as the external cancellation path.
+        """
         with self._session.begin() as session:
-            stage = self._find_stage(session, job_id, stage_key, lock=True)
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one_or_none()
+            if workflow is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
+            stages = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == workflow.id
+                ).order_by(StageRecord.ordinal, StageRecord.id)
+                .with_for_update()
+            ).scalars().all()
+            stage = next(
+                (item for item in stages if item.stage_key == stage_key),
+                None,
+            )
+            if stage is None:
+                raise InvalidStateTransition("Workflow stage does not exist")
             attempt = session.get(AttemptRecord, attempt_id)
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
@@ -5670,14 +5694,73 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
+
+            now = utcnow()
             if job.state not in (
                     JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
-                raise InvalidStateTransition(
-                    "Job cancellation must be requested before worker acknowledgement"
+                previous_job_state = job.state
+                job.state = JobState.CANCEL_REQUESTED.value
+                job.updated_at = now
+                job.version += 1
+                workflow.state = WorkflowState.CANCEL_REQUESTED.value
+                workflow.updated_at = now
+                _record_event(
+                    session, job_id, workflow.id,
+                    "JOB_CANCELLATION_REQUESTED",
+                    from_state=previous_job_state,
+                    to_state=JobState.CANCEL_REQUESTED.value,
+                    payload={
+                        "reason": reason[:500],
+                        "requested_by": "workflow_executor",
+                    },
                 )
+                for candidate in stages:
+                    if candidate.id == stage.id:
+                        continue
+                    active = session.execute(
+                        select(AttemptRecord.id).where(
+                            AttemptRecord.stage_id == candidate.id,
+                            AttemptRecord.state == AttemptState.RUNNING.value,
+                        ).limit(1)
+                    ).scalar_one_or_none()
+                    if active is not None:
+                        continue
+                    current = StageState(candidate.status)
+                    if (
+                            current not in (
+                                StageState.FINISHED,
+                                StageState.FAILED,
+                                StageState.CANCELLED,
+                            )
+                            and StageState.CANCELLED
+                            in ALLOWED_STAGE_TRANSITIONS[current]):
+                        previous = candidate.status
+                        self._transition(candidate, StageState.CANCELLED)
+                        _record_event(
+                            session, job_id, workflow.id,
+                            "STAGE_CANCELLED",
+                            from_state=previous,
+                            to_state=StageState.CANCELLED.value,
+                            stage_id=candidate.id,
+                            payload={"reason": reason[:500]},
+                        )
+                outbox_rows = session.execute(
+                    select(OutboxRecord).where(
+                        OutboxRecord.job_id == job_id,
+                        OutboxRecord.state.in_(("PENDING", "PROCESSING")),
+                    ).with_for_update()
+                ).scalars().all()
+                for row in outbox_rows:
+                    row.state = "DEAD"
+                    row.locked_by = None
+                    row.lock_token_hash = None
+                    row.lease_expires_at = None
+                    row.last_error = "job_cancel_requested"
+                    row.updated_at = now
+
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
                     StageState(stage.status)
             ]:
@@ -5686,7 +5769,6 @@ class WorkflowRepository:
                         stage_key, stage.status
                     )
                 )
-            now = utcnow()
             previous_status = stage.status
             self._transition(stage, StageState.CANCELLED)
             started = attempt.started_at
@@ -5707,7 +5789,6 @@ class WorkflowRepository:
             self._clear_attempt_lease(attempt)
             attempt.error_code = "CANCELLED"
             attempt.error_message = reason[:500]
-            workflow = session.get(WorkflowRecord, stage.workflow_id)
             _record_event(
                 session, job_id, workflow.id, "STAGE_CANCELLED",
                 from_state=previous_status,
