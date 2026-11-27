@@ -5618,8 +5618,12 @@ class WorkflowRepository:
             require_scope,
         )
 
-        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
-            raise ValueError("reason must contain 1 to 500 characters")
+        if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or len(reason) > 500
+                or any(ord(char) < 32 for char in reason)):
+            raise ValueError("reason must contain 1 to 500 safe characters")
         if principal is None:
             raise AuthorizationError("Resource not found or access denied")
         require_scope(principal, "video.jobs:cancel")
@@ -5754,6 +5758,12 @@ class WorkflowRepository:
         share this transaction, and all Stage locks are acquired in the same
         ordinal order as the external cancellation path.
         """
+        if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or len(reason) > 500
+                or any(ord(char) < 32 for char in reason)):
+            raise ValueError("reason must contain 1 to 500 safe characters")
         with self._session.begin() as session:
             workflow = session.execute(
                 select(WorkflowRecord).where(
