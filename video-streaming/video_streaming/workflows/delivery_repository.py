@@ -409,7 +409,11 @@ class DeliveryTelemetryRepository:
                     timestamp = timestamp.replace(tzinfo=timezone.utc)
                 epoch = int(timestamp.timestamp())
                 bucket_epoch = (epoch // window) * window
-                key = (bucket_epoch, item.edge_region or "", item.cache_status)
+                key = (
+                    bucket_epoch, item.source, item.artifact_id,
+                    item.asset_version or "", item.delivery_config_id or "",
+                    item.edge_region or "", item.cache_status,
+                )
                 bucket = buckets.setdefault(key, {
                     "window_start": datetime.fromtimestamp(
                         bucket_epoch, timezone.utc
@@ -417,6 +421,10 @@ class DeliveryTelemetryRepository:
                     "window_end": datetime.fromtimestamp(
                         bucket_epoch + window, timezone.utc
                     ),
+                    "source": item.source,
+                    "artifact_id": item.artifact_id,
+                    "asset_version": item.asset_version,
+                    "delivery_config_id": item.delivery_config_id,
                     "edge_region": item.edge_region,
                     "cache_status": item.cache_status,
                     "event_count": 0,
@@ -441,6 +449,11 @@ class DeliveryTelemetryRepository:
                 derived.append({
                     "window_start": _iso(item["window_start"]),
                     "window_end": _iso(item["window_end"]),
+                    "source": item["source"],
+                    "artifact_id": item["artifact_id"],
+                    "manifest_version": item["artifact_id"],
+                    "asset_version": item["asset_version"],
+                    "delivery_config_id": item["delivery_config_id"],
                     "edge_region": item["edge_region"],
                     "cache_status": item["cache_status"],
                     "event_count": item["event_count"],
