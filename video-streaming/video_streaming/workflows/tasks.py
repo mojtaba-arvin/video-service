@@ -15,6 +15,7 @@ from video_streaming.celery import celery_app
 from video_streaming.workflows.executor import WorkflowNodeExecutor
 from video_streaming.workflows.service import get_workflow_repository
 from video_streaming.workflows.relay import WorkflowOutboxRelay
+from video_streaming.workflows.delivery_repository import DeliveryTelemetryRepository
 
 DISPATCH_TASK = "video_streaming.workflows.dispatch_plan"
 EXECUTE_NODE_TASK = "video_streaming.workflows.execute_node"
@@ -199,4 +200,24 @@ def reconcile_expired_workflow_attempts():
         "status": "reconciled",
         "jobs": len(job_ids),
         "dispatched": dispatched,
+    }
+
+
+@celery_app.task(
+    name="video_streaming.workflows.purge_delivery_telemetry",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def purge_delivery_telemetry():
+    """Delete one bounded batch of expired, privacy-minimized CDN events."""
+    repository = get_workflow_repository(required=True)
+    telemetry = DeliveryTelemetryRepository(
+        repository,
+        retention_days=settings.CDN_TELEMETRY_RETENTION_DAYS,
+    )
+    deleted = telemetry.purge_expired(limit=5000)
+    return {
+        "status": "purged",
+        "deleted": deleted,
+        "retention_days": settings.CDN_TELEMETRY_RETENTION_DAYS,
     }
