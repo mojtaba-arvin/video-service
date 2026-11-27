@@ -6,6 +6,7 @@ accepted or persisted here.
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 
 from sqlalchemy import (
     BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index,
@@ -518,3 +519,28 @@ class DeliveryTelemetryRepository:
                 delete(DeliveryEventRecord).where(DeliveryEventRecord.id.in_(ids))
             )
             return result.rowcount or 0
+
+
+class ProviderNeutralCDNAdapter:
+    """Common ingestion boundary shared by replaceable CDN source adapters.
+
+    A provider-specific parser must discard raw request data before producing
+    DeliveryEvent. This adapter accepts only the normalized allow-list and
+    enforces a configured, bounded source identifier.
+    """
+
+    def __init__(self, telemetry_repository, source):
+        if (
+            not isinstance(source, str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", source)
+        ):
+            raise ValueError("source must be a bounded lowercase adapter identifier")
+        self.telemetry_repository = telemetry_repository
+        self.source = source
+
+    def ingest(self, event):
+        if not isinstance(event, DeliveryEvent):
+            raise TypeError("event must be a normalized DeliveryEvent")
+        if event.source != self.source:
+            raise ValueError("event source does not match configured adapter")
+        return self.telemetry_repository.ingest(event)
