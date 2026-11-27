@@ -422,7 +422,6 @@ class IncrementalIngestionService:
             if offset != row.expected_size_bytes:
                 raise IncompleteIngestion("source byte ranges do not cover the declared source")
             row.state = "FINALIZING"
-            row.updated_at = utcnow()
             source_name = row.source_name
             expected_size = row.expected_size_bytes
             expected_hash = row.expected_sha256
@@ -452,6 +451,16 @@ class IncrementalIngestionService:
                 raise IngestionConflict("assembled source size does not match the declared size")
             if expected_hash is not None and final_hash != expected_hash:
                 raise IngestionConflict("assembled source checksum mismatch")
+            # Fence publication only after assembly and source checksum validation.
+            # Cancellation remains possible during potentially long chunk downloads.
+            with self._sessions.begin() as session:
+                row = session.query(IngestionSessionRecord).filter_by(
+                    id=ingestion_id
+                ).with_for_update().one()
+                if row.state != "OPEN":
+                    raise IngestionCancelled("ingestion was cancelled during assembly")
+                row.state = "FINALIZING"
+                row.updated_at = utcnow()
             published = self._store.put_file(
                 assembled, "ingestions/{}/source/{}".format(ingestion_id, source_name),
                 ingestion_id, media_type="application/octet-stream",
