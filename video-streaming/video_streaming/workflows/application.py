@@ -9,7 +9,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from video_streaming.security import require_scope
 
@@ -226,8 +226,17 @@ class VideoOperationService:
         job_id = plan["job_id"]
         # The request hash is stable across retries and independent of generated
         # Job IDs, so the caller's idempotency key safely deduplicates submits.
+        request_payload = dict(request)
+        caller_idempotency_key = request_payload.pop("idempotency_key")
+        owner_scope = "\\0".join((
+            principal.tenant_id, principal.issuer, principal.subject,
+            caller_idempotency_key,
+        ))
+        scoped_idempotency_key = "mcp:" + hashlib.sha256(
+            owner_scope.encode("utf-8")
+        ).hexdigest()
         canonical = json.dumps(
-            {"operation": operation, "request": request},
+            {"operation": operation, "request": request_payload},
             sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("utf-8")
         request_hash = hashlib.sha256(canonical).hexdigest()
@@ -261,7 +270,7 @@ class VideoOperationService:
         }
         result = self._submit.execute(SubmitJobCommand(
             job_id=job_id,
-            idempotency_key=request["idempotency_key"],
+            idempotency_key=scoped_idempotency_key,
             request_hash=request_hash,
             reference_id=job_id,
             execution_plan=plan,
@@ -352,9 +361,11 @@ class VideoOperationService:
                 or len(quality_names) > 20
                 or any(
                     not isinstance(item, str) or not item.strip()
-                    or len(item) > 32 for item in (quality_names or [])
+                    or len(item) > 32
+                    or any(ord(char) < 32 for char in item)
+                    for item in (quality_names or [])
                 )):
-            raise ValueError("quality_names must be a list of at most 20 names")
+            raise ValueError("quality_names must be a list of at most 20 safe names")
         encode_format = self._required_text(
             encode_format, "encode_format", maximum=32
         ).lower()
