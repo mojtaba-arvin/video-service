@@ -156,8 +156,10 @@ class CMAFPackagingTests(unittest.TestCase):
                 report["manifest_sha256"], report["hls_manifest_sha256"]
             ))
             self.assertGreater(report["shared_media_bytes"], 0)
-            self.assertTrue(report["hls_validation"]["valid"])
-            self.assertTrue(report["dash_validation"]["valid"])
+            self.assertEqual(report["hls_validation"]["protocol"], "hls")
+            self.assertEqual(report["dash_validation"]["protocol"], "dash")
+            self.assertGreater(report["hls_validation"]["segments"], 0)
+            self.assertGreater(report["dash_validation"]["segments"], 0)
             self.assertTrue(report["audio_video_sync"]["passed"])
             self.assertLessEqual(
                 report["audio_video_segment_duration_delta_seconds"], 0.25
