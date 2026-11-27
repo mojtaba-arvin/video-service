@@ -22,8 +22,8 @@ PYTHONPATH=video-streaming python \
   --output-dir /tmp/issue-81-packaging-results \
   --repetitions 3 --workload-hours 24 --cache-ttl-hours 1 \
   --hls-requests 100 --dash-requests 20
-PYTHONPATH=video-streaming python -m unittest \
-  video-streaming.tests.test_jit_cmaf_packaging -v
+PYTHONPATH=video-streaming python -m unittest discover \
+  -s video-streaming/tests -p 'test_jit_cmaf_packaging.py' -v
 ```
 
 The generated `jit-packaging-benchmark.json` contains source checksums, FFmpeg build, shared CMAF media-object inventory, HLS/DASH manifest hashes, conventional separate-package bytes, repeated cold package latency, warm cache lookup latency, local first-manifest-byte timing, child-process CPU seconds and a deterministic request/TTL byte-hour comparison between shared pre-packaged CMAF and JIT cache objects.
