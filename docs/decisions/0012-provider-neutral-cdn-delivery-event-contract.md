@@ -28,7 +28,7 @@ Introduce a small provider-neutral normalized event contract before selecting an
 - `response_time_ms`: optional bounded non-negative response duration;
 - `bytes_sent`: optional non-negative response byte count.
 
-The contract validates identifiers, timestamp awareness, enumerated cache outcomes and numeric bounds. Its canonical payload contains only these allow-listed fields. A canonical SHA-256 fingerprint supports later idempotent ingestion: `(source, source_event_id)` is the source identity; an exact replay is a no-op, while reuse with a different semantic payload is a conflict.
+The contract validates identifiers, timestamp awareness, enumerated cache outcomes and numeric bounds. Its canonical payload contains only these allow-listed fields. A canonical SHA-256 fingerprint supports idempotent ingestion: `(source, source_event_id)` is the source identity; an exact replay is a no-op, while reuse with a different semantic payload is a conflict.
 
 When a `session_id` is supplied, the persistence adapter verifies that the session references the same `artifact_id`, Stage and Job; it never correlates solely by a client-supplied association. `artifact_id` alone still permits output-level delivery reporting when no session correlation exists.
 
