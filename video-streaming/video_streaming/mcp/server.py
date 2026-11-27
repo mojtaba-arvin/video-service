@@ -75,7 +75,7 @@ def _safe_tool_call(operation, callback):
         raise ValueError("Tenant Job quota policy is not configured") from None
     except IdempotencyConflict:
         raise ValueError("Idempotency key was already used for a different request") from None
-    except (ValueError, PermissionError, RuntimeError):
+    except (ValueError, PermissionError):
         raise
     except Exception:
         logger.exception("MCP operation failed", extra={"operation": operation})
@@ -88,8 +88,6 @@ def build_server():
     from mcp.server.auth.provider import AccessToken, TokenVerifier
     from mcp.server.auth.middleware.auth_context import get_access_token
     from mcp.server.auth.settings import AuthSettings
-    from mcp.server.transport_security import TransportSecuritySettings
-
     resource_url = settings.MCP_RESOURCE_URL.strip()
     audience = settings.MCP_OIDC_AUDIENCE.strip()
     if not resource_url or not audience:
