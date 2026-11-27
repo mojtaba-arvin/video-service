@@ -67,6 +67,18 @@ class SchedulingTests(unittest.TestCase):
         values.update(overrides)
         return WorkloadRequirements(**values)
 
+    def test_unknown_workload_class_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "registered workload class"):
+            self.requirements(workload_class="unregistered")
+
+    def test_disabled_cpu_adapter_is_not_selected(self):
+        decision = select_capacity(
+            self.requirements(), [cpu_pool(adapter_enabled=False)], budget(),
+            TenantConcurrencyUsage(), 8, NOW,
+        )
+        self.assertEqual(decision.status, AdmissionStatus.NO_COMPATIBLE_CAPACITY)
+        self.assertIn("PROVIDER_ADAPTER_DISABLED", decision.reason_codes)
+
     def test_cpu_only_workload_never_selects_gpu_only_pool(self):
         gpu = CapacityPool(
             pool_id="gpu-only",
