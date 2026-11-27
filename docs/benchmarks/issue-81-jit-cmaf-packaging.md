@@ -26,7 +26,7 @@ PYTHONPATH=video-streaming python -m unittest discover \
   -s video-streaming/tests -p 'test_jit_cmaf_packaging.py' -v
 ```
 
-The generated `jit-packaging-benchmark.json` contains source checksums, FFmpeg build, shared CMAF media-object inventory, HLS/DASH manifest hashes, conventional separate-package bytes, repeated cold package latency, warm cache lookup latency, local first-manifest-byte timing, child-process CPU seconds and a deterministic request/TTL byte-hour comparison between shared pre-packaged CMAF and JIT cache objects.
+The generated `jit-packaging-benchmark.json` contains source checksums, FFmpeg build, shared CMAF media-object inventory, HLS/DASH manifest hashes, conventional separate-package bytes, repeated cold package latency, warm cache lookup latency, local first-manifest-byte timing, FFmpeg process CPU seconds, sampled peak RSS, physical bytes read/written, peak output scratch size and a deterministic request/TTL byte-hour comparison between shared pre-packaged CMAF and JIT cache objects.
 
 Do not commit generated media or benchmark outputs. Keep the JSON report as a CI artifact or attach it to the experiment record together with the machine/OS/CPU, filesystem, thermal/load conditions and exact command.
 
@@ -36,8 +36,9 @@ Do not commit generated media or benchmark outputs. Keep the JSON report as a CI
 - **Storage byte-hours:** shared pre-packaged CMAF bytes are modeled as resident for the full workload horizon. JIT package bytes are modeled using a declared evenly-spaced per-protocol request count, workload horizon and TTL. This is not object-store billing telemetry. It assumes each cache object is retained until TTL expiry after the last request; the model merges overlapping residency intervals. The report also gives a modeled byte-hour difference and estimated cold-package CPU seconds; neither is a measured monetary saving.
 - **Cache:** cold and warm cache state transitions are measured in the local filesystem prototype. Concurrent fills are covered by a lock/atomic-directory-publication test. The modeled hit ratio is separate from the local cache test.
 - **Latency:** cold package wall time includes waiting for the package to be completely validated and atomically published. Warm latency is the cache lookup. First-byte timing reads the first byte of a local manifest after publication; it is not HTTP, CDN, player startup or first-frame latency.
-- **CPU:** child-process user+system CPU seconds measured around FFmpeg packaging and FFprobe validation subprocesses. This does not include production worker contention, object-store/network overhead or a cloud invoice.
+- **CPU/resources:** FFmpeg process CPU seconds, sampled peak RSS, process I/O counters and sampled peak package-directory scratch bytes are captured with psutil. Sampling may miss short peaks; unavailable process counters remain null. This excludes worker contention, object-store/network overhead and cloud billing.
 - **Determinism:** manifest hashes are compared across independent cold runs for a fixed source/profile/toolchain.
+- **Quality/retries:** perceptual quality metrics are not applicable because encoded bitstreams are copied, not re-encoded. The benchmark workload does not inject packaging retries/failures; fallback and cleanup behavior are covered by focused tests.
 - **Audio/subtitles:** FFprobe checks packaged audio/video stream start-time alignment within 250 ms, and the shared CMAF audio/video segment timeline durations must agree within 250 ms. Synthetic WebVTT sidecar cue times are checked against source duration; the VTT is not muxed into the CMAF package. Embedded subtitle carriage and rendered subtitle synchronization remain unverified.
 - **DRM:** not tested. No CENC encryption, key rotation, license acquisition, entitlement, FairPlay, Widevine or PlayReady flow is implemented by this prototype. DRM compatibility is therefore unknown, not passed.
 - **Playback:** package graph/manifest validation and FFprobe are structural checks only. No hls.js, dash.js, native HLS, hardware decoder or device matrix is run.
@@ -68,6 +69,7 @@ The following evidence is intentionally **not claimed** by this synthetic protot
 4. DRM interoperability, key rotation or license-service compatibility.
 5. Real player/device compatibility and end-to-end subtitle rendering/synchronization.
 6. Distributed cache stampede behavior or production object-store atomicity.
+7. Retry/failure rates under a representative request workload; failure fallback is tested separately, not load-injected into the benchmark run.
 
 Before any rollout recommendation, run the same immutable pre-encoded, legally approved corpus and profile on pinned hardware; capture raw repeated results and actual storage/CDN usage; test encrypted and clear variants across the required DRM systems; run real browser/native player playback and audio/subtitle sync; then compare p50/p95 latency and byte-hours under a declared request/TTL distribution. Until all relevant evidence exists, keep conventional pre-packaging as the only production path.
 
