@@ -928,6 +928,14 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             delivery_report.derived_aggregates[0].event_count, 1
         )
         self.assertEqual(
+            delivery_report.derived_aggregates[0].manifest_version,
+            playback.manifest_artifact_id,
+        )
+        self.assertEqual(
+            delivery_report.derived_aggregates[0].delivery_config_id,
+            "test-config-v1",
+        )
+        self.assertEqual(
             delivery_report.coverage.delivery_events_with_session, 1
         )
 
