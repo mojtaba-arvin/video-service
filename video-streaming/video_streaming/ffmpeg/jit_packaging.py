@@ -1,0 +1,230 @@
+"""Experimental packaging-only CMAF cache primitives.
+
+This module is deliberately not wired into the production request path. It
+packages already-encoded inputs with stream copy only; it never invokes an
+encoder or silently falls back to re-encoding.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class PackageIdentity:
+    """All inputs that can change the bytes or semantics of a package."""
+
+    asset_id: str
+    asset_version: str
+    profile_version: str
+    source_sha256: str
+    protocol: str
+    packaging_version: str = "jit-cmaf-prototype-v1"
+    drm_profile: str = "clear"
+
+    def cache_key(self) -> str:
+        if self.protocol not in ("hls", "dash"):
+            raise ValueError("protocol must be hls or dash")
+        values = {
+            "asset_id": self.asset_id,
+            "asset_version": self.asset_version,
+            "profile_version": self.profile_version,
+            "source_sha256": self.source_sha256,
+            "protocol": self.protocol,
+            "packaging_version": self.packaging_version,
+            "drm_profile": self.drm_profile,
+        }
+        if any(not isinstance(value, str) or not value for value in values.values()):
+            raise ValueError("package identity fields must be non-empty strings")
+        canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class PackageResult:
+    directory: Path
+    manifest: Path
+    cache_hit: bool
+    build_seconds: float
+
+
+class AtomicPackageCache:
+    """Publish immutable package directories only after complete validation.
+
+    A per-key advisory file lock coordinates threads and processes on the
+    same filesystem. The final directory appears in one rename, so readers
+    cannot observe a partially populated package.
+    """
+
+    def __init__(self, root: str | Path, lock_timeout_seconds: float = 120.0):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.lock_timeout_seconds = lock_timeout_seconds
+
+    def _paths(self, key: str):
+        return self.root / key, self.root / (key + ".lock")
+
+    def _locked(self, lock_path: Path):
+        class Lock:
+            def __enter__(inner):
+                inner.handle = lock_path.open("a+b")
+                deadline = time.monotonic() + self.lock_timeout_seconds
+                while True:
+                    try:
+                        fcntl.flock(inner.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        return inner
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            inner.handle.close()
+                            raise TimeoutError("timed out waiting for package cache lock")
+                        time.sleep(0.02)
+
+            def __exit__(inner, *_):
+                fcntl.flock(inner.handle.fileno(), fcntl.LOCK_UN)
+                inner.handle.close()
+        return Lock()
+
+    @staticmethod
+    def _manifest_path(directory: Path, relative_manifest: str) -> Path:
+        candidate = (directory / relative_manifest).resolve()
+        if directory.resolve() not in candidate.parents:
+            raise ValueError("manifest must remain inside the package directory")
+        return candidate
+
+    def get_or_create(
+        self,
+        identity: PackageIdentity,
+        build: Callable[[Path], str],
+        validate: Callable[[Path, Path], None] | None = None,
+    ) -> PackageResult:
+        key = identity.cache_key()
+        final_dir, lock_path = self._paths(key)
+        with self._locked(lock_path):
+            existing_manifest = final_dir / ("master.m3u8" if identity.protocol == "hls" else "manifest.mpd")
+            if existing_manifest.is_file() and existing_manifest.stat().st_size:
+                if validate:
+                    validate(final_dir, existing_manifest)
+                return PackageResult(final_dir, existing_manifest, True, 0.0)
+
+            started = time.perf_counter()
+            staging = Path(tempfile.mkdtemp(prefix=key + ".tmp-", dir=str(self.root)))
+            try:
+                relative_manifest = build(staging)
+                manifest = self._manifest_path(staging, relative_manifest)
+                if not manifest.is_file() or manifest.stat().st_size == 0:
+                    raise RuntimeError("packager did not produce a non-empty root manifest")
+                if validate:
+                    validate(staging, manifest)
+                # The cache key is immutable. A stale/invalid entry is removed
+                # only while holding its key lock; publication is one rename.
+                if final_dir.exists():
+                    shutil.rmtree(final_dir)
+                os.replace(str(staging), str(final_dir))
+                published_manifest = self._manifest_path(final_dir, relative_manifest)
+                return PackageResult(
+                    final_dir, published_manifest, False, time.perf_counter() - started
+                )
+            except Exception:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+
+    def invalidate(self, identity: PackageIdentity) -> bool:
+        final_dir, lock_path = self._paths(identity.cache_key())
+        with self._locked(lock_path):
+            if not final_dir.exists():
+                return False
+            shutil.rmtree(final_dir)
+            return True
+
+
+def ffmpeg_copy_command(
+    ffmpeg_bin: str,
+    input_path: str | Path,
+    output_dir: str | Path,
+    protocol: str,
+    segment_seconds: int = 4,
+) -> list[str]:
+    """Build a packaging-only command. -c copy is a hard no-reencode boundary."""
+    if protocol not in ("hls", "dash"):
+        raise ValueError("protocol must be hls or dash")
+    if segment_seconds < 1:
+        raise ValueError("segment_seconds must be positive")
+    source = str(Path(input_path).resolve())
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    common = [ffmpeg_bin, "-hide_banner", "-nostdin", "-y", "-i", source, "-map", "0", "-c", "copy"]
+    if protocol == "hls":
+        return common + [
+            "-f", "hls",
+            "-hls_time", str(segment_seconds),
+            "-hls_playlist_type", "vod",
+            "-hls_segment_type", "fmp4",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", str(output / "segment_%05d.m4s"),
+            "-hls_flags", "independent_segments",
+            str(output / "master.m3u8"),
+        ]
+    return common + [
+        "-f", "dash",
+        "-seg_duration", str(segment_seconds),
+        "-use_template", "1",
+        "-use_timeline", "1",
+        "-init_seg_name", "init-$RepresentationID$.m4s",
+        "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+        str(output / "manifest.mpd"),
+    ]
+
+
+def run_ffmpeg_copy_package(
+    ffmpeg_bin: str,
+    input_path: str | Path,
+    output_dir: str | Path,
+    protocol: str,
+    segment_seconds: int = 4,
+    timeout_seconds: int = 180,
+) -> dict:
+    command = ffmpeg_copy_command(
+        ffmpeg_bin, input_path, output_dir, protocol, segment_seconds
+    )
+    before = time.process_time()
+    started = time.perf_counter()
+    completed = subprocess.run(
+        command, check=False, capture_output=True, text=True,
+        timeout=timeout_seconds,
+    )
+    elapsed = time.perf_counter() - started
+    if completed.returncode:
+        # Keep diagnostics bounded; never expose command arguments in logs.
+        raise RuntimeError(
+            "packaging-only FFmpeg failed (exit {}): {}".format(
+                completed.returncode, (completed.stderr or "")[-2000:]
+            )
+        )
+    return {
+        "wall_seconds": elapsed,
+        "process_cpu_seconds": max(0.0, time.process_time() - before),
+        "command": command,
+    }
+
+
+def package_or_fallback(jit_package, conventional_package):
+    """Use the conventional pre-packaged result if JIT packaging fails."""
+    try:
+        return jit_package()
+    except Exception:
+        return conventional_package()
+
+
+def directory_bytes(directory: str | Path) -> int:
+    root = Path(directory)
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
