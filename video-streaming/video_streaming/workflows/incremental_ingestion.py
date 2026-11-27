@@ -26,6 +26,7 @@ from .repository import ArtifactRecord, Base, JobRecord, new_id, utcnow
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,254}$")
+_MAX_CHUNKS = 100000
 
 
 class IngestionError(RuntimeError):
@@ -160,6 +161,8 @@ class IncrementalIngestionService:
             not isinstance(expected_size_bytes, int) or isinstance(expected_size_bytes, bool) or not 1 <= expected_size_bytes <= self._max_source_size
         ):
             raise ValueError("expected_size_bytes must be positive")
+        if (expected_size_bytes + chunk_size_bytes - 1) // chunk_size_bytes > _MAX_CHUNKS:
+            raise ValueError("source exceeds the configured chunk-count bound")
         if expected_sha256 is not None and (
             not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256)
         ):
@@ -228,6 +231,8 @@ class IncrementalIngestionService:
             raise ValueError("chunk_id must be a UUID")
         if isinstance(chunk_index, bool) or not isinstance(chunk_index, int) or chunk_index < 0:
             raise ValueError("chunk_index must be a non-negative integer")
+        if chunk_index >= _MAX_CHUNKS:
+            raise ValueError("chunk_index exceeds the configured chunk-count bound")
         if isinstance(byte_offset, bool) or not isinstance(byte_offset, int) or byte_offset < 0:
             raise ValueError("byte_offset must be non-negative")
         if not isinstance(payload, bytes) or not payload or len(payload) > self._max_chunk_size:
