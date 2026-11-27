@@ -38,7 +38,7 @@ Never ingest or persist viewer IP addresses, cookies, authorization headers, raw
 
 The durable increment adds a PostgreSQL table, a provider-neutral normalized-event adapter, idempotent persistence, an authorized gRPC query API, bounded aggregation windows and explicit coverage. It does not add a provider-specific parser, raw access-log ingestion, dashboard or production QoE claim. Provider-specific source integration remains deferred until a concrete log source and deployment privacy approval are selected.
 
-The repository retention policy defaults to 30 days from ingestion and accepts deployment values from 1 through 90 days. Every row stores an explicit expiry; the bounded purge operation deletes at most 5,000 rows per call and can be safely repeated. Deployments must schedule this operation and confirm their customer/legal retention policy before connecting live provider exports. Expiry metadata alone is not represented as proof that a scheduler has run.
+The repository retention policy defaults to 30 days from ingestion and accepts deployment values from 1 through 90 days. Every row stores an explicit expiry; the bounded purge operation deletes at most 5,000 rows per call and can be safely repeated. The repository schedules a bounded purge task hourly through Celery Beat when the workflow database is configured. Deployments must keep Beat active and confirm their customer/legal retention policy before connecting live provider exports. Expiry metadata alone is not represented as proof that a scheduler has run.
 
 
 
