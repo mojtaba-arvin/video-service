@@ -10,7 +10,7 @@ import re
 
 from sqlalchemy import (
     BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index,
-    Integer, String, UniqueConstraint, delete, select,
+    Integer, String, UniqueConstraint, delete, distinct, func, select,
 )
 from sqlalchemy.exc import IntegrityError
 
@@ -383,13 +383,15 @@ class DeliveryTelemetryRepository:
             truncated = len(records) > limit
             records = records[:limit]
 
-            # Coverage is scoped to the requested Job/Stage and time range,
-            # independent of whether a CDN event happened to arrive.
-            sessions_query = select(PlaybackSessionRecord).where(
-                PlaybackSessionRecord.job_id == job_id
-            )
+            # Coverage counts are database aggregates; never materialize every
+            # playback session or player event for a high-volume Job.
+            sessions_query = select(
+                func.count(PlaybackSessionRecord.id)
+            ).where(PlaybackSessionRecord.job_id == job_id)
             if session_id:
-                sessions_query = sessions_query.where(PlaybackSessionRecord.id == session_id)
+                sessions_query = sessions_query.where(
+                    PlaybackSessionRecord.id == session_id
+                )
             if stage_key:
                 sessions_query = sessions_query.join(
                     StageRecord, PlaybackSessionRecord.stage_id == StageRecord.id
@@ -402,19 +404,86 @@ class DeliveryTelemetryRepository:
                 sessions_query = sessions_query.where(
                     PlaybackSessionRecord.started_at < end_time
                 )
-            playback_sessions = session.execute(sessions_query).scalars().all()
-            session_ids = [item.id for item in playback_sessions]
-            player_signal_ids = set()
-            if session_ids:
-                player_signal_ids = set(session.execute(
-                    select(PlaybackEventRecord.session_id).where(
-                        PlaybackEventRecord.session_id.in_(session_ids)
-                    ).distinct()
-                ).scalars().all())
+            playback_session_count = session.execute(
+                sessions_query
+            ).scalar_one()
 
-            event_session_ids = {
-                item.session_id for item in records if item.session_id is not None
-            }
+            player_signals_query = select(
+                func.count(distinct(PlaybackEventRecord.session_id))
+            ).select_from(PlaybackEventRecord).join(
+                PlaybackSessionRecord,
+                PlaybackEventRecord.session_id == PlaybackSessionRecord.id,
+            ).where(PlaybackSessionRecord.job_id == job_id)
+            if session_id:
+                player_signals_query = player_signals_query.where(
+                    PlaybackSessionRecord.id == session_id
+                )
+            if stage_key:
+                player_signals_query = player_signals_query.join(
+                    StageRecord, PlaybackSessionRecord.stage_id == StageRecord.id
+                ).where(StageRecord.stage_key == stage_key)
+            if start_time:
+                player_signals_query = player_signals_query.where(
+                    PlaybackSessionRecord.started_at >= start_time
+                )
+            if end_time:
+                player_signals_query = player_signals_query.where(
+                    PlaybackSessionRecord.started_at < end_time
+                )
+            sessions_with_player_signals = session.execute(
+                player_signals_query
+            ).scalar_one()
+
+            delivery_sessions_query = select(
+                func.count(distinct(DeliveryEventRecord.session_id))
+            ).where(
+                DeliveryEventRecord.job_id == job_id,
+                DeliveryEventRecord.session_id.isnot(None),
+            )
+            if stage_key:
+                delivery_sessions_query = delivery_sessions_query.join(
+                    StageRecord, DeliveryEventRecord.stage_id == StageRecord.id
+                ).where(StageRecord.stage_key == stage_key)
+            if session_id:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.session_id == session_id
+                )
+            if artifact_id:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.artifact_id == artifact_id
+                )
+            if source:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.source == source
+                )
+            if edge_region:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.edge_region == edge_region
+                )
+            if cache_status:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.cache_status == cache_status
+                )
+            if asset_version:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.asset_version == asset_version
+                )
+            if delivery_config_id:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.delivery_config_id == delivery_config_id
+                )
+            if start_time:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.source_timestamp >= start_time
+                )
+            if end_time:
+                delivery_sessions_query = delivery_sessions_query.where(
+                    DeliveryEventRecord.source_timestamp < end_time
+                )
+            sessions_with_delivery_signals = session.execute(
+                delivery_sessions_query
+            ).scalar_one()
+
             buckets = {}
             window = aggregation_window_seconds
             for item in records:
@@ -488,18 +557,14 @@ class DeliveryTelemetryRepository:
                 "observed_events": [self._event_payload(item) for item in records],
                 "derived_aggregates": derived,
                 "coverage": {
-                    "playback_session_count": len(playback_sessions),
-                    "sessions_with_player_signals": sum(
-                        1 for item in session_ids if item in player_signal_ids
+                    "playback_session_count": playback_session_count,
+                    "sessions_with_player_signals": sessions_with_player_signals,
+                    "sessions_without_player_signals": max(
+                        0, playback_session_count - sessions_with_player_signals
                     ),
-                    "sessions_without_player_signals": sum(
-                        1 for item in session_ids if item not in player_signal_ids
-                    ),
-                    "sessions_with_delivery_signals": sum(
-                        1 for item in session_ids if item in event_session_ids
-                    ),
-                    "sessions_without_delivery_signals": sum(
-                        1 for item in session_ids if item not in event_session_ids
+                    "sessions_with_delivery_signals": sessions_with_delivery_signals,
+                    "sessions_without_delivery_signals": max(
+                        0, playback_session_count - sessions_with_delivery_signals
                     ),
                     "delivery_event_count": len(records),
                     "delivery_events_with_session": sum(
