@@ -555,6 +555,8 @@ message DeliveryTelemetryCoverage {
   int32 missing_bytes_count = 11;
   int32 unknown_cache_outcome_count = 12;
   bool truncated = 13;
+  int32 missing_http_status_count = 14;
+  int32 missing_edge_region_count = 15;
 }
 
 message DeliveryTelemetryReportResponse {
