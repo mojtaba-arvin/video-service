@@ -7,6 +7,7 @@ This documentation describes both the **verified current implementation** and th
 - [Reliability and observability engineering standard](engineering/reliability-observability-standard.md) — mandatory failure, telemetry, SLO, test and operational-readiness requirements.
 - [Durable VOD release and rollback runbook](operations/durable-vod-release-runbook.md) — evidence-based migration, legacy Job reconciliation, AWS/KMS/S3 validation, broker recovery, staged activation and rollback gates.
 - [Workflow outbox relay operations](operations/workflow-outbox-relay.md) — relay semantics, operator CLI, failure handling and activation boundary.
+- [Durable Job cancellation and MCP interface](operations/durable-job-cancellation-and-mcp.md) — Job/Attempt cancellation state machine, outbox suppression, authenticated typed MCP tools and rollout gates.
 - [Workflow callback secret envelopes](operations/workflow-secret-envelope.md) — KMS envelope trust boundaries, IAM separation and operational constraints.
 - [Transactional outbox foundation](operations/transactional-outbox-foundation.md) — persistence and production-dispatch boundary.
 - [ADR 0006: Reliability and observability](decisions/0006-reliability-and-observability-as-cross-cutting-constraints.md) — accepted cross-cutting architecture constraints.
