@@ -5,6 +5,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from video_streaming.workflows.repository import Base
+# Register delivery telemetry tables on the shared workflow metadata.
+from video_streaming.workflows.delivery_repository import DeliveryEventRecord  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
