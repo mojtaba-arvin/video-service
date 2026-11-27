@@ -180,6 +180,11 @@ class PlaybackQoEMixin:
             self.pb2.DerivedDeliveryAggregate(
                 window_start=item["window_start"],
                 window_end=item["window_end"],
+                source=item["source"],
+                artifact_id=item["artifact_id"],
+                manifest_version=item["manifest_version"],
+                asset_version=item["asset_version"] or "",
+                delivery_config_id=item["delivery_config_id"] or "",
                 edge_region=item["edge_region"] or "",
                 cache_status=item["cache_status"],
                 event_count=item["event_count"],
