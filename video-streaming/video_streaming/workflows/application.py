@@ -215,6 +215,9 @@ class VideoOperationService:
         return validate_execution_plan(plan)
 
     def _submit_plan(self, operation, request, principal, plan):
+        if principal is None:
+            raise AuthorizationError("Resource not found or access denied")
+        require_scope(principal, "video.jobs:create")
         if (
                 not isinstance(principal.tenant_id, str)
                 or not principal.tenant_id.strip()
