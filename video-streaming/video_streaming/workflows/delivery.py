@@ -116,7 +116,7 @@ class DeliveryEvent:
             self.response_time_ms, "response_time_ms", 86400000
         )
         _optional_non_negative_integer(
-            self.bytes_sent, "bytes_sent", 2 ** 63 - 1
+            self.bytes_sent, "bytes_sent", 2 ** 53 - 1
         )
         if (
                 isinstance(self.schema_version, bool)
