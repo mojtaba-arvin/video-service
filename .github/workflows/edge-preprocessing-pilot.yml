@@ -54,7 +54,7 @@ jobs:
             -p 'test_edge_preprocessing_benchmark.py' -v
       - name: Publish raw benchmark evidence
         if: always()
-        uses: actions/upload-artifact@ea8dad3e5b3e9a1f2c7c7f7e5d6e0e0f3f6b6f4a # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: edge-preprocessing-pilot-${{ github.run_id }}
           path: /tmp/edge-pilot-results/
