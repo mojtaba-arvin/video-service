@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""Paired cloud-reference / bounded edge keyframe preprocessing pilot."""
+import argparse
+import hashlib
+import json
+import math
+import os
+import platform
+import signal
+import shutil
+import statistics
+import subprocess
+import tempfile
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+VIDEO_STREAMING_ROOT = REPOSITORY_ROOT / "video-streaming"
+if str(VIDEO_STREAMING_ROOT) not in sys.path:
+    sys.path.insert(0, str(VIDEO_STREAMING_ROOT))
+
+from video_streaming.execution.media_probe import probe_media
+from video_streaming.execution.process_control import ProcessUsageAccumulator, run_streaming_process
+
+POLICY_VERSION = "keyframes-v1"
+MAX_FRAME_WIDTH = 640
+MAX_FRAME_COUNT = 8
+MAX_DURATION_SECONDS = 600
+MAX_SOURCE_BYTES = 100 * 1024 * 1024
+MAX_REPETITIONS = 5
+MAX_BENCHMARK_OUTPUT_BYTES = 256 * 1024 * 1024
+MAX_FRAME_BYTES = 2 * 1024 * 1024
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
+SOURCE_LICENSE_URL = "https://creativecommons.org/licenses/by/3.0/"
+
+
+class BenchmarkError(RuntimeError):
+    pass
+
+
+class EdgeDisconnectedError(RuntimeError):
+    pass
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def median_known(values):
+    values = [value for value in values if value is not None]
+    return statistics.median(values) if values else None
+
+
+def sampling_rate(duration, interval, max_frames):
+    if duration <= 0 or duration > MAX_DURATION_SECONDS or interval <= 0 or max_frames < 1 or max_frames > MAX_FRAME_COUNT:
+        raise ValueError("duration must be 1..{} seconds, interval positive and max_frames 1..{}".format(MAX_DURATION_SECONDS, MAX_FRAME_COUNT))
+    return min(1.0 / interval, max_frames / duration)
+
+
+def _version(binary):
+    result = subprocess.run(
+        [binary, "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        check=True, timeout=15,
+    )
+    return result.stdout.decode("utf-8", "replace").splitlines()[0]
+
+
+def _limited_binary(binary, wrapper_path):
+    """Create an argv-only FFmpeg wrapper with OS-enforced resource ceilings."""
+    resolved = shutil.which(binary)
+    if not resolved:
+        raise BenchmarkError("required media binary was not found: {}".format(binary))
+    wrapper_path = Path(wrapper_path)
+    wrapper_path.write_text(
+        "#!/usr/bin/env python3\\n"
+        "import os, resource, sys\\n"
+        "resource.setrlimit(resource.RLIMIT_AS, ({memory}, {memory}))\\n"
+        "resource.setrlimit(resource.RLIMIT_CPU, (180, 180))\\n"
+        "resource.setrlimit(resource.RLIMIT_FSIZE, ({file_size}, {file_size}))\\n"
+        "binary = {binary}\\n"
+        "os.execv(binary, [binary] + sys.argv[1:])\\n".format(
+            memory=MEMORY_LIMIT_BYTES,
+            file_size=MAX_FRAME_BYTES,
+            binary=json.dumps(resolved),
+        ),
+        encoding="utf-8",
+    )
+    wrapper_path.chmod(0o700)
+    return str(wrapper_path)
+
+
+def run_preprocessing(input_path, output_dir, mode, args):
+    source = Path(input_path).resolve()
+    output = Path(output_dir)
+    if output.exists():
+        raise BenchmarkError("refusing to overwrite {}".format(output))
+    output.mkdir(parents=True)
+    started = time.monotonic()
+    source_hash = sha256_file(source)
+    source_bytes = source.stat().st_size
+    if source_bytes <= 0 or source_bytes > MAX_SOURCE_BYTES:
+        raise BenchmarkError("source media exceeds the 100 MiB pilot input budget")
+    with tempfile.TemporaryDirectory(prefix="edge-preprocess-limits-") as limits_dir:
+        ffmpeg_bin = _limited_binary(args.ffmpeg, Path(limits_dir) / "ffmpeg")
+        ffprobe_bin = _limited_binary(args.ffprobe, Path(limits_dir) / "ffprobe")
+        usage = ProcessUsageAccumulator()
+        metadata = probe_media(
+            source,
+            ffprobe_bin_path=ffprobe_bin,
+            timeout_seconds=args.timeout,
+            on_usage=usage.record,
+        )
+        try:
+            duration = float(metadata["format"]["duration"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise BenchmarkError("FFprobe did not report a valid duration") from error
+        rate = sampling_rate(duration, args.interval, args.max_frames)
+        frames_dir = output / "frames"
+        frames_dir.mkdir()
+        pattern = frames_dir / "frame-%03d.jpg"
+        first_result_at = [None]
+
+        def on_progress(line, _process):
+            if first_result_at[0] is not None or not line.startswith("frame="):
+                return
+            try:
+                frame_number = int(line.partition("=")[2].strip())
+            except ValueError:
+                return
+            if frame_number > 0:
+                first_result_at[0] = time.monotonic()
+
+        run_streaming_process(
+            [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+             "-threads", "2", "-filter_threads", "2", "-i", str(source), "-vf",
+             "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
+             "-frames:v", str(args.max_frames), "-q:v", "3",
+             "-stats_period", "0.05", "-progress", "pipe:1", "-nostats", str(pattern)],
+            timeout_seconds=args.timeout,
+            on_line=on_progress,
+            on_usage=usage.record,
+        )
+        metrics = usage.aggregate()
+        ffmpeg_version = _version(ffmpeg_bin)
+        ffprobe_version = _version(ffprobe_bin)
+    frames = sorted(frames_dir.glob("frame-*.jpg"))
+    if not frames:
+        raise BenchmarkError("preprocessing produced no keyframe samples")
+    records = [{"name": p.name, "sha256": sha256_file(p), "size_bytes": p.stat().st_size} for p in frames]
+    manifest = {
+        "schema_version": 1,
+        "policy_version": POLICY_VERSION,
+        "mode": mode,
+        "source": {
+            "id": args.source_id, "url": args.source_url, "sha256": source_hash,
+            "size_bytes": source_bytes, "license": args.license,
+            "license_url": SOURCE_LICENSE_URL, "attribution": args.attribution,
+        },
+        "parameters": {
+            "interval_seconds": args.interval, "max_frames": args.max_frames,
+            "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
+            "video_filter": "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
+            "decoder_threads": 2, "filter_threads": 2, "jpeg_qscale": 3,
+            "ffmpeg_timeout_seconds": args.timeout, "ffprobe_timeout_seconds": args.timeout,
+            "memory_limit_bytes": MEMORY_LIMIT_BYTES, "cpu_time_limit_seconds": 180,
+            "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
+            "max_duration_seconds": MAX_DURATION_SECONDS, "max_source_bytes": MAX_SOURCE_BYTES,
+            "max_benchmark_output_bytes": MAX_BENCHMARK_OUTPUT_BYTES,
+            "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
+            "ffmpeg_version": ffmpeg_version, "ffprobe_version": ffprobe_version,
+        },
+        "input_metadata": metadata,
+        "frames": records,
+    }
+    manifest_path = output / "preprocessing-manifest.json"
+    manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    if len(manifest_text.encode("utf-8")) > MAX_MANIFEST_BYTES:
+        raise BenchmarkError("preprocessing manifest exceeded its disk budget")
+    if any(item["size_bytes"] > MAX_FRAME_BYTES for item in records):
+        raise BenchmarkError("sampled frame exceeded its disk budget")
+    manifest_path.write_text(manifest_text, encoding="utf-8")
+    payload_bytes = manifest_path.stat().st_size + sum(item["size_bytes"] for item in records)
+    if payload_bytes > (MAX_FRAME_COUNT * MAX_FRAME_BYTES + MAX_MANIFEST_BYTES):
+        raise BenchmarkError("preprocessing output exceeded its per-path disk budget")
+    benchmark_root = output.parent.parent
+    total_output_bytes = sum(path.stat().st_size for path in benchmark_root.rglob("*") if path.is_file())
+    if total_output_bytes > MAX_BENCHMARK_OUTPUT_BYTES:
+        raise BenchmarkError("benchmark exceeded its 256 MiB total disk budget")
+    return {
+        "mode": mode, "source_sha256": source_hash, "source_bytes": source_bytes,
+        "transfer_bytes": source_bytes if mode == "cloud" else payload_bytes,
+        "payload_bytes": payload_bytes,
+        "time_to_first_result_ms": (first_result_at[0] - started) * 1000 if first_result_at[0] is not None else None,
+        "completion_latency_ms": (time.monotonic() - started) * 1000,
+        "cpu_seconds": metrics["cpu_seconds"], "peak_rss_bytes": metrics["peak_memory_bytes"],
+        "frame_count": len(records), "frame_hashes": [item["sha256"] for item in records],
+        "manifest": str(manifest_path), "network_transfer_time_ms": None,
+    }
+
+
+def run_with_cloud_fallback(edge_operation, cloud_operation):
+    try:
+        return {"selected_path": "edge", "result": edge_operation()}
+    except EdgeDisconnectedError:
+        return {"selected_path": "cloud_fallback", "fallback_reason": "edge_disconnected",
+                "result": cloud_operation()}
+
+
+def benchmark(args):
+    source = Path(args.input).resolve()
+    if not source.is_file():
+        raise BenchmarkError("input file does not exist")
+    root = Path(args.output_dir).resolve()
+    if root.exists():
+        raise BenchmarkError("refusing to overwrite output directory")
+    root.mkdir(parents=True)
+    runs = []
+    for index in range(args.repetitions):
+        run_root = root / "run-{:02d}".format(index + 1)
+        order = ("cloud", "edge") if index % 2 == 0 else ("edge", "cloud")
+        measured = {}
+        for mode in order:
+            measured[mode] = run_preprocessing(source, run_root / mode, mode, args)
+        cloud, edge = measured["cloud"], measured["edge"]
+        runs.append({
+            "run": index + 1, "order": list(order), "cloud": cloud, "edge": edge,
+            "same_source": cloud["source_sha256"] == edge["source_sha256"],
+            "frame_hash_parity": cloud["frame_hashes"] == edge["frame_hashes"],
+            "transfer_bytes_delta": cloud["transfer_bytes"] - edge["transfer_bytes"],
+        })
+    fallback = None
+    if args.exercise_disconnection:
+        test_root = root / "disconnection-test"
+        def disconnect():
+            run_preprocessing(source, test_root / "edge", "edge", args)
+            raise EdgeDisconnectedError("simulated disconnect before hand-off")
+        fallback = run_with_cloud_fallback(
+            disconnect,
+            lambda: run_preprocessing(source, test_root / "cloud-fallback", "cloud", args),
+        )
+        if fallback["result"]["source_sha256"] != sha256_file(source):
+            raise BenchmarkError("fallback did not preserve source identity")
+        fallback["frame_hash_parity"] = (
+            fallback["result"]["frame_hashes"] == runs[0]["cloud"]["frame_hashes"]
+        )
+        if not fallback["frame_hash_parity"]:
+            raise BenchmarkError("cloud fallback output did not match cloud reference")
+    report = {
+        "schema_version": 1, "run_id": str(uuid.uuid4()),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "execution_environment": {
+            "platform": platform.platform(), "python": sys.version.split()[0],
+            "machine": platform.machine(), "edge_hardware_separately_provisioned": False,
+        },
+        "methodology": {
+            "workload": "VOD intake preview: metadata probe and bounded sampled JPEG keyframes",
+            "policy_version": POLICY_VERSION, "repetitions": args.repetitions,
+            "same_input_and_sampling_policy": True,
+            "cloud_transfer_bytes": "full source media bytes at hand-off boundary",
+            "edge_transfer_bytes": "manifest plus sampled JPEG bytes at hand-off boundary",
+            "network_transfer_time_ms": None,
+            "quality_measure": "exact SHA-256 parity of sampled JPEG outputs; not perceptual quality",
+            "failure_rate_scope": "zero failures among completed paired attempts; any path failure aborts the run and fails CI; injected disconnect is reported separately",
+            "limitations": [
+                "network transfer time, provider egress charges and real edge hardware are not measured",
+                "resource measurements cover FFmpeg child processes; cloud storage/control-plane costs are excluded",
+                "one public animated trailer is a pilot input, not a representative production corpus",
+            ],
+        },
+        "summary": {
+            "all_source_hashes_match": all(run["same_source"] for run in runs),
+            "all_frame_hashes_match": all(run["frame_hash_parity"] for run in runs),
+            "cloud_completion_latency_median_ms": median_known([r["cloud"]["completion_latency_ms"] for r in runs]),
+            "edge_completion_latency_median_ms": median_known([r["edge"]["completion_latency_ms"] for r in runs]),
+            "cloud_time_to_first_result_median_ms": median_known([r["cloud"]["time_to_first_result_ms"] for r in runs]),
+            "edge_time_to_first_result_median_ms": median_known([r["edge"]["time_to_first_result_ms"] for r in runs]),
+            "cloud_cpu_seconds_median": median_known([r["cloud"]["cpu_seconds"] for r in runs]),
+            "edge_cpu_seconds_median": median_known([r["edge"]["cpu_seconds"] for r in runs]),
+            "cloud_peak_rss_bytes_median": median_known([r["cloud"]["peak_rss_bytes"] for r in runs]),
+            "edge_peak_rss_bytes_median": median_known([r["edge"]["peak_rss_bytes"] for r in runs]),
+            "cloud_transfer_bytes_median": median_known([r["cloud"]["transfer_bytes"] for r in runs]),
+            "edge_transfer_bytes_median": median_known([r["edge"]["transfer_bytes"] for r in runs]),
+            "measured_network_savings": False, "generalized_savings_claim_permitted": False,
+        },
+        "failure_metrics": {
+            "cloud_attempts": args.repetitions,
+            "cloud_failures": 0,
+            "cloud_failure_rate": 0.0,
+            "edge_preprocessing_attempts": args.repetitions,
+            "edge_preprocessing_failures": 0,
+            "edge_preprocessing_failure_rate": 0.0,
+            "fault_injection": {
+                "edge_disconnects_injected": 1 if args.exercise_disconnection else 0,
+                "cloud_fallbacks_attempted": 1 if args.exercise_disconnection else 0,
+                "cloud_fallbacks_succeeded": 1 if fallback and fallback["selected_path"] == "cloud_fallback" else 0,
+            },
+        },
+        "runs": runs, "disconnection_recovery": fallback,
+    }
+    report_path = root / "benchmark-report.json"
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"report": str(report_path), "summary": report["summary"]}, indent=2))
+    if not report["summary"]["all_source_hashes_match"]:
+        raise BenchmarkError("cloud/edge source identity parity failed")
+    if not report["summary"]["all_frame_hashes_match"]:
+        raise BenchmarkError("cloud/edge frame output parity failed")
+    return report
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--source-id", default="sintel-trailer-1080p")
+    parser.add_argument("--source-url", required=True)
+    parser.add_argument("--license", required=True)
+    parser.add_argument("--attribution", required=True)
+    parser.add_argument("--ffmpeg", default="ffmpeg")
+    parser.add_argument("--ffprobe", default="ffprobe")
+    parser.add_argument("--interval", type=float, default=5.0)
+    parser.add_argument("--max-frames", type=int, default=8)
+    parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--exercise-disconnection", action="store_true")
+    args = parser.parse_args(argv)
+    if args.interval <= 0 or args.max_frames < 1 or args.max_frames > MAX_FRAME_COUNT or args.repetitions < 1 or args.repetitions > MAX_REPETITIONS or args.timeout < 1 or args.timeout > 180:
+        parser.error("interval must be positive; max-frames 1..8, repetitions 1..5 and timeout 1..180 seconds")
+    return args
+
+
+if __name__ == "__main__":
+    try:
+        benchmark(parse_args())
+    except (BenchmarkError, OSError, subprocess.SubprocessError) as error:
+        print("edge benchmark failed: {}".format(error), file=sys.stderr)
+        raise SystemExit(1)
