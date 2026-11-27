@@ -49,17 +49,20 @@ contiguous duration, and whether the complete source is mandatory) before
 starting dependent work. The current slice provides this contract check but
 does not dispatch or activate downstream Stage execution.
 
-Only a COMPLETE session returns a final immutable source Artifact URI. The
-existing VOD package/validation/publication path remains the final correctness
+Only a COMPLETE session returns a final immutable source Artifact URI and
+`final_artifact_id`. The final `workflow_artifacts` row is registered as
+AVAILABLE in the same PostgreSQL transaction that marks the ingestion COMPLETE.
+The existing VOD package/validation/publication path remains the final correctness
 baseline. Provisional chunks are not registered as AVAILABLE workflow Artifacts
 and must not be passed to existing VOD handlers as though they were complete
 source media.
 
 ## Cancellation and cleanup
 
-Cancellation is accepted only before finalization starts. FINALIZING is a
-short, retryable critical section around deterministic assembly/publication;
-cancellation during that section is rejected rather than racing final publication.
+Cancellation is accepted during chunk receipt and source assembly. The service
+rechecks the durable state after assembly and checksum validation, then enters
+FINALIZING immediately before immutable final-object publication. Cancellation
+during that short publication fence is rejected rather than racing final publication.
 Cancelling an OPEN session marks it CANCELLED before deleting only the exact
 chunk object URIs recorded for that session. Cleanup failures remain visible as
 `cleanup_pending` and can be retried with `cleanup_cancelled()`. Completed
