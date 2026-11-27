@@ -102,6 +102,7 @@ class DeliveryEventContractTests(unittest.TestCase):
             {"response_time_ms": 86400001},
             {"bytes_sent": -1},
             {"bytes_sent": True},
+            {"bytes_sent": 2 ** 53},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(DeliveryEventContractError):
