@@ -157,6 +157,28 @@ class VideoOperationServiceTests(unittest.TestCase):
         self.assertFalse(second["created"])
         self.assertEqual(len(self.repository.commands), 1)
 
+    def test_idempotency_keys_are_scoped_to_verified_tenant_identity(self):
+        first = self.service.probe_video(
+            "input-bucket", "source/video.mp4", "same-caller-key", self.owner
+        )
+        other_tenant = RequestPrincipal(
+            issuer=self.owner.issuer,
+            subject=self.owner.subject,
+            tenant_id="different-tenant",
+            scopes=self.owner.scopes,
+            roles=self.owner.roles,
+            authentication_method="bearer",
+            expires_at=self.owner.expires_at,
+        )
+        second = self.service.probe_video(
+            "input-bucket", "source/video.mp4", "same-caller-key", other_tenant
+        )
+        self.assertNotEqual(first["job_id"], second["job_id"])
+        self.assertNotEqual(
+            self.repository.commands[0]["idempotency_key"],
+            self.repository.commands[1]["idempotency_key"],
+        )
+
     def test_submission_fails_closed_when_durable_dispatch_is_disabled(self):
         disabled = VideoOperationService(
             self.repository, durable_dispatch_enabled=False
