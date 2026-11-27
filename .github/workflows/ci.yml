@@ -261,6 +261,15 @@ jobs:
             -p 'test_synthetic_vod_package_harness.py' \
             -v
 
+      - name: Run JIT CMAF packaging prototype tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_jit_cmaf_packaging.py' \
+            -v
+
       - name: Run supervised FFmpeg watermark integration test
         env:
           PYTHONPATH: video-streaming
