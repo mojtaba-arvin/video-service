@@ -5,6 +5,7 @@ database, transport, or raw-log ingestion dependency.
 """
 
 from dataclasses import asdict, dataclass
+import ipaddress
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -19,6 +20,7 @@ _CACHE_STATUSES = frozenset({
     "HIT", "MISS", "BYPASS", "REVALIDATED", "STALE", "UNKNOWN",
 })
 _SOURCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+_REGION_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
 def _required_identifier(value, name, max_length):
@@ -78,6 +80,15 @@ class DeliveryEvent:
         _optional_identifier(self.asset_version, "asset_version", 128)
         _optional_identifier(self.delivery_config_id, "delivery_config_id", 128)
         _optional_identifier(self.edge_region, "edge_region", 64)
+        if self.edge_region is not None:
+            if not _REGION_PATTERN.fullmatch(self.edge_region):
+                raise DeliveryEventContractError("edge_region must be a coarse region label")
+            try:
+                ipaddress.ip_address(self.edge_region)
+            except ValueError:
+                pass
+            else:
+                raise DeliveryEventContractError("edge_region must not contain an IP address")
 
         timestamp = self.source_timestamp
         if (
