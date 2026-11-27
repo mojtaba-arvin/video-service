@@ -47,10 +47,18 @@ def _principal_from_access_token(access_token):
         expires_at = datetime.fromtimestamp(
             int(access_token.expires_at), timezone.utc
         )
+        issuer = identity["issuer"]
+        subject = identity["subject"]
+        tenant_id = identity["tenant_id"]
+        if (
+                not isinstance(issuer, str) or not issuer.strip()
+                or not isinstance(subject, str) or not subject.strip()
+                or not isinstance(tenant_id, str) or not tenant_id.strip()):
+            raise ValueError("verified tenant identity is incomplete")
         principal = RequestPrincipal(
-            issuer=identity["issuer"],
-            subject=identity["subject"],
-            tenant_id=identity["tenant_id"],
+            issuer=issuer,
+            subject=subject,
+            tenant_id=tenant_id,
             scopes=frozenset(access_token.scopes or ()),
             roles=frozenset(identity.get("roles") or ()),
             authentication_method="bearer",
