@@ -6,6 +6,7 @@ does not dispatch Celery work: callers must satisfy a declared InputContract and
 the existing durable workflow dispatcher remains separately feature-gated.
 """
 import hashlib
+import math
 import os
 import re
 import tempfile
@@ -14,13 +15,13 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey,
+    BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey,
     Index, Integer, String, UniqueConstraint,
 )
 from sqlalchemy.orm import sessionmaker
 
 from .artifact_store import parse_artifact_uri
-from .repository import Base, JobRecord, new_id, utcnow
+from .repository import ArtifactRecord, Base, JobRecord, new_id, utcnow
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -72,6 +73,7 @@ class IngestionSessionRecord(Base):
     expected_size_bytes = Column(BigInteger, nullable=True)
     expected_sha256 = Column(String(64), nullable=True)
     state = Column(String(16), nullable=False, default="OPEN")
+    final_artifact_id = Column(String(36), ForeignKey("workflow_artifacts.id", ondelete="RESTRICT"), nullable=True)
     final_artifact_uri = Column(String(2048), nullable=True)
     final_size_bytes = Column(BigInteger, nullable=True)
     final_sha256 = Column(String(64), nullable=True)
@@ -106,8 +108,8 @@ class IngestionChunkRecord(Base):
     size_bytes = Column(Integer, nullable=False)
     checksum_sha256 = Column(String(64), nullable=False)
     object_uri = Column(String(2048), nullable=False)
-    start_seconds = Column(Integer, nullable=True)
-    end_seconds = Column(Integer, nullable=True)
+    start_seconds = Column(Float, nullable=True)
+    end_seconds = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -131,6 +133,7 @@ class IncrementalIngestionService:
         self, database_url=None, artifact_store=None, engine=None,
         max_chunk_size_bytes=8 * 1024 * 1024,
         max_concurrent_uploads=4, upload_wait_seconds=0.05,
+        max_source_size_bytes=20 * 1024 * 1024 * 1024,
     ):
         if artifact_store is None:
             raise ValueError("artifact_store is required")
@@ -141,9 +144,10 @@ class IncrementalIngestionService:
         self._sessions = sessionmaker(bind=self._engine, expire_on_commit=False, future=True)
         self._store = artifact_store
         self._max_chunk_size = int(max_chunk_size_bytes)
+        self._max_source_size = int(max_source_size_bytes)
         self._upload_slots = threading.BoundedSemaphore(int(max_concurrent_uploads))
         self._upload_wait = float(upload_wait_seconds)
-        if self._max_chunk_size < 1 or max_concurrent_uploads < 1 or self._upload_wait < 0:
+        if self._max_chunk_size < 1 or self._max_source_size < 1 or max_concurrent_uploads < 1
             raise ValueError("ingestion resource bounds must be positive")
 
     def create(self, job_id, source_name, chunk_size_bytes, expected_size_bytes=None,
@@ -153,7 +157,7 @@ class IncrementalIngestionService:
         if not isinstance(chunk_size_bytes, int) or not 1 <= chunk_size_bytes <= self._max_chunk_size:
             raise ValueError("chunk_size_bytes exceeds the configured bound")
         if expected_size_bytes is not None and (
-            not isinstance(expected_size_bytes, int) or expected_size_bytes < 1
+not isinstance(expected_size_bytes, int) or not 1 <= expected_size_bytes <= self._max_source_size
         ):
             raise ValueError("expected_size_bytes must be positive")
         if expected_sha256 is not None and (
@@ -200,7 +204,7 @@ class IncrementalIngestionService:
                 "status": "PROVISIONAL",
             } for c in chunks],
             "contiguous_bytes": IncrementalIngestionService._contiguous_bytes(chunks),
-            "final_artifact_uri": row.final_artifact_uri,
+            "final_artifact_id": row.final_artifact_id,\n            "final_artifact_uri": row.final_artifact_uri
             "final_size_bytes": row.final_size_bytes,
             "final_sha256": row.final_sha256,
             "cleanup_pending": row.cleanup_pending,
@@ -235,7 +239,7 @@ class IncrementalIngestionService:
         if (start_seconds is None) != (end_seconds is None):
             raise ValueError("both time-range endpoints are required")
         if start_seconds is not None and (
-            not isinstance(start_seconds, int) or not isinstance(end_seconds, int)
+not isinstance(start_seconds, (int, float)) or isinstance(start_seconds, bool) or not isinstance(end_seconds, (int, float)) or isinstance(end_seconds, bool) or not math.isfinite(start_seconds) or not math.isfinite(end_seconds)
             or start_seconds < 0 or end_seconds <= start_seconds
         ):
             raise ValueError("chunk time range is invalid")
@@ -290,7 +294,7 @@ class IncrementalIngestionService:
             stored = self._store.put_bytes(
                 payload, logical_key, chunk_id, media_type="application/octet-stream"
             )
-            try: 
+            try:
                 with self._sessions.begin() as session:
                     row = session.query(IngestionSessionRecord).filter_by(
                         id=ingestion_id
@@ -356,7 +360,7 @@ class IncrementalIngestionService:
             if chunk["index"] != expected_index or chunk["offset"] != expected_offset:
                 break
             if chunk["start_seconds"] is not None:
-                if end_seconds is not None and chunk["start_seconds"] != end_seconds:
+                if end_seconds is not None and abs(chunk["start_seconds"] - end_seconds) > 1e-6:
                     break
                 end_seconds = chunk["end_seconds"]
             elif end_seconds is not None:
@@ -460,6 +464,16 @@ class IncrementalIngestionService:
             if row.state != "FINALIZING":
                 raise IngestionCancelled("ingestion state changed during finalization")
             row.state = "COMPLETE"
+            artifact_id = new_id()
+            session.add(ArtifactRecord(
+                id=artifact_id, job_id=row.job_id, stage_id=None, attempt_id=None,
+                artifact_type="source", logical_name=row.source_name,
+                uri=published["uri"], media_type="application/octet-stream",
+                size_bytes=total, checksum_sha256=final_hash, status="AVAILABLE",
+                metadata_json={"ingestion_id": ingestion_id, "publication_state": "VALIDATED"},
+                created_at=utcnow(),
+            ))
+            row.final_artifact_id = artifact_id
             row.final_artifact_uri = published["uri"]
             row.final_size_bytes = total
             row.final_sha256 = final_hash
