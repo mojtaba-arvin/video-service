@@ -305,13 +305,22 @@ def validate_package_files(directory, manifest):
     templates = [node for node in mpd.iter()
                  if node.tag.rsplit("}", 1)[-1] == "SegmentTemplate"]
     for template in templates:
-        representation = parent.get(template)
-        while representation is not None and representation.tag.rsplit("}", 1)[-1] != "Representation":
-            representation = parent.get(representation)
-        representations = [representation] if representation is not None else [
-            node for node in mpd.iter()
-            if node.tag.rsplit("}", 1)[-1] == "Representation"
-        ]
+        scope = parent.get(template)
+        while scope is not None and scope.tag.rsplit("}", 1)[-1] not in (
+                "Representation", "AdaptationSet"):
+            scope = parent.get(scope)
+        if scope is not None and scope.tag.rsplit("}", 1)[-1] == "Representation":
+            representations = [scope]
+        elif scope is not None:
+            representations = [
+                node for node in scope.iter()
+                if node.tag.rsplit("}", 1)[-1] == "Representation"
+            ]
+        else:
+            representations = [
+                node for node in mpd.iter()
+                if node.tag.rsplit("}", 1)[-1] == "Representation"
+            ]
         if not representations:
             representations = [None]
         for item in representations:
