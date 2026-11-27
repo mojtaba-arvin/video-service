@@ -74,6 +74,9 @@ class RevokeJobsMixin(object):
         repository = get_workflow_repository(required=True)
         cancellation = CancelJobService(repository)
         principal = get_request_principal()
+        if not request.tracking_ids:
+            return self.pb2.RevokeJobsResponse(results=[])
+
         results: list[streaming_pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
             cancellation.execute(
