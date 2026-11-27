@@ -213,11 +213,20 @@ class JitFfmpegIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.ffmpeg = shutil.which("ffmpeg")
         cls.ffprobe = shutil.which("ffprobe")
-        cls.source = Path("/tmp/synthetic-vod-v1/portrait-audio-30fps.mp4")
-        if not cls.ffmpeg or not cls.ffprobe or not cls.source.is_file():
+        fixture = Path("/tmp/synthetic-vod-v1/portrait-audio-30fps.mp4")
+        if not cls.ffmpeg or not cls.ffprobe or not fixture.is_file():
             raise unittest.SkipTest(
                 "requires generated synthetic-vod-v1 fixture and FFmpeg/FFprobe"
             )
+        cls.encoded_temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.encoded_temp.cleanup)
+        cls.source = Path(cls.encoded_temp.name) / "h264-aac.mp4"
+        subprocess.run(
+            [cls.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+             "-i", str(fixture), "-c:v", "libx264", "-preset", "ultrafast",
+             "-c:a", "copy", "-movflags", "+faststart", str(cls.source)],
+            check=True, capture_output=True, text=True, timeout=60,
+        )
 
     def test_hls_and_dash_package_existing_encoded_audio_video_without_encoding(self):
         for protocol, manifest_name in (
