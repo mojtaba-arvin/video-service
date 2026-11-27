@@ -383,7 +383,8 @@ class CancelJobService:
         if (
                 not isinstance(reason, str)
                 or not reason.strip()
-                or len(reason) > 500):
+                or len(reason) > 500
+                or any(ord(char) < 32 for char in reason)):
             raise ValueError("reason must contain 1 to 500 characters")
         require_scope(principal, "video.jobs:cancel")
         result = self._repository.request_job_cancellation(
