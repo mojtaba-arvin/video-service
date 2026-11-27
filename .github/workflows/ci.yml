@@ -22,6 +22,7 @@ jobs:
     outputs:
       runtime: ${{ steps.classify.outputs.runtime }}
       docs: ${{ steps.classify.outputs.docs }}
+      edge: ${{ steps.classify.outputs.edge }}
       base_sha: ${{ steps.classify.outputs.base_sha }}
       head_sha: ${{ steps.classify.outputs.head_sha }}
     steps:
@@ -45,6 +46,7 @@ jobs:
             echo "Unable to determine a safe diff base; running all checks."
             echo "runtime=true" >> "$GITHUB_OUTPUT"
             echo "docs=true" >> "$GITHUB_OUTPUT"
+            echo "edge=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -58,6 +60,7 @@ jobs:
 
           runtime_changed=false
           docs_changed=false
+          edge_changed=false
           while IFS= read -r -d '' path; do
             case "$path" in
               docs/*|README*|CHANGELOG*|CONTRIBUTING*|CODE_OF_CONDUCT*|SECURITY*|LICENSE*|AGENTS.md|.agents/skills/*|.github/agents/*|.github/copilot-instructions.md|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*)
@@ -72,8 +75,17 @@ jobs:
             esac
           done < "$RUNNER_TEMP/changed-paths"
 
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              scripts/benchmark_edge_preprocessing.py|video-streaming/tests/test_edge_preprocessing_benchmark.py|docs/benchmarks/edge-preprocessing-pilot.md|.github/workflows/edge-preprocessing-pilot.yml)
+                edge_changed=true
+                ;;
+            esac
+          done < "$RUNNER_TEMP/changed-paths"
+
           echo "runtime=$runtime_changed" >> "$GITHUB_OUTPUT"
           echo "docs=$docs_changed" >> "$GITHUB_OUTPUT"
+          echo "edge=$edge_changed" >> "$GITHUB_OUTPUT"
           echo "Runtime checks required: $runtime_changed"
           echo "Documentation checks required: $docs_changed"
 
@@ -733,6 +745,56 @@ jobs:
             -p 'test_cgroup_v2_linux_acceptance.py' \
             -v
 
+  edge-preprocessing-pilot:
+    name: Cloud-runner edge preprocessing experiment
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.edge == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+      - name: Install bounded measurement dependency
+        run: python -m pip install --disable-pip-version-check psutil==5.9.8
+      - name: Install FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+      - name: Download the fixed, openly licensed source
+        run: |
+          curl --fail --location --retry 3 --retry-all-errors \
+            'https://upload.wikimedia.org/wikipedia/commons/0/06/Sintel_trailer-1080p.ogv' \
+            --output /tmp/sintel-trailer-1080p.ogv
+          sha256sum /tmp/sintel-trailer-1080p.ogv | tee /tmp/source.sha256
+          ffprobe -v error -show_entries format=duration,size -of json /tmp/sintel-trailer-1080p.ogv
+      - name: Run paired cloud and edge-preprocessing measurements
+        run: |
+          python scripts/benchmark_edge_preprocessing.py \
+            --input /tmp/sintel-trailer-1080p.ogv \
+            --output-dir /tmp/edge-pilot-results \
+            --source-url 'https://commons.wikimedia.org/wiki/File:Sintel_trailer-1080p.ogv' \
+            --license 'CC-BY-3.0' \
+            --attribution '© copyright Blender Foundation | www.sintel.org' \
+            --repetitions 3 \
+            --exercise-disconnection
+      - name: Run recovery contract tests
+        run: |
+          PYTHONPATH=scripts python -m unittest \
+            discover -s video-streaming/tests \
+            -p 'test_edge_preprocessing_benchmark.py' -v
+      - name: Publish raw benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: edge-preprocessing-pilot-${{ github.run_id }}
+          path: /tmp/edge-pilot-results/
+          if-no-files-found: warn
+          retention-days: 30
+
   quality-gates:
     name: Quality gates
     if: always()
@@ -745,6 +807,7 @@ jobs:
       - durable-workflow-state
       - container-runtime
       - cgroup-v2-linux-acceptance
+      - edge-preprocessing-pilot
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -758,6 +821,8 @@ jobs:
       PG312_RESULT: ${{ needs.durable-workflow-state.result }}
       CONTAINER_RESULT: ${{ needs.container-runtime.result }}
       CGROUP_RESULT: ${{ needs.cgroup-v2-linux-acceptance.result }}
+      EDGE_CHANGED: ${{ needs.detect-changes.outputs.edge }}
+      EDGE_RESULT: ${{ needs.edge-preprocessing-pilot.result }}
     steps:
       - name: Enforce the required check policy
         shell: bash
@@ -781,6 +846,10 @@ jobs:
             [[ "$PG312_RESULT" == "success" ]] || fail "PostgreSQL compatibility tests on Python 3.12 did not pass."
             [[ "$CONTAINER_RESULT" == "success" ]] || fail "Python 3.12 production container build and smoke test did not pass."
             [[ "$CGROUP_RESULT" == "success" ]] || fail "Real Linux cgroup v2 kernel acceptance did not pass."
+          fi
+
+          if [[ "$EDGE_CHANGED" == "true" ]]; then
+            [[ "$EDGE_RESULT" == "success" ]] || fail "Edge preprocessing pilot and recovery checks did not pass."
           fi
 
           echo "All required checks passed for the detected change set." >> "$GITHUB_STEP_SUMMARY"
