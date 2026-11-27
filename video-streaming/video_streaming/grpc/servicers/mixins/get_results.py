@@ -480,6 +480,7 @@ class GetResultsMixin(object):
                 "RUNNING": PrimaryStatus.OUTPUTS_PROGRESSING,
                 "FINISHED": PrimaryStatus.FINISHED,
                 "FAILED": PrimaryStatus.FAILED,
+                "CANCEL_REQUESTED": PrimaryStatus.REVOKED,
                 "CANCELLED": PrimaryStatus.REVOKED,
             }.get(durable_snapshot["status"], primary_status)
         if primary_status and job_details:

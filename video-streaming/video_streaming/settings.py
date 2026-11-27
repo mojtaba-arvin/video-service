@@ -443,6 +443,29 @@ OIDC_CLOCK_LEEWAY_SECONDS = env_config.get(
     "OIDC_CLOCK_LEEWAY_SECONDS", default=0, cast=int
 )
 
+# MCP is an optional Python 3.12+ HTTP adapter. Its audience is deliberately
+# distinct/configurable and must be registered with the trusted OIDC issuer.
+MCP_RESOURCE_URL = env_config.get("MCP_RESOURCE_URL", default="", cast=str)
+MCP_OIDC_AUDIENCE = env_config.get(
+    "MCP_OIDC_AUDIENCE", default=MCP_RESOURCE_URL, cast=str
+)
+MCP_HOST = env_config.get("MCP_HOST", default="127.0.0.1", cast=str)
+MCP_PORT = env_config.get("MCP_PORT", default=3000, cast=int)
+MCP_ALLOWED_HOSTS = tuple(
+    item.strip() for item in env_config.get(
+        "MCP_ALLOWED_HOSTS",
+        default="127.0.0.1:3000,localhost:3000",
+        cast=str,
+    ).split(",") if item.strip()
+)
+MCP_ALLOWED_ORIGINS = tuple(
+    item.strip() for item in env_config.get(
+        "MCP_ALLOWED_ORIGINS", default="", cast=str
+    ).split(",") if item.strip()
+)
+if not 1 <= MCP_PORT <= 65535:
+    raise ValueError("MCP_PORT must be between 1 and 65535")
+
 
 CELERY_BEAT_SCHEDULE = {
     "cleanup-abandoned-package-attempts": {

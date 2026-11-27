@@ -4113,6 +4113,279 @@ class WorkflowRepositoryTests(unittest.TestCase):
         self.assertEqual(active, 1)
 
 
+    def create_owned_job(self, stage_keys, principal):
+        job_id = str(uuid4())
+        self.repository.create_job(
+            job_id=job_id,
+            idempotency_key="cancel-" + str(uuid4()),
+            request_hash="d" * 64,
+            workflow_name="video.vod",
+            stage_specs=[
+                {
+                    "stage_key": key,
+                    "operation": "video.package_and_publish",
+                    "input": {"protocol": "hls"},
+                }
+                for key in stage_keys
+            ],
+            owner_principal=principal,
+        )
+        return job_id
+
+    def test_job_cancellation_authorizes_owner_before_mutating_state(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-owner-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["pending"], owner)
+        foreign = self.make_owner_principal(
+            tenant="cancel-foreign-" + str(uuid4()),
+            scopes=["video.jobs:cancel"],
+        )
+
+        with self.assertRaises(AuthorizationError):
+            self.repository.request_job_cancellation(
+                job_id, foreign, reason="unauthorized"
+            )
+
+        self.assertEqual(
+            self.repository.get_job_snapshot(job_id)["status"],
+            JobState.QUEUED.value,
+        )
+
+    def test_job_cancellation_suppresses_pending_stages_and_outbox(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-pending-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["pending-a", "pending-b"], owner)
+        snapshot = self.repository.get_job_snapshot(job_id)
+        workflow_id = snapshot["workflow"]["id"]
+        outbox_id = str(uuid4())
+        with self.repository._session.begin() as session:
+            session.add(OutboxRecord(
+                id=outbox_id,
+                job_id=job_id,
+                workflow_id=workflow_id,
+                event_type="WORKFLOW_PLAN_DISPATCH",
+                schema_version=1,
+                plan_version="1",
+                plan_fingerprint="e" * 64,
+                dedupe_key="cancel-outbox-" + outbox_id,
+                payload_json={"schema_version": 1},
+                state="PENDING",
+                attempts=0,
+            ))
+            processing_id = str(uuid4())
+            session.add(OutboxRecord(
+                id=processing_id,
+                job_id=job_id,
+                workflow_id=workflow_id,
+                event_type="WORKFLOW_PLAN_DISPATCH",
+                schema_version=1,
+                plan_version="1",
+                plan_fingerprint="e" * 64,
+                dedupe_key="cancel-processing-" + processing_id,
+                payload_json={"schema_version": 1},
+                state="PROCESSING",
+                attempts=1,
+                locked_by="relay-worker",
+                lock_token_hash="f" * 64,
+                lease_expires_at=utcnow() + timedelta(seconds=60),
+            ))
+
+        result = self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+        self.assertTrue(result["requested"])
+        self.assertEqual(result["status"], JobState.CANCELLED.value)
+        cancelled = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(cancelled["status"], JobState.CANCELLED.value)
+        self.assertEqual(
+            {stage["status"] for stage in cancelled["stages"]},
+            {StageState.CANCELLED.value},
+        )
+        self.assertEqual(
+            [event["type"] for event in cancelled["events"]].count(
+                "JOB_CANCELLATION_REQUESTED"
+            ),
+            1,
+        )
+        self.assertEqual(
+            [event["type"] for event in cancelled["events"]].count(
+                "JOB_CANCELLED"
+            ),
+            1,
+        )
+        with self.repository._session() as session:
+            outbox = session.get(OutboxRecord, outbox_id)
+            self.assertEqual(outbox.state, "DEAD")
+            self.assertEqual(outbox.last_error, "job_cancel_requested")
+            self.assertIsNone(outbox.lock_token_hash)
+            self.assertIsNone(outbox.lease_expires_at)
+            processing = session.get(OutboxRecord, processing_id)
+            self.assertEqual(processing.state, "DEAD")
+            self.assertEqual(processing.last_error, "job_cancel_requested")
+            self.assertIsNone(processing.locked_by)
+            self.assertIsNone(processing.lock_token_hash)
+            self.assertIsNone(processing.lease_expires_at)
+
+        repeated = self.repository.request_job_cancellation(
+            job_id, owner, reason="duplicate request"
+        )
+        self.assertFalse(repeated["requested"])
+        self.assertEqual(repeated["status"], JobState.CANCELLED.value)
+
+    def test_active_attempt_must_acknowledge_before_job_is_terminal(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-active-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["active", "pending"], owner)
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "active", lease_owner="cancel-active-worker"
+        )
+
+        result = self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+        self.assertEqual(result["status"], "CANCEL_REQUESTED")
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], "CANCEL_REQUESTED")
+        stages = {stage["key"]: stage for stage in snapshot["stages"]}
+        self.assertEqual(stages["active"]["status"], StageState.PROCESSING.value)
+        self.assertEqual(stages["pending"]["status"], StageState.CANCELLED.value)
+        self.assertEqual(
+            stages["active"]["attempts"][-1]["status"], AttemptState.RUNNING.value
+        )
+        with self.assertRaises(InvalidStateTransition):
+            self.repository.claim_attempt(
+                job_id, "pending", lease_owner="late-dispatch"
+            )
+
+        self.assertTrue(self.repository.cancel_attempt(
+            job_id, "active", attempt_id,
+            reason="worker stopped process tree",
+            lease_token=token,
+        ))
+        terminal = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(terminal["status"], JobState.CANCELLED.value)
+        stages = {stage["key"]: stage for stage in terminal["stages"]}
+        self.assertEqual(stages["active"]["status"], StageState.CANCELLED.value)
+        self.assertEqual(
+            stages["active"]["attempts"][-1]["status"],
+            AttemptState.CANCELLED.value,
+        )
+        self.assertTrue(any(
+            event["type"] == "JOB_CANCELLED"
+            for event in terminal["events"]
+        ))
+
+    def test_retryable_failure_after_cancellation_is_acknowledgement_not_retry(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-retry-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["active"], owner)
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "active", lease_owner="cancel-retry-worker"
+        )
+        self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+
+        self.assertFalse(self.repository.fail_attempt(
+            job_id, "active", attempt_id,
+            retryable=True,
+            error_code="WORKER_INTERRUPTED",
+            error_message="worker stopped during cancellation",
+            lease_token=token,
+        ))
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.CANCELLED.value)
+        self.assertEqual(
+            snapshot["stages"][0]["attempts"][-1]["status"],
+            AttemptState.CANCELLED.value,
+        )
+        self.assertEqual(snapshot["stages"][0]["status"], StageState.CANCELLED.value)
+
+    def test_expired_active_attempt_acknowledges_cancellation_without_retry(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-expired-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["active"], owner)
+        attempt_id, _, _token, _ = self.repository.claim_attempt(
+            job_id, "active", lease_owner="cancel-expired-worker"
+        )
+        self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        recovered = self.repository.recover_expired_attempts(
+            now=utcnow() + timedelta(seconds=1), limit=10
+        )
+        self.assertEqual(recovered, 1)
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.CANCELLED.value)
+        self.assertEqual(
+            snapshot["stages"][0]["attempts"][-1]["status"],
+            AttemptState.CANCELLED.value,
+        )
+        self.assertEqual(snapshot["stages"][0]["status"], StageState.CANCELLED.value)
+
+    def test_claim_racing_with_cancellation_cannot_start_after_request(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        owner = self.make_owner_principal(
+            tenant="cancel-race-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["race"], owner)
+        barrier = Barrier(2)
+
+        def claim():
+            barrier.wait(timeout=10)
+            try:
+                return self.repository.claim_attempt(
+                    job_id, "race", lease_owner="racing-worker"
+                )
+            except InvalidStateTransition:
+                return None
+
+        def cancel():
+            barrier.wait(timeout=10)
+            return self.repository.request_job_cancellation(
+                job_id, owner, reason="racing cancellation"
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            claim_future = pool.submit(claim)
+            cancel_future = pool.submit(cancel)
+            claimed = claim_future.result(timeout=30)
+            cancellation = cancel_future.result(timeout=30)
+
+        self.assertTrue(cancellation["requested"])
+        if claimed is not None:
+            attempt_id, _number, token, _expiry = claimed
+            snapshot = self.repository.get_job_snapshot(job_id)
+            self.assertEqual(snapshot["status"], "CANCEL_REQUESTED")
+            self.repository.cancel_attempt(
+                job_id, "race", attempt_id,
+                reason="worker observed cancellation",
+                lease_token=token,
+            )
+        self.assertEqual(
+            self.repository.get_job_snapshot(job_id)["status"],
+            JobState.CANCELLED.value,
+        )
+
+
+
 
 if __name__ == "__main__":
     unittest.main()

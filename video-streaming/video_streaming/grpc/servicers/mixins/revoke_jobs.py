@@ -5,6 +5,9 @@ from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
+from video_streaming.grpc.authentication import get_request_principal
+from video_streaming.workflows.application import CancelJobService
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class RevokeJobsMixin(object):
@@ -68,11 +71,38 @@ class RevokeJobsMixin(object):
         for request_id in request.tracking_ids:
             require_job_access(request_id, "video.jobs:cancel", context)
 
+        if not request.tracking_ids:
+            return self.pb2.RevokeJobsResponse(results=[])
+
+        repository = get_workflow_repository(required=True)
+        cancellation = CancelJobService(repository)
+        principal = get_request_principal()
+
         results: list[streaming_pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
+            outcome = cancellation.execute(
+                request_id, principal, reason="grpc_revoke_requested"
+            )
+            if outcome.status not in ("CANCEL_REQUESTED", "CANCELLED"):
+                results.append(self.pb2.RevokeDetails(
+                    tracking_id=request_id,
+                    has_been_sent=self.pb2.RevokeSignalStatus.REQUEST_NOT_FOUND,
+                ))
+                continue
+            # Preserve the legacy Redis/Celery signal for workers that have
+            # not migrated to durable Attempt leases.
             result = self._revoke_job(request_id)
-            if result:
-                results.append(result)
+            if (
+                    result is None
+                    or result.has_been_sent
+                    == self.pb2.RevokeSignalStatus.REQUEST_NOT_FOUND):
+                # The durable cancellation is authoritative even when this
+                # Job has no legacy Redis projection.
+                result = self.pb2.RevokeDetails(
+                    tracking_id=request_id,
+                    has_been_sent=self.pb2.RevokeSignalStatus.REVOKE_SIGNAL_SENT,
+                )
+            results.append(result)
         response = self.pb2.RevokeJobsResponse(results=results)
         return response
 
