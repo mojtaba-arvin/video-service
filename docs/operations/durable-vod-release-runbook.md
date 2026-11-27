@@ -57,11 +57,13 @@ deployed legacy API and workers.
 Do not downgrade by dropping workflow or outbox tables after any durable rows
 have been written. Migrations 0006–0010 now fail closed before removing tenant
 ownership, encrypted Job secrets, Attempt lease state, Outbox rows, or workflow
-dependency edges (PR #160). The PostgreSQL CI lane now also creates a separate,
+dependency edges (PR #160). Migration `0016_cdn_delivery_telemetry` also
+refuses to drop retained CDN delivery evidence; expire and purge rows before
+any reviewed downgrade. The PostgreSQL CI lane now also creates a separate,
 empty rehearsal database and executes the complete Alembic chain:
 `upgrade head → downgrade base → upgrade head`. It verifies that representative
-workflow tables are absent at base and that the final revision is
-`0011_tenant_job_quotas`. This proves empty-database schema-chain
+workflow and CDN telemetry tables are absent at base and that the final revision is
+`0016_cdn_delivery_telemetry`. This proves empty-database schema-chain
 reversibility on PostgreSQL; it does **not** prove rollback with populated
 production data, deployment rollback safety, or application compatibility with
 a downgraded schema. Prefer rolling application components back while
