@@ -557,6 +557,8 @@ message DeliveryTelemetryCoverage {
   bool truncated = 13;
   int32 missing_http_status_count = 14;
   int32 missing_edge_region_count = 15;
+  int32 delivery_events_without_attempt = 16;
+  int32 missing_delivery_config_count = 17;
 }
 
 message DeliveryTelemetryReportResponse {
