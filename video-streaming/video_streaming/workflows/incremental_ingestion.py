@@ -290,41 +290,53 @@ class IncrementalIngestionService:
             stored = self._store.put_bytes(
                 payload, logical_key, chunk_id, media_type="application/octet-stream"
             )
-            with self._sessions.begin() as session:
-                row = session.query(IngestionSessionRecord).filter_by(
-                    id=ingestion_id
-                ).with_for_update().one()
-                if row.state != "OPEN":
-                    raise IngestionCancelled("ingestion stopped while chunk was uploading")
-                existing = session.query(IngestionChunkRecord).filter_by(
-                    ingestion_id=ingestion_id, chunk_index=chunk_index
-                ).one_or_none()
-                if existing:
-                    same = (
-                        existing.chunk_id == chunk_id and existing.checksum_sha256 == actual
-                        and existing.byte_offset == byte_offset and existing.size_bytes == len(payload)
-                    )
-                    if same:
-                        return {"accepted": True, "replayed": True, "chunk_id": chunk_id}
-                    raise IngestionConflict("concurrent chunk writer committed a conflicting chunk")
-                ordered = session.query(IngestionChunkRecord).filter_by(
-                    ingestion_id=ingestion_id
-                ).order_by(IngestionChunkRecord.chunk_index).all()
-                contiguous = 0
-                for item in ordered:
-                    if item.chunk_index != contiguous:
-                        break
-                    contiguous += 1
-                if chunk_index >= contiguous + row.max_pending_chunks:
-                    raise IngestionBackpressure("chunk is outside the bounded reorder window")
-                session.add(IngestionChunkRecord(
-                    id=new_id(), ingestion_id=ingestion_id, chunk_id=chunk_id,
-                    chunk_index=chunk_index, byte_offset=byte_offset,
-                    size_bytes=len(payload), checksum_sha256=actual,
-                    object_uri=stored["uri"], start_seconds=start_seconds,
-                    end_seconds=end_seconds, created_at=utcnow(),
-                ))
-                row.updated_at = utcnow()
+            try: 
+                with self._sessions.begin() as session:
+                    row = session.query(IngestionSessionRecord).filter_by(
+                        id=ingestion_id
+                    ).with_for_update().one()
+                    if row.state != "OPEN":
+                        raise IngestionCancelled("ingestion stopped while chunk was uploading")
+                    existing = session.query(IngestionChunkRecord).filter_by(
+                        ingestion_id=ingestion_id, chunk_index=chunk_index
+                    ).one_or_none()
+                    if existing:
+                        same = (
+                            existing.chunk_id == chunk_id and existing.checksum_sha256 == actual
+                            and existing.byte_offset == byte_offset and existing.size_bytes == len(payload)
+                        )
+                        if same:
+                            return {"accepted": True, "replayed": True, "chunk_id": chunk_id}
+                        raise IngestionConflict("concurrent chunk writer committed a conflicting chunk")
+                    ordered = session.query(IngestionChunkRecord).filter_by(
+                        ingestion_id=ingestion_id
+                    ).order_by(IngestionChunkRecord.chunk_index).all()
+                    contiguous = 0
+                    for item in ordered:
+                        if item.chunk_index != contiguous:
+                            break
+                        contiguous += 1
+                    if chunk_index >= contiguous + row.max_pending_chunks:
+                        raise IngestionBackpressure("chunk is outside the bounded reorder window")
+                    session.add(IngestionChunkRecord(
+                        id=new_id(), ingestion_id=ingestion_id, chunk_id=chunk_id,
+                        chunk_index=chunk_index, byte_offset=byte_offset,
+                        size_bytes=len(payload), checksum_sha256=actual,
+                        object_uri=stored["uri"], start_seconds=start_seconds,
+                        end_seconds=end_seconds, created_at=utcnow(),
+                    ))
+                    row.updated_at = utcnow()
+            except Exception:
+                with self._sessions() as session:
+                    committed = session.query(IngestionChunkRecord).filter_by(
+                        ingestion_id=ingestion_id, object_uri=stored["uri"]
+                    ).one_or_none()
+                if committed is None:
+                    try:
+                        self._delete_uri(stored["uri"])
+                    except Exception:
+                        pass
+                raise
             return {"accepted": True, "replayed": False, "chunk_id": chunk_id}
         finally:
             self._upload_slots.release()
@@ -332,6 +344,10 @@ class IncrementalIngestionService:
     def progressive_view(self, ingestion_id):
         snapshot = self.get(ingestion_id)
         chunks = snapshot["chunks"]
+        with self._sessions() as session:
+            uris = {c.chunk_index: c.object_uri for c in session.query(IngestionChunkRecord).filter_by(ingestion_id=ingestion_id).all()}
+        for chunk in chunks:
+            chunk["artifact_uri"] = uris[chunk["index"]]
         contiguous = []
         expected_index = 0
         expected_offset = 0
@@ -467,6 +483,10 @@ class IncrementalIngestionService:
                 row.updated_at = utcnow()
         self.cleanup_cancelled(ingestion_id)
         return self.get(ingestion_id)
+
+    def _delete_uri(self, uri):
+        bucket, key = parse_artifact_uri(uri)
+        self._store.client.delete_object(Bucket=bucket, Key=key)
 
     def cleanup_cancelled(self, ingestion_id):
         with self._sessions() as session:
