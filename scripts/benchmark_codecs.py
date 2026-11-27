@@ -69,6 +69,50 @@ class BenchmarkError(RuntimeError):
     """Raised when a benchmark cannot produce an auditable measurement."""
 
 
+def canonical_sha256(payload):
+    """Hash a JSON-compatible configuration independently of key ordering."""
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def ensure_output_paths_available(output_dir):
+    """Refuse to destroy an earlier run's evidence."""
+    raw_path = Path(output_dir) / "measurements.jsonl"
+    report_path = Path(output_dir) / "benchmark-report.json"
+    existing = [str(path) for path in (raw_path, report_path) if path.exists()]
+    if existing:
+        raise BenchmarkError(
+            "Benchmark output already exists; choose a new output directory: "
+            + ", ".join(existing)
+        )
+
+
+def resource_measurement_fields(cpu_seconds, peak_memory_bytes,
+                                 output_bytes, output_bitrate):
+    """Return explicit measured/unknown resource dimensions; unknown is not zero."""
+    return {
+        "encode_cpu_seconds": cpu_seconds,
+        "encode_peak_memory_bytes": peak_memory_bytes,
+        "processing_latency_seconds": None,
+        "output_storage_bytes": output_bytes,
+        "gpu_compute_seconds": None,
+        "gpu_utilization_percent": None,
+        "scratch_peak_bytes": None,
+        "resource_coverage": {
+            "cpu_seconds": cpu_seconds is not None,
+            "peak_memory_bytes": peak_memory_bytes is not None,
+            "output_storage_bytes": output_bytes is not None,
+            "output_bitrate": output_bitrate is not None,
+            "gpu_compute_seconds": False,
+            "gpu_utilization_percent": False,
+            "scratch_peak_bytes": False,
+        },
+        "gpu_measurement_status": "not_measured_software_encoder",
+    }
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -319,7 +363,7 @@ def encode_and_score(source, source_info, codec, crf, ffmpeg_path,
     encode_wall_seconds = time.monotonic() - started
     cpu_seconds = max(
         (item["cpu_seconds"] for item in usage_samples),
-        default=0.0,
+        default=None,
     )
     peak_memory_bytes = max(
         (item["peak_memory_bytes"] for item in usage_samples),
@@ -339,6 +383,10 @@ def encode_and_score(source, source_info, codec, crf, ffmpeg_path,
         vmaf_log,
         timeout_seconds,
     )
+    resources = resource_measurement_fields(
+        cpu_seconds, peak_memory_bytes, output_bytes, output_info.get("bit_rate")
+    )
+    resources["processing_latency_seconds"] = encode_wall_seconds
     return {
         "codec": codec["codec"],
         "encoder": codec["encoder"],
@@ -346,8 +394,7 @@ def encode_and_score(source, source_info, codec, crf, ffmpeg_path,
         "crf": crf,
         "vmaf": vmaf,
         "encode_wall_seconds": encode_wall_seconds,
-        "encode_cpu_seconds": cpu_seconds,
-        "encode_peak_memory_bytes": peak_memory_bytes,
+        **resources,
         "output_sha256": sha256_file(output_path),
         "input_duration_seconds": source_info["duration_seconds"],
         "throughput_x_realtime": (
@@ -385,12 +432,39 @@ def run_benchmark(args):
     )
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_output_paths_available(output_dir)
     raw_path = output_dir / "measurements.jsonl"
     report_path = output_dir / "benchmark-report.json"
     summaries = []
+    run_id = uuid.uuid4().hex
+    configuration = {
+        "schema_version": BENCHMARK_SCHEMA_VERSION,
+        "dataset_id": manifest["dataset_id"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "sources": [
+            {"id": item["id"], "sha256": item["sha256"],
+             "content_class": item["content_class"]}
+            for item in manifest["sources"]
+        ],
+        "target_vmaf": args.target_vmaf,
+        "vmaf_model": args.vmaf_model,
+        "repetitions": args.repetitions,
+        "max_crf_evaluations": args.max_crf_evaluations,
+        "timeout_seconds": args.timeout_seconds,
+        "codecs": list(CODECS),
+        "environment": environment,
+    }
+    configuration_sha256 = canonical_sha256(configuration)
+    environment_sha256 = canonical_sha256(environment)
 
-    with raw_path.open("w", encoding="utf-8") as raw:
+    with raw_path.open("x", encoding="utf-8") as raw:
         def record(payload):
+            payload.update({
+                "run_id": run_id,
+                "configuration_sha256": configuration_sha256,
+                "environment_sha256": environment_sha256,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            })
             raw.write(json.dumps(payload, sort_keys=True) + "\n")
             raw.flush()
 
@@ -509,6 +583,10 @@ def run_benchmark(args):
     report = {
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "benchmark_id": "matched-vmaf-codec-cost-v1",
+        "run_id": run_id,
+        "configuration": configuration,
+        "configuration_sha256": configuration_sha256,
+        "environment_sha256": environment_sha256,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "target_vmaf": args.target_vmaf,
         "vmaf_model": args.vmaf_model,
@@ -518,6 +596,29 @@ def run_benchmark(args):
         "environment": environment,
         "measurements_file": str(raw_path),
         "excluded_cost_dimensions": EXCLUDED_COST_DIMENSIONS,
+        "cost_coverage": {
+            "provider_cost_estimated": False,
+            "provider_billing_reconciled": False,
+            "measured_resource_dimensions": [
+                "encode_wall_seconds", "encode_cpu_seconds",
+                "encode_peak_memory_bytes", "output_storage_bytes",
+                "output_bitrate", "vmaf"
+            ],
+            "unmeasured_dimensions": EXCLUDED_COST_DIMENSIONS + [
+                "scratch_peak_bytes", "gpu_utilization_percent",
+                "gpu_compute_seconds", "queue_wait", "worker_idle_time"
+            ],
+            "interpretation": (
+                "Resource measurements only; no provider billing or complete "
+                "cost total is inferred by this benchmark."
+            ),
+        },
+        "resource_measurement_policy": {
+            "unknown_values_are_null": True,
+            "software_encoder_gpu_usage": "not_measured",
+            "output_storage_bytes": "encoded output file size; not provider retention billing",
+            "processing_latency_seconds": "encode wall-clock duration",
+        },
         "decision_policy": (
             "No encoder default is selected automatically. Compare only results "
             "that reached the same VMAF target and review compatibility and "
