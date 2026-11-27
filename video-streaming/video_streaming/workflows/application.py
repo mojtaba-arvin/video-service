@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence
 
-from video_streaming.security import require_scope
+from video_streaming.security import AuthorizationError, require_scope
 
 
 @dataclass(frozen=True)
@@ -215,6 +215,14 @@ class VideoOperationService:
         return validate_execution_plan(plan)
 
     def _submit_plan(self, operation, request, principal, plan):
+        if (
+                not isinstance(principal.tenant_id, str)
+                or not principal.tenant_id.strip()
+                or not principal.issuer
+                or not principal.subject):
+            raise AuthorizationError(
+                "Tenant-bound caller identity is required"
+            )
         if not self._durable_dispatch_enabled:
             raise RuntimeError(
                 "MCP video submission requires WORKFLOW_DURABLE_DISPATCH_ENABLED"
