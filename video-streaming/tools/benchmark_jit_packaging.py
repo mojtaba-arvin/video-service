@@ -94,6 +94,7 @@ def main():
     parser.add_argument("--package-retention-hours", type=float, default=720)
     parser.add_argument("--jit-cache-retention-hours", type=float, default=24)
     parser.add_argument("--drm-profile", default="clear")
+    parser.add_argument("--drm-key-version", default="none")
     parser.add_argument("--warm-requests", type=int, default=10)
     args = parser.parse_args()
 
@@ -114,6 +115,8 @@ def main():
         source_sha256=source_hash,
         protocol=args.protocol,
         drm_profile=args.drm_profile,
+        drm_key_version=args.drm_key_version,
+        segment_duration_seconds=args.segment_seconds,
     )
     cache_root = Path(args.cache_dir)
     if cache_root.exists() and any(cache_root.iterdir()):
@@ -166,6 +169,7 @@ def main():
             "ffmpeg": ffmpeg_version,
             "ffprobe": ffprobe_version,
             "drm_profile": args.drm_profile,
+            "drm_key_version": args.drm_key_version,
         },
         "measurements": {
             "prepackaged_bytes": prepackaged_bytes,
