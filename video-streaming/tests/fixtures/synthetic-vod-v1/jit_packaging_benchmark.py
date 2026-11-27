@@ -758,6 +758,14 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
         "schema_version": SCHEMA_VERSION,
         "experiment": "issue-81-jit-cmaf-packaging",
         "packager_version": PACKAGER_VERSION,
+        "dataset": {
+            "id": dataset.get("dataset_id"),
+            "source_policy": dataset.get("source_policy"),
+            "encoding_is_offline_fixture_preparation_only":
+                dataset.get("encoding_is_offline_fixture_preparation_only"),
+            "fixture_ffmpeg_build": dataset.get("ffmpeg_build"),
+            "encoding_profile": dataset.get("encoding_profile"),
+        },
         "environment": {
             "os": platform.platform(),
             "machine": platform.machine(),
