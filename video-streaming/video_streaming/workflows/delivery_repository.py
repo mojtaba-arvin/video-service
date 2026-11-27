@@ -194,6 +194,22 @@ class DeliveryTelemetryRepository:
         now = utcnow()
         try:
             with self._session.begin() as session:
+                existing = session.execute(
+                    select(DeliveryEventRecord).where(
+                        DeliveryEventRecord.source == event.source,
+                        DeliveryEventRecord.source_event_id == event.source_event_id,
+                    ).with_for_update()
+                ).scalar_one_or_none()
+                if existing is not None:
+                    if existing.payload_sha256 != event.fingerprint():
+                        raise DeliveryEventConflictError(
+                            "source event identity was reused with a different payload"
+                        )
+                    return {
+                        "accepted": True, "duplicate": True,
+                        "event_id": existing.id,
+                    }
+
                 artifact = session.get(ArtifactRecord, event.artifact_id)
                 if (
                         artifact is None
@@ -222,22 +238,6 @@ class DeliveryTelemetryRepository:
                         raise ValueError(
                             "Playback session does not reference the same published manifest"
                         )
-
-                existing = session.execute(
-                    select(DeliveryEventRecord).where(
-                        DeliveryEventRecord.source == event.source,
-                        DeliveryEventRecord.source_event_id == event.source_event_id,
-                    ).with_for_update()
-                ).scalar_one_or_none()
-                if existing is not None:
-                    if existing.payload_sha256 != event.fingerprint():
-                        raise DeliveryEventConflictError(
-                            "source event identity was reused with a different payload"
-                        )
-                    return {
-                        "accepted": True, "duplicate": True,
-                        "event_id": existing.id,
-                    }
 
                 record = DeliveryEventRecord(
                     id=self._new_id(),
