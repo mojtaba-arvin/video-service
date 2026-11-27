@@ -1,0 +1,62 @@
+name: Edge preprocessing pilot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/benchmark_edge_preprocessing.py"
+      - "video-streaming/tests/test_edge_preprocessing_benchmark.py"
+      - "docs/benchmarks/edge-preprocessing-pilot.md"
+      - ".github/workflows/edge-preprocessing-pilot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Cloud-runner edge preprocessing experiment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+      - name: Install bounded measurement dependency
+        run: python -m pip install --disable-pip-version-check psutil==5.9.8
+      - name: Install FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+      - name: Download the fixed, openly licensed source
+        run: |
+          curl --fail --location --retry 3 --retry-all-errors \
+            'https://upload.wikimedia.org/wikipedia/commons/0/06/Sintel_trailer-1080p.ogv' \
+            --output /tmp/sintel-trailer-1080p.ogv
+          sha256sum /tmp/sintel-trailer-1080p.ogv | tee /tmp/source.sha256
+          ffprobe -v error -show_entries format=duration,size -of json /tmp/sintel-trailer-1080p.ogv
+      - name: Run paired cloud and edge-preprocessing measurements
+        run: |
+          python scripts/benchmark_edge_preprocessing.py \
+            --input /tmp/sintel-trailer-1080p.ogv \
+            --output-dir /tmp/edge-pilot-results \
+            --source-url 'https://commons.wikimedia.org/wiki/File:Sintel_trailer-1080p.ogv' \
+            --license 'CC-BY-3.0' \
+            --attribution '© copyright Blender Foundation | www.sintel.org' \
+            --repetitions 3 \
+            --exercise-disconnection
+      - name: Run recovery contract tests
+        run: |
+          PYTHONPATH=scripts python -m unittest \
+            discover -s video-streaming/tests \
+            -p 'test_edge_preprocessing_benchmark.py' -v
+      - name: Publish raw benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea8dad3e5b3e9a1f2c7c7f7e5d6e0e0f3f6b6f4a # v4.6.2
+        with:
+          name: edge-preprocessing-pilot-${{ github.run_id }}
+          path: /tmp/edge-pilot-results/
+          if-no-files-found: warn
+          retention-days: 30
