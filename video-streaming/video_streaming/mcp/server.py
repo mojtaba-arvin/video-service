@@ -291,10 +291,6 @@ def run():
         allowed_origins=list(settings.MCP_ALLOWED_ORIGINS),
     )
     resource = urlparse(settings.MCP_RESOURCE_URL)
-    if resource.port is not None and resource.port != settings.MCP_PORT:
-        raise RuntimeError(
-            "MCP_PORT must match the port in MCP_RESOURCE_URL"
-        )
     server.run(
         transport="streamable-http",
         host=settings.MCP_HOST,
