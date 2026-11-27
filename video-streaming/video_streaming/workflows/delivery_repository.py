@@ -477,11 +477,8 @@ class DeliveryTelemetryRepository:
                 )
             if start_time:
                 delivery_sessions_query = delivery_sessions_query.where(
-                    DeliveryEventRecord.source_timestamp >= start_time
-                )
-            if start_time:
-                delivery_sessions_query = delivery_sessions_query.where(
-                    PlaybackSessionRecord.started_at >= start_time
+                    DeliveryEventRecord.source_timestamp >= start_time,
+                    PlaybackSessionRecord.started_at >= start_time,
                 )
             if end_time:
                 delivery_sessions_query = delivery_sessions_query.where(
