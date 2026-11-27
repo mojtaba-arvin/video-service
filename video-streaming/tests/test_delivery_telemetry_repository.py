@@ -225,16 +225,18 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
 
     def test_retention_purge_is_bounded_and_repeatable(self):
         self.telemetry.ingest(self.event())
-        with self.workflow._session.begin() as session:
-            record = session.execute(
-                select(DeliveryEventRecord).where(
-                    DeliveryEventRecord.source_event_id == "request-1"
-                )
-            ).scalar_one()
-            record.expires_at = utcnow() - timedelta(seconds=1)
+        self.telemetry.ingest(self.event(source_event_id="request-2"))
+        after_expiry = utcnow() + timedelta(days=3)
 
-        self.assertEqual(self.telemetry.purge_expired(limit=1), 1)
-        self.assertEqual(self.telemetry.purge_expired(limit=1), 0)
+        self.assertEqual(
+            self.telemetry.purge_expired(now=after_expiry, limit=1), 1
+        )
+        self.assertEqual(
+            self.telemetry.purge_expired(now=after_expiry, limit=1), 1
+        )
+        self.assertEqual(
+            self.telemetry.purge_expired(now=after_expiry, limit=1), 0
+        )
         self.assertEqual(
             self.telemetry.query(self.job_id)["coverage"]["delivery_event_count"],
             0,
