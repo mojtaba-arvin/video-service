@@ -580,22 +580,34 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
 
     protocols = {}
     for protocol in ("hls", "dash"):
-        prepackaged = output_root / (source.stem + "-prepackaged-" + protocol)
-        if prepackaged.exists():
-            shutil.rmtree(prepackaged)
-        pre_started = time.monotonic()
-        pre = build_package(source, prepackaged, protocol, ffmpeg)
-        pre_latency = (time.monotonic() - pre_started) * 1000
-        pre_metrics = pre["execution_metrics"]
-
+        prepackaged_runs = []
         cold_latencies, cold_cpu, cold_rss, cold_read, cold_write, cold_scratch = (
             [], [], [], [], [], []
         )
         warm_latencies, cold_ttfb, warm_ttfb = [], [], []
         stable_hashes = []
-        cache_bytes = None
-        for repetition in range(repetitions):
-            cache_root = output_root / (source.stem + "-jit-" + protocol + "-" + str(repetition))
+        cache_sizes = []
+
+        def run_prepackaged(repetition):
+            prepackaged_dir = output_root / (
+                source.stem + "-prepackaged-" + protocol + "-" + str(repetition)
+            )
+            if prepackaged_dir.exists():
+                shutil.rmtree(prepackaged_dir)
+            started = time.monotonic()
+            result = build_package(source, prepackaged_dir, protocol, ffmpeg)
+            return {
+                "result": result,
+                "latency_ms": (time.monotonic() - started) * 1000,
+                "first_byte_ms": first_manifest_byte(
+                    prepackaged_dir / MANIFESTS[protocol]
+                ),
+            }
+
+        def run_jit(repetition):
+            cache_root = output_root / (
+                source.stem + "-jit-" + protocol + "-" + str(repetition)
+            )
             if cache_root.exists():
                 shutil.rmtree(cache_root)
             cache = AtomicPackageCache(cache_root)
@@ -604,26 +616,63 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 {"segment_seconds": 2},
             )
             execution = {}
+
             def build_staging(staging):
                 execution.update(build_package(source, staging, protocol, ffmpeg))
+
             path, hit, elapsed = cache.get_or_build(key, build_staging)
             measured = execution["execution_metrics"]
-            cold_latencies.append(elapsed)
+            warm_path, warm_hit, warm_elapsed = cache.get_or_build(
+                key, lambda staging: build_package(source, staging, protocol, ffmpeg)
+            )
+            if hit or not warm_hit:
+                raise RuntimeError("cache cold/warm state transition was unexpected")
+            return {
+                "cold_latency_ms": elapsed,
+                "cold_ttfb_ms": elapsed + first_manifest_byte(
+                    path / MANIFESTS[protocol]
+                ),
+                "warm_latency_ms": warm_elapsed,
+                "warm_ttfb_ms": warm_elapsed + first_manifest_byte(
+                    warm_path / MANIFESTS[protocol]
+                ),
+                "manifest_sha256": sha256_file(path / MANIFESTS[protocol]),
+                "cache_bytes": tree_inventory(path)["total_bytes"],
+                "execution_metrics": measured,
+            }
+
+        # Alternate conventional and JIT cold fills to reduce systematic cache/thermal bias.
+        for repetition in range(repetitions):
+            if repetition % 2 == 0:
+                prepackaged_runs.append(run_prepackaged(repetition))
+                jit_run = run_jit(repetition)
+            else:
+                jit_run = run_jit(repetition)
+                prepackaged_runs.append(run_prepackaged(repetition))
+            cold_latencies.append(jit_run["cold_latency_ms"])
+            cold_ttfb.append(jit_run["cold_ttfb_ms"])
+            warm_latencies.append(jit_run["warm_latency_ms"])
+            warm_ttfb.append(jit_run["warm_ttfb_ms"])
+            stable_hashes.append(jit_run["manifest_sha256"])
+            cache_sizes.append(jit_run["cache_bytes"])
+            measured = jit_run["execution_metrics"]
             cold_cpu.append(measured["cpu_seconds"])
             cold_rss.append(measured["peak_rss_bytes"])
             cold_read.append(measured["read_bytes"])
             cold_write.append(measured["write_bytes"])
             cold_scratch.append(measured["scratch_peak_bytes"])
-            cache_bytes = tree_inventory(path)["total_bytes"]
-            cold_ttfb.append(elapsed + first_manifest_byte(path / MANIFESTS[protocol]))
-            stable_hashes.append(sha256_file(path / MANIFESTS[protocol]))
-            warm_path, warm_hit, warm_elapsed = cache.get_or_build(
-                key, lambda staging: build_package(source, staging, protocol, ffmpeg)
-            )
-            warm_latencies.append(warm_elapsed)
-            warm_ttfb.append(warm_elapsed + first_manifest_byte(warm_path / MANIFESTS[protocol]))
-            if hit or not warm_hit:
-                raise RuntimeError("cache cold/warm state transition was unexpected")
+
+        prepackaged_result = prepackaged_runs[0]["result"]
+        prepackaged_sizes = [item["result"]["total_bytes"] for item in prepackaged_runs]
+        if len(set(prepackaged_sizes)) != 1 or len(set(cache_sizes)) != 1:
+            raise RuntimeError("package output size changed across identical cold runs")
+        prepackaged_metrics = [
+            item["result"]["execution_metrics"] for item in prepackaged_runs
+        ]
+        prepackaged_hashes = [
+            item["result"]["manifest_sha256"] for item in prepackaged_runs
+        ]
+        prepackaged_ttfb = [item["first_byte_ms"] for item in prepackaged_runs]
 
         requests = hls_requests if protocol == "hls" else dash_requests
         resident_hours, modeled_hits = cache_residency_hours(
@@ -631,20 +680,38 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
         )
         protocols[protocol] = {
             "prepackaged": {
-                "bytes": pre["total_bytes"], "files": pre["file_count"],
-                "cold_packaging_ms": pre_latency,
-                "cpu_seconds": pre_metrics["cpu_seconds"],
-                "peak_rss_bytes": pre_metrics["peak_rss_bytes"],
-                "read_bytes": pre_metrics["read_bytes"],
-                "write_bytes": pre_metrics["write_bytes"],
-                "scratch_peak_bytes": pre_metrics["scratch_peak_bytes"],
-                "first_manifest_byte_ms": first_manifest_byte(
-                    prepackaged / MANIFESTS[protocol]
+                "bytes": prepackaged_result["total_bytes"],
+                "files": prepackaged_result["file_count"],
+                "cold_packaging_ms_p50": statistics.median(
+                    [item["latency_ms"] for item in prepackaged_runs]
                 ),
-                "manifest_sha256": pre["manifest_sha256"],
+                "cold_packaging_ms_p95": percentile(
+                    [item["latency_ms"] for item in prepackaged_runs], 95
+                ),
+                "cpu_seconds_p50": median_known(
+                    [item["cpu_seconds"] for item in prepackaged_metrics]
+                ),
+                "peak_rss_bytes_p50": median_known(
+                    [item["peak_rss_bytes"] for item in prepackaged_metrics]
+                ),
+                "read_bytes_p50": median_known(
+                    [item["read_bytes"] for item in prepackaged_metrics]
+                ),
+                "write_bytes_p50": median_known(
+                    [item["write_bytes"] for item in prepackaged_metrics]
+                ),
+                "scratch_peak_bytes_p50": median_known(
+                    [item["scratch_peak_bytes"] for item in prepackaged_metrics]
+                ),
+                "first_manifest_byte_ms_p50": statistics.median(prepackaged_ttfb),
+                "manifest_deterministic_across_runs":
+                    len(set(prepackaged_hashes)) == 1,
+                "manifest_sha256_by_run": prepackaged_hashes,
+                "structural_validation": prepackaged_result["validation"],
+                "audio_video_sync": prepackaged_result["audio_video_sync"],
             },
             "jit": {
-                "bytes": cache_bytes,
+                "bytes": cache_sizes[0],
                 "cold_packaging_ms_p50": statistics.median(cold_latencies),
                 "cold_packaging_ms_p95": percentile(cold_latencies, 95),
                 "warm_cache_lookup_ms_p50": statistics.median(warm_latencies),
@@ -663,11 +730,10 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "modeled_cache_hit_ratio": (modeled_hits / requests) if requests else None,
                 "cache_ttl_hours": cache_ttl_hours,
                 "cache_resident_hours": resident_hours,
-                "jit_cache_byte_hours": cache_bytes * resident_hours,
+                "jit_cache_byte_hours": cache_sizes[0] * resident_hours,
                 "modeled_cache_misses": max(0, requests - modeled_hits),
             },
-            "structural_validation": pre["validation"],
-            "audio_video_sync": pre["audio_video_sync"],
+            "audio_video_sync": prepackaged_result["audio_video_sync"],
             "subtitle_timeline": subtitle_validation,
         }
     separate_prepackaged_bytes = sum(
