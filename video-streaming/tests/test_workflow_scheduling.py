@@ -264,6 +264,8 @@ class SchedulingTests(unittest.TestCase):
             privacy_levels=frozenset(["confidential"]),
             cpu_capacity_units=8,
             available_cpu_units=8,
+            memory_bytes=8 * 1024 ** 3,
+            disk_bytes=100 * 1024 ** 3,
             adapter_enabled=True,
             recovery_contract_verified=True,
             supports_idempotency=True,
