@@ -99,6 +99,17 @@ def upgrade():
 
 
 def downgrade():
+    op.execute(
+        "LOCK TABLE workflow_ingestions, workflow_ingestion_chunks "
+        "IN SHARE ROW EXCLUSIVE MODE"
+    )
+    count = op.get_bind().execute(sa.text(
+        "SELECT COUNT(*) FROM workflow_ingestions"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            "Refusing to drop incremental ingestion while session records exist"
+        )
     op.drop_index("ix_workflow_ingestion_chunks_order", table_name="workflow_ingestion_chunks")
     op.drop_table("workflow_ingestion_chunks")
     op.drop_index("ix_workflow_ingestions_job_state", table_name="workflow_ingestions")
