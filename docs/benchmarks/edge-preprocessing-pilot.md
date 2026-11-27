@@ -80,8 +80,8 @@ the source SHA, FFmpeg build, runner hardware or parameters differ.
 
 ## Failure and recovery
 
-- FFprobe and FFmpeg use the repository's shared process-tree supervisor with hard timeouts, process-group termination and cumulative CPU/RSS sampling.
-- Sampling is capped by both interval and a hard maximum of eight frames; output width is capped at 640 pixels.
+- FFprobe and FFmpeg use the repository's shared process-tree supervisor with hard timeouts, process-group termination and cumulative CPU/RSS sampling. A small argv-only wrapper applies OS resource limits before exec; it does not invoke a shell.
+- Sampling is capped by both interval and a hard maximum of eight frames; output width is capped at 640 pixels. Each FFprobe/FFmpeg process has OS-enforced 1 GiB address-space, 180 CPU-second and 2 MiB per-output-file limits. The manifest is capped at 2 MiB, keeping the complete hand-off below 18 MiB. Runs are sequential (one media subprocess at a time).
 - Existing output directories are never overwritten.
 - Simulated edge disconnection after preprocessing causes the caller to discard
   the edge hand-off and rerun from the original source through the cloud path.
