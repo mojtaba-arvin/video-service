@@ -86,7 +86,7 @@ def downgrade():
     ).scalar_one()
     if count:
         raise RuntimeError(
-            "Refusing to drop retained CDN delivery evidence; expire it first"
+            "Refusing to drop retained CDN delivery evidence; purge it first"
         )
     op.drop_index("ix_cdn_delivery_expiry", table_name="cdn_delivery_events")
     op.drop_index("ix_cdn_delivery_session_time", table_name="cdn_delivery_events")
