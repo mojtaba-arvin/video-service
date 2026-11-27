@@ -92,10 +92,12 @@ def probe_av_sync(manifest_path, ffprobe="ffprobe", tolerance_seconds=0.25):
         check=True, capture_output=True, text=True, timeout=30,
     )
     streams = json.loads(result.stdout).get("streams", [])
-    starts = {
-        item.get("codec_type"): float(item.get("start_time") or 0.0)
-        for item in streams if item.get("codec_type") in ("video", "audio")
-    }
+    starts = {}
+    for item in streams:
+        stream_type = item.get("codec_type")
+        start_time = item.get("start_time")
+        if stream_type in ("video", "audio") and start_time not in (None, "N/A"):
+            starts[stream_type] = float(start_time)
     if "video" in starts and "audio" in starts:
         delta = abs(starts["video"] - starts["audio"])
         if delta > tolerance_seconds:
@@ -104,7 +106,11 @@ def probe_av_sync(manifest_path, ffprobe="ffprobe", tolerance_seconds=0.25):
                 "audio_start_seconds": starts["audio"],
                 "absolute_start_delta_seconds": delta,
                 "tolerance_seconds": tolerance_seconds, "passed": True}
-    return {"passed": None, "reason": "audio or video stream absent"}
+    return {
+        "passed": None,
+        "reason": "FFprobe did not report both audio and video start times",
+        "reported_stream_types": sorted(starts),
+    }
 
 
 def _expand_dash_template(template, representation_id, number, media_time):
