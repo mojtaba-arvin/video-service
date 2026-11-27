@@ -4,7 +4,7 @@
 
 ## Decision boundary
 
-The prototype consumes already encoded H.264/AAC MP4 assets. The offline fixture generator encodes synthetic test inputs once; every packaging operation uses FFmpeg `-c copy`. There is no request-path encoding and no change to the existing playlist task, storage publication, cache, or playback defaults.
+The prototype consumes already encoded H.264/AAC MP4 assets. The offline fixture generator encodes synthetic test inputs once; every packaging operation uses FFmpeg `-c copy`. It builds a pre-packaged CMAF baseline with one DASH-generated set of audio/video initialization and media objects, then creates HLS master/media playlists that reference those same CMAF objects. It compares that shared-object baseline with separately generated HLS/DASH packages held in a versioned JIT cache. There is no request-path encoding and no change to the existing playlist task, storage publication, cache, or playback defaults.
 
 Conventional pre-packaged HLS and DASH remain the fallback. The prototype's filesystem cache is deliberately isolated from production storage and request handlers.
 
@@ -26,19 +26,19 @@ PYTHONPATH=video-streaming python -m unittest \
   video-streaming.tests.test_jit_cmaf_packaging -v
 ```
 
-The generated `jit-packaging-benchmark.json` contains source checksums, FFmpeg build, package inventories, manifest hashes, repeated cold package latency, warm cache lookup latency, local first-manifest-byte timing, child-process CPU seconds, and a deterministic request/TTL storage model.
+The generated `jit-packaging-benchmark.json` contains source checksums, FFmpeg build, shared CMAF media-object inventory, HLS/DASH manifest hashes, conventional separate-package bytes, repeated cold package latency, warm cache lookup latency, local first-manifest-byte timing, child-process CPU seconds and a deterministic request/TTL byte-hour comparison between shared pre-packaged CMAF and JIT cache objects.
 
 Do not commit generated media or benchmark outputs. Keep the JSON report as a CI artifact or attach it to the experiment record together with the machine/OS/CPU, filesystem, thermal/load conditions and exact command.
 
 ## What is measured vs modeled
 
-- **Package bytes:** actual output file sizes for both protocols from the same pre-encoded source. The canonical source bytes are common to both approaches and excluded from the differential.
-- **Storage byte-hours:** modeled from measured package bytes and a declared evenly-spaced request count, workload horizon and TTL. This is not object-store billing telemetry. It assumes the cache object is retained until TTL expiry after the last request; the model merges overlapping residency intervals.
+- **Package bytes:** actual file sizes for (a) one pre-packaged CMAF segment/init set shared by both HLS and DASH manifests, (b) conventional separately packaged HLS and DASH outputs, and (c) the JIT cache outputs. The canonical source bytes are common to both approaches and excluded from the differential.
+- **Storage byte-hours:** shared pre-packaged CMAF bytes are modeled as resident for the full workload horizon. JIT package bytes are modeled using a declared evenly-spaced per-protocol request count, workload horizon and TTL. This is not object-store billing telemetry. It assumes each cache object is retained until TTL expiry after the last request; the model merges overlapping residency intervals. The report also gives a modeled byte-hour difference and estimated cold-package CPU seconds; neither is a measured monetary saving.
 - **Cache:** cold and warm cache state transitions are measured in the local filesystem prototype. Concurrent fills are covered by a lock/atomic-directory-publication test. The modeled hit ratio is separate from the local cache test.
 - **Latency:** cold package wall time includes waiting for the package to be completely validated and atomically published. Warm latency is the cache lookup. First-byte timing reads the first byte of a local manifest after publication; it is not HTTP, CDN, player startup or first-frame latency.
-- **CPU:** child-process user+system CPU seconds measured around FFmpeg subprocess execution. This does not include production worker contention, object-store/network overhead or a cloud invoice.
+- **CPU:** child-process user+system CPU seconds measured around FFmpeg packaging and FFprobe validation subprocesses. This does not include production worker contention, object-store/network overhead or a cloud invoice.
 - **Determinism:** manifest hashes are compared across independent cold runs for a fixed source/profile/toolchain.
-- **Audio/subtitles:** FFprobe checks packaged audio/video stream start-time alignment within 250 ms. Synthetic WebVTT cues are checked against the source media timeline. This does not prove rendered subtitle synchronization in a real player.
+- **Audio/subtitles:** FFprobe checks packaged audio/video stream start-time alignment within 250 ms, and the shared CMAF audio/video segment timeline durations must agree within 250 ms. Synthetic WebVTT sidecar cue times are checked against source duration; the VTT is not muxed into the CMAF package. Embedded subtitle carriage and rendered subtitle synchronization remain unverified.
 - **DRM:** not tested. No CENC encryption, key rotation, license acquisition, entitlement, FairPlay, Widevine or PlayReady flow is implemented by this prototype. DRM compatibility is therefore unknown, not passed.
 - **Playback:** package graph/manifest validation and FFprobe are structural checks only. No hls.js, dash.js, native HLS, hardware decoder or device matrix is run.
 
@@ -58,7 +58,7 @@ A cache failure must select an already validated conventional package; if no val
 
 ## Acceptance and rollout gates
 
-The tests cover deterministic manifests, concurrent cache fills, no partial visibility, versioned keys, invalidation/rebuild, fallback selection, audio/video start alignment, subtitle cue timeline bounds and copy-only packaging.
+The tests cover deterministic shared CMAF/HLS/DASH manifests, reuse of one CMAF media-object set by both protocols, benchmark report generation, concurrent cache fills, no partial visibility, versioned keys, invalidation/rebuild, fallback selection, audio/video start and segment-timeline alignment, synthetic subtitle cue bounds and copy-only packaging.
 
 The following evidence is intentionally **not claimed** by this synthetic prototype:
 
