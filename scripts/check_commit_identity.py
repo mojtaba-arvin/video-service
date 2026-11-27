@@ -13,7 +13,7 @@ MARKER = "<!-- maintainer-directed-ai-work -->"
 AUTO_LABEL = "allow-automation-commits"
 AUTO_LOGINS = {"github-actions[bot]", "dependabot[bot]"}
 BOT_MARKERS = ("[bot]", "ai agent", "ai-agent", "agent bot", "copilot", "claude",
-               "cursor", "windsurf", "codex", "chatgpt", "gemini")
+               "cursor", "windsurf", "codex", "chatgpt", "gemini", "openai", "gpt", "ai assistant", "assistant bot")
 
 
 def is_bot(name, email, login=None, account_type=None):
