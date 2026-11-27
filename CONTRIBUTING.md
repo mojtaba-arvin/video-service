@@ -45,3 +45,8 @@ docs/engineering/github-governance.md for the recommended repository settings.
 The current workflow's green check is not itself branch protection. The
 develop branch must have an active ruleset requiring the Unit tests
 (Python 3.9) check before GitHub technically blocks an unverified merge.
+
+
+## Commit identity and attribution
+
+Read `COMMIT_IDENTITY.md` before creating commits or reviewing attribution. Owner-authorized AI-assisted implementation uses the verified maintainer Git author identity, Mojtaba Arvin <m.arvin@live.com>, and must disclose AI assistance in the pull request description. Preserve every human contributor's original author name and email; never relabel another person or rewrite historical commits. Do not use AI/assistant/bot authors or bot co-author trailers. Genuine GitHub Actions/Dependabot commits are permitted only under the documented explicit automation-label exception. The Commit identity pull-request workflow validates commit metadata but cannot prove who physically authored code; its check must be required by repository rules where governance permits.
