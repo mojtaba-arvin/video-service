@@ -267,6 +267,16 @@ class JitFfmpegIntegrationTests(unittest.TestCase):
                         segment_seconds=2,
                     )
                     manifest = output / manifest_name
+                    with tempfile.TemporaryDirectory() as repeated:
+                        repeated_output = Path(repeated)
+                        run_ffmpeg_copy_package(
+                            self.ffmpeg, self.source, repeated_output, protocol,
+                            segment_seconds=2,
+                        )
+                        self.assertEqual(
+                            manifest.read_bytes(),
+                            (repeated_output / manifest_name).read_bytes(),
+                        )
                     self.assertTrue(manifest.is_file())
                     self.assertGreater(manifest.stat().st_size, 0)
                     self.assertGreater(len(list(output.glob("*.m4s"))), 0)
