@@ -4831,6 +4831,25 @@ class WorkflowRepository:
             if attempt is None or attempt.stage_id != stage.id:
                 raise ValueError("Attempt does not belong to workflow stage")
             self._assert_attempt_lease(attempt, lease_token)
+            if attempt.state == AttemptState.RUNNING.value:
+                job = session.execute(
+                    select(JobRecord).where(
+                        JobRecord.id == job_id
+                    ).with_for_update()
+                ).scalar_one_or_none()
+                if job is None:
+                    raise InvalidStateTransition("Workflow Job no longer exists")
+                if job.state in (
+                        JobState.CANCEL_REQUESTED.value,
+                        JobState.CANCELLED.value,
+                        JobState.FAILED.value,
+                        JobState.FINISHED.value):
+                    workflow = session.get(WorkflowRecord, stage.workflow_id)
+                    return self._acknowledge_attempt_cancellation(
+                        session, job, workflow, stage, attempt,
+                        "JOB_{}_BEFORE_STAGE_VALIDATION".format(job.state),
+                        metrics=metrics, pricing=pricing,
+                    )
             if stage.status == StageState.VALIDATED.value:
                 existing = session.execute(
                     select(ArtifactRecord).where(
@@ -4981,6 +5000,23 @@ class WorkflowRepository:
                 )
             if attempt.state != AttemptState.RUNNING.value:
                 raise InvalidStateTransition("Attempt is not running")
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state in (
+                    JobState.CANCEL_REQUESTED.value,
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                return self._acknowledge_attempt_cancellation(
+                    session, job, workflow, stage, attempt,
+                    "JOB_{}_BEFORE_PUBLICATION".format(job.state),
+                )
             previous_status = stage.status
             self._transition(stage, StageState.PUBLISHING)
             _record_event(
@@ -5229,6 +5265,17 @@ class WorkflowRepository:
                 self._assert_attempt_lease(attempt, lease_token)
                 raise InvalidStateTransition("Attempt is not running")
             self._assert_attempt_lease(attempt, lease_token)
+            if job.state in (
+                    JobState.CANCEL_REQUESTED.value,
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                return self._acknowledge_attempt_cancellation(
+                    session, job, workflow, stage, attempt,
+                    "JOB_{}_BEFORE_STAGE_FINISH".format(job.state),
+                    metrics=metrics, pricing=pricing,
+                )
             previous_status = stage.status
             self._transition(stage, StageState.FINISHED)
             finished_at = utcnow()
@@ -5511,6 +5558,52 @@ class WorkflowRepository:
             payload={"reason": reason[:500]},
         )
         return True
+
+    def _acknowledge_attempt_cancellation(
+            self, session, job, workflow, stage, attempt, reason,
+            metrics=None, pricing=None, now=None):
+        """Close one active Attempt under its lease after a Job cancel request."""
+        now = now or utcnow()
+        if attempt.state != AttemptState.RUNNING.value:
+            return False
+        if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
+                StageState(stage.status)]:
+            raise InvalidStateTransition(
+                "Cannot acknowledge cancellation from {}".format(stage.status)
+            )
+        previous_status = stage.status
+        self._transition(stage, StageState.CANCELLED)
+        started = attempt.started_at
+        if started.tzinfo is None or started.utcoffset() is None:
+            started = started.replace(tzinfo=timezone.utc)
+        duration_ms = max(
+            0, int((now - started).total_seconds() * 1000)
+        )
+        usage = dict(metrics or {})
+        usage["duration_ms"] = duration_ms
+        attempt.state = AttemptState.CANCELLED.value
+        attempt.finished_at = now
+        attempt.duration_ms = duration_ms
+        attempt.cpu_seconds = usage.get("cpu_seconds")
+        attempt.peak_memory_bytes = usage.get("peak_memory_bytes")
+        attempt.input_bytes = usage.get("input_bytes")
+        attempt.output_bytes = usage.get("output_bytes")
+        self._apply_attempt_accounting(attempt, usage, pricing)
+        self._clear_attempt_lease(attempt)
+        attempt.error_code = "CANCELLED"
+        attempt.error_message = reason[:500]
+        _record_event(
+            session, job.id, workflow.id, "STAGE_CANCELLED",
+            from_state=previous_status,
+            to_state=StageState.CANCELLED.value,
+            stage_id=stage.id,
+            attempt_id=attempt.id,
+            payload={"reason": reason[:500]},
+        )
+        self._finalize_job_cancellation_if_idle(
+            session, job, workflow, now, reason
+        )
+        return False
 
     def request_job_cancellation(self, job_id, principal, reason="CANCELLED"):
         """Durably request cancellation and suppress not-yet-started work.
