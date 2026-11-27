@@ -89,8 +89,12 @@ def main():
             **item, "size_bytes": target.stat().st_size,
             "sha256": digest(target), "subtitle_filename": subtitle.name,
             "subtitle_sha256": digest(subtitle),
-            "video_start_time": float(video.get("start_time") or 0),
-            "audio_start_time": float(audio.get("start_time") or 0),
+            "video_start_time": (
+                float(video["start_time"]) if video.get("start_time") not in (None, "N/A") else None
+            ),
+            "audio_start_time": (
+                float(audio["start_time"]) if audio.get("start_time") not in (None, "N/A") else None
+            ),
             "duration_seconds": float(media.get("format", {}).get("duration") or 0),
         })
     manifest = {
