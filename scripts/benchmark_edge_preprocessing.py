@@ -54,6 +54,11 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def median_known(values):
+    values = [value for value in values if value is not None]
+    return statistics.median(values) if values else None
+
+
 def sampling_rate(duration, interval, max_frames):
     if duration <= 0 or duration > MAX_DURATION_SECONDS or interval <= 0 or max_frames < 1 or max_frames > MAX_FRAME_COUNT:
         raise ValueError("duration must be 1..{} seconds, interval positive and max_frames 1..{}".format(MAX_DURATION_SECONDS, MAX_FRAME_COUNT))
@@ -269,14 +274,14 @@ def benchmark(args):
         "summary": {
             "all_source_hashes_match": all(run["same_source"] for run in runs),
             "all_frame_hashes_match": all(run["frame_hash_parity"] for run in runs),
-            "cloud_completion_latency_median_ms": statistics.median([r["cloud"]["completion_latency_ms"] for r in runs]),
-            "edge_completion_latency_median_ms": statistics.median([r["edge"]["completion_latency_ms"] for r in runs]),
-            "cloud_time_to_first_result_median_ms": statistics.median([r["cloud"]["time_to_first_result_ms"] for r in runs]),
-            "edge_time_to_first_result_median_ms": statistics.median([r["edge"]["time_to_first_result_ms"] for r in runs]),
-            "cloud_cpu_seconds_median": statistics.median([r["cloud"]["cpu_seconds"] for r in runs]),
-            "edge_cpu_seconds_median": statistics.median([r["edge"]["cpu_seconds"] for r in runs]),
-            "cloud_peak_rss_bytes_median": statistics.median([r["cloud"]["peak_rss_bytes"] for r in runs]),
-            "edge_peak_rss_bytes_median": statistics.median([r["edge"]["peak_rss_bytes"] for r in runs]),
+            "cloud_completion_latency_median_ms": median_known([r["cloud"]["completion_latency_ms"] for r in runs]),
+            "edge_completion_latency_median_ms": median_known([r["edge"]["completion_latency_ms"] for r in runs]),
+            "cloud_time_to_first_result_median_ms": median_known([r["cloud"]["time_to_first_result_ms"] for r in runs]),
+            "edge_time_to_first_result_median_ms": median_known([r["edge"]["time_to_first_result_ms"] for r in runs]),
+            "cloud_cpu_seconds_median": median_known([r["cloud"]["cpu_seconds"] for r in runs]),
+            "edge_cpu_seconds_median": median_known([r["edge"]["cpu_seconds"] for r in runs]),
+            "cloud_peak_rss_bytes_median": median_known([r["cloud"]["peak_rss_bytes"] for r in runs]),
+            "edge_peak_rss_bytes_median": median_known([r["edge"]["peak_rss_bytes"] for r in runs]),
             "cloud_transfer_bytes_median": statistics.median([r["cloud"]["transfer_bytes"] for r in runs]),
             "edge_transfer_bytes_median": statistics.median([r["edge"]["transfer_bytes"] for r in runs]),
             "measured_network_savings": False, "generalized_savings_claim_permitted": False,
