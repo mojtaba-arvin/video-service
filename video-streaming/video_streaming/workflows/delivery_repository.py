@@ -58,7 +58,7 @@ class DeliveryEventRecord(Base):
             name="ck_cdn_delivery_response_time",
         ),
         CheckConstraint(
-            "bytes_sent IS NULL OR bytes_sent >= 0",
+            "bytes_sent IS NULL OR bytes_sent BETWEEN 0 AND 9007199254740991",
             name="ck_cdn_delivery_bytes_sent",
         ),
         CheckConstraint(
