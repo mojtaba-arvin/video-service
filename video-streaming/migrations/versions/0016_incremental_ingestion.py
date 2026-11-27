@@ -24,6 +24,7 @@ def upgrade():
         sa.Column("expected_size_bytes", sa.BigInteger(), nullable=True),
         sa.Column("expected_sha256", sa.String(length=64), nullable=True),
         sa.Column("state", sa.String(length=16), nullable=False),
+        sa.Column("final_artifact_id", sa.String(length=36), nullable=True),
         sa.Column("final_artifact_uri", sa.String(length=2048), nullable=True),
         sa.Column("final_size_bytes", sa.BigInteger(), nullable=True),
         sa.Column("final_sha256", sa.String(length=64), nullable=True),
@@ -36,6 +37,10 @@ def upgrade():
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "job_id", name="uq_workflow_ingestion_job_identity"),
+        sa.ForeignKeyConstraint(
+            ["final_artifact_id"], ["workflow_artifacts.id"],
+            name="fk_workflow_ingestion_final_artifact", ondelete="RESTRICT",
+        ),
         sa.CheckConstraint("chunk_size_bytes > 0", name="ck_workflow_ingestion_chunk_size"),
         sa.CheckConstraint("max_pending_chunks > 0", name="ck_workflow_ingestion_pending_limit"),
         sa.CheckConstraint(
@@ -65,8 +70,8 @@ def upgrade():
         sa.Column("size_bytes", sa.Integer(), nullable=False),
         sa.Column("checksum_sha256", sa.String(length=64), nullable=False),
         sa.Column("object_uri", sa.String(length=2048), nullable=False),
-        sa.Column("start_seconds", sa.Integer(), nullable=True),
-        sa.Column("end_seconds", sa.Integer(), nullable=True),
+        sa.Column("start_seconds", sa.Float(), nullable=True),
+        sa.Column("end_seconds", sa.Float(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(
             ["ingestion_id"], ["workflow_ingestions.id"],
