@@ -39,6 +39,10 @@ def upgrade():
         sa.Column("bytes_sent", sa.BigInteger(), nullable=True),
         sa.CheckConstraint("schema_version = 1", name="ck_cdn_delivery_schema_version"),
         sa.CheckConstraint(
+            "cache_status IN ('HIT', 'MISS', 'BYPASS', 'REVALIDATED', 'STALE', 'UNKNOWN')",
+            name="ck_cdn_delivery_cache_status",
+        ),
+        sa.CheckConstraint(
             "http_status IS NULL OR http_status BETWEEN 100 AND 599",
             name="ck_cdn_delivery_http_status",
         ),
