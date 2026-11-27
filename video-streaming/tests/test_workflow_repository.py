@@ -4258,6 +4258,62 @@ class WorkflowRepositoryTests(unittest.TestCase):
             for event in terminal["events"]
         ))
 
+    def test_retryable_failure_after_cancellation_is_acknowledgement_not_retry(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-retry-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["active"], owner)
+        attempt_id, _, token, _ = self.repository.claim_attempt(
+            job_id, "active", lease_owner="cancel-retry-worker"
+        )
+        self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+
+        self.assertFalse(self.repository.fail_attempt(
+            job_id, "active", attempt_id,
+            retryable=True,
+            error_code="WORKER_INTERRUPTED",
+            error_message="worker stopped during cancellation",
+            lease_token=token,
+        ))
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.CANCELLED.value)
+        self.assertEqual(
+            snapshot["stages"][0]["attempts"][-1]["status"],
+            AttemptState.CANCELLED.value,
+        )
+        self.assertEqual(snapshot["stages"][0]["status"], StageState.CANCELLED.value)
+
+    def test_expired_active_attempt_acknowledges_cancellation_without_retry(self):
+        owner = self.make_owner_principal(
+            tenant="cancel-expired-" + str(uuid4()),
+            scopes=["video.jobs:create", "video.jobs:cancel"],
+        )
+        job_id = self.create_owned_job(["active"], owner)
+        attempt_id, _, _token, _ = self.repository.claim_attempt(
+            job_id, "active", lease_owner="cancel-expired-worker"
+        )
+        self.repository.request_job_cancellation(
+            job_id, owner, reason="operator requested"
+        )
+        with self.repository._session.begin() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            attempt.lease_expires_at = utcnow() - timedelta(seconds=1)
+
+        recovered = self.repository.recover_expired_attempts(
+            now=utcnow() + timedelta(seconds=1), limit=10
+        )
+        self.assertEqual(recovered, 1)
+        snapshot = self.repository.get_job_snapshot(job_id)
+        self.assertEqual(snapshot["status"], JobState.CANCELLED.value)
+        self.assertEqual(
+            snapshot["stages"][0]["attempts"][-1]["status"],
+            AttemptState.CANCELLED.value,
+        )
+        self.assertEqual(snapshot["stages"][0]["status"], StageState.CANCELLED.value)
+
     def test_claim_racing_with_cancellation_cannot_start_after_request(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
