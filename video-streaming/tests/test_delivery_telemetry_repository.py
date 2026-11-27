@@ -199,7 +199,8 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.assertEqual(aggregate["event_count"], 1)
 
     def test_query_filters_and_aggregation_windows_are_provider_neutral(self):
-        self.telemetry.ingest(self.event())
+        timestamp = datetime.now(timezone.utc)
+        self.telemetry.ingest(self.event(source_timestamp=timestamp))
         report = self.telemetry.query(
             self.job_id,
             stage_key="output-0",
@@ -208,6 +209,10 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
             cache_status="HIT",
             asset_version="asset-v7",
             delivery_config_id="delivery-config-v3",
+            artifact_id=self.artifact_id,
+            session_id=self.session_id,
+            start_time=timestamp - timedelta(minutes=1),
+            end_time=timestamp + timedelta(minutes=1),
             aggregation_window_seconds=60,
             limit=10,
         )
