@@ -180,8 +180,9 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
                 media_time += duration_units
         if not segments:
             raise RuntimeError("CMAF MPD contains no media segments")
+        mime_type = representation.get("mimeType", adaptation.get("mimeType", ""))
         content_type = adaptation.get("contentType") or (
-            "audio" if "audio" in adaptation.get("mimeType", "") else "video"
+            "audio" if "audio" in mime_type else "video"
         )
         tracks.append({
             "content_type": content_type,
@@ -198,6 +199,13 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
     audio = next((track for track in tracks if track["content_type"] == "audio"), None)
     if video is None:
         raise RuntimeError("CMAF MPD has no video adaptation set")
+    audio_video_duration_delta = None
+    if audio:
+        video_duration = sum(item["duration_seconds"] for item in video["segments"])
+        audio_duration = sum(item["duration_seconds"] for item in audio["segments"])
+        audio_video_duration_delta = abs(video_duration - audio_duration)
+        if audio_video_duration_delta > 0.25:
+            raise RuntimeError("CMAF audio/video segment timelines are not aligned")
 
     def write_media_playlist(track, name):
         durations = [item["duration_seconds"] for item in track["segments"]]
@@ -257,6 +265,7 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
         "shared_media_files": media_files,
         "shared_media_bytes": sum(item["size_bytes"] for item in media_files),
         "audio_video_sync": probe_av_sync(mpd),
+        "audio_video_segment_duration_delta_seconds": audio_video_duration_delta,
         "inventory": inventory,
     }
 
