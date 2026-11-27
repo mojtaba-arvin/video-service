@@ -14,7 +14,7 @@ class EdgePreprocessingBenchmarkTests(unittest.TestCase):
         self.assertEqual(benchmark.sampling_rate(10, 2, 8), 0.5)
 
     def test_sampling_rate_rejects_invalid_policy(self):
-        for values in ((0, 5, 8), (60, 0, 8), (60, 5, 0), (60, 5, 9)):
+        for values in ((0, 5, 8), (601, 5, 8), (60, 0, 8), (60, 5, 0), (60, 5, 9)):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
                     benchmark.sampling_rate(*values)
