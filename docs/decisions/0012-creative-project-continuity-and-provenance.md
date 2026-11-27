@@ -1,6 +1,6 @@
 # ADR 0012: Tenant-owned creative project continuity and asset provenance
 
-- **Status:** Accepted; Project/ProjectRevision and typed entity/reference persistence implemented; provenance and Job revision pinning remain open
+- **Status:** Accepted; tenant-owned continuity, typed references, immutable provenance, Job revision pinning and authenticated APIs implemented; customer/legal retention policy remains open
 - **Date:** 2026-11-25
 - **Related:** [Issue #79](https://github.com/mojtaba-arvin/video-service/issues/79), [ADR 0002](0002-durable-workflow-state-and-typed-operations.md), [ADR 0007](0007-immutable-execution-plan-persistence.md)
 
@@ -49,10 +49,13 @@ Provenance records are append-only. A retry may create a new physical artifact, 
 
 ### 5. Version and resume semantics
 
-- A Job pins its accepted project revision, workflow-definition version, execution-plan schema/version and fingerprint.
-- Workflow upgrades apply to new Jobs by default. In-flight Jobs continue with their pinned version unless an explicit, validated migration creates a new immutable plan/revision and records the migration decision.
-- Stage boundaries are resumable only when input identity, operation version, configuration revision and required parent artifacts match.
-- Completed reusable artifacts survive cancellation and partial failure; publication state distinguishes provisional from committed/final outputs.
+- Creative workflow definitions are provider-neutral, schema-validated DAG templates with a canonical SHA-256 fingerprint. A Job acceptance transaction persists the complete validated execution-plan snapshot, schema version, workflow version and fingerprint. Stage rows are projections of that immutable plan, not an alternate source of parameters.
+- A Job pins its accepted ProjectRevision and workflow/plan snapshot independently. Workflow upgrades apply only to new Jobs. An idempotent replay with a different plan fingerprint or workflow version is rejected; it cannot rewrite an in-flight Job. Existing accepted Jobs continue from their persisted plan after worker restart.
+- There is deliberately no in-place or automatic migration of an accepted Job. If an operator needs to move work to a newer workflow, the safe supported behavior is to submit a new Job against the new immutable definition and explicitly retain the original Job and its artifacts for audit/reuse. A future migration operation must be separately authorized, validate compatibility of completed outputs and remaining stages, persist a new immutable plan plus an append-only migration decision, and preserve the original plan; it must not be inferred from deployment or worker version changes.
+- A worker that does not support a Stage's persisted operation-contract version fails closed before invoking the operation adapter. It must not reinterpret the Stage using its current handler.
+- Stage boundaries are resumable only when the persisted plan fingerprint, operation-contract version, stable input identity, configuration revision, dependency state and required parent Artifacts match. Completed stages are returned as already completed; expired leases are recovered through durable retry state and a new Attempt. Reusable validated Artifacts remain addressable across retries and worker restarts.
+- Operation implementations are injected through an explicit allow-listed handler registry. Provider SDK payloads, credentials and agent-framework types do not enter the workflow/domain contracts.
+- Completed reusable artifacts survive cancellation and partial failure; publication state distinguishes provisional from committed/final outputs. Cancellation of a running Attempt is lease-fenced. A Job-level cancellation request/dispatch-suppression API is a separate workflow increment and must not be inferred from Attempt cancellation.
 
 ## Required acceptance evidence
 
@@ -65,15 +68,21 @@ Provenance records are append-only. A retry may create a new physical artifact, 
 - Retention/deletion tests prove tenant isolation, reference integrity and the documented deletion/tombstone policy.
 - No provider-specific model payload or secret value leaks into persisted domain state.
 
-## Consequences and implementation sequence
+## Implementation status (verified 2026-11-28)
 
-This ADR defines domain boundaries. PR #176 implements tenant-owned Project and immutable ProjectRevision persistence. PR #181 implements tenant/project-scoped Scene, Shot, Character and Asset records plus immutable revision membership references; public project gRPC APIs, artifact provenance and Job revision pinning remain open.
+The core continuity and provenance scope is implemented on `develop`:
 
-Implement in narrow increments:
-1. **Implemented (PR #176):** tenant-owned Project and immutable ProjectRevision persistence with authorization and migration tests.
-2. **Implemented (PR #181):** typed Scene/Shot/Character/Asset references, composite tenant/project constraints, immutable revision membership and same-tenant content-addressed Artifact linkage. Asset registration requires an existing AVAILABLE Artifact; source ingestion remains a separate increment.
-3. Add append-only provenance linked to existing Artifact and Attempt records.
-4. Add exact revision pinning to Job acceptance and resumable stage checks.
-5. Add retention policy and deletion workflow only after customer/legal data classes and retention requirements are explicit.
+1. **PR #153:** provider-neutral, versioned creative workflow-definition contracts, canonical fingerprints, DAG validation and Job-specific plan instantiation.
+2. **PR #176:** tenant-owned Project roots and immutable, canonical ProjectRevision snapshots with SHA-256 identity and database-enforced immutability.
+3. **PR #181:** typed tenant/project-scoped Scene, Shot, Character and Asset records; immutable revision membership; composite ownership constraints; and same-project Shot→Scene / Asset→Artifact relationships.
+4. **PR #184:** optional immutable Job→ProjectRevision pins; idempotency replay pin checks; append-only, sealed Attempt-bound Asset provenance with parent content hashes, operation-contract version, workflow/plan fingerprint and validation evidence. PostgreSQL guards reject late lineage mutation and cycles.
+5. **PR #187:** authenticated, tenant-scoped gRPC project/revision and typed-entity operations.
+6. **Existing durable workflow implementation:** persists and verifies each Job's immutable execution-plan snapshot and workflow version; Stage rows are projections; retry attempts, lease expiry recovery, dependency artifacts, deterministic side-effect idempotency keys and cancellation fencing are covered by repository/executor tests.
 
-Keep MCP exposure and model-provider integrations out of this increment. They must consume the same application services and authorization contracts after the domain persistence is proven.
+The in-flight version policy is intentionally **pin, do not auto-migrate**. A new workflow version is selected for new Jobs. Replaying an existing idempotency key with a different plan/version is rejected. There is no in-place migration API; a future explicit migration must create a new immutable plan and append-only migration decision without rewriting the original Job history.
+
+### Remaining policy gate
+
+Customer/legal owners must approve retention and deletion policy by data class (project state, source/generated media, prompt/configuration references, provenance and audit evidence), including legal hold, deletion scope and minimum audit preservation. Until that policy is approved, no universal retention duration, automated deletion, or delete API is introduced. Existing tenant ownership, scoped authorization, non-enumerating reads and immutable history remain enforced.
+
+Asset registration still requires an existing AVAILABLE content-addressed Artifact; source ingestion remains #84. No provider-specific model payloads, raw prompts, credentials or agent-framework objects are persisted in domain contracts.
