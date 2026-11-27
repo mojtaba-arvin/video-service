@@ -222,7 +222,7 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
                 segment["path"],
             ])
         lines.append("#EXT-X-ENDLIST")
-        (output_dir / name).write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+        (output_dir / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     write_media_playlist(video, "video.m3u8")
     master = ["#EXTM3U", "#EXT-X-VERSION:7"]
@@ -243,7 +243,7 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
     if audio:
         attributes.append('AUDIO="audio"')
     master.extend(["#EXT-X-STREAM-INF:" + ",".join(attributes), "video.m3u8"])
-    (output_dir / "master.m3u8").write_text("\\n".join(master) + "\\n", encoding="utf-8")
+    (output_dir / "master.m3u8").write_text("\n".join(master) + "\n", encoding="utf-8")
 
     hls_validation = validate_streaming_package(
         str(output_dir), str(output_dir / "master.m3u8"), "hls"
