@@ -34,6 +34,8 @@ class PackageIdentity:
     protocol: str
     packaging_version: str = "jit-cmaf-prototype-v1"
     drm_profile: str = "clear"
+    drm_key_version: str = "none"
+    segment_duration_seconds: int = 4
 
     def cache_key(self) -> str:
         if self.protocol not in ("hls", "dash"):
@@ -46,9 +48,13 @@ class PackageIdentity:
             "protocol": self.protocol,
             "packaging_version": self.packaging_version,
             "drm_profile": self.drm_profile,
+            "drm_key_version": self.drm_key_version,
+            "segment_duration_seconds": self.segment_duration_seconds,
         }
-        if any(not isinstance(value, str) or not value for value in values.values()):
-            raise ValueError("package identity fields must be non-empty strings")
+        if any(not isinstance(value, str) or not value for key, value in values.items() if key != "segment_duration_seconds"):
+            raise ValueError("package identity string fields must be non-empty")
+        if not isinstance(self.segment_duration_seconds, int) or self.segment_duration_seconds < 1:
+            raise ValueError("segment_duration_seconds must be a positive integer")
         canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
