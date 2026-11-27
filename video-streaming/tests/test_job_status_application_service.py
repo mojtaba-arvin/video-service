@@ -62,6 +62,13 @@ class GetJobStatusServiceTests(unittest.TestCase):
                 ["job-a", "job-b"], self.principal
             )
 
+        self.assertEqual(
+            self.repository.authorize_job_access.call_args_list,
+            [
+                call("job-a", self.principal, "video.jobs:read"),
+                call("job-b", self.principal, "video.jobs:read"),
+            ],
+        )
         self.repository.get_job_snapshot.assert_not_called()
 
     @patch(
