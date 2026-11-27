@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import resource
+import re
 import shutil
 import statistics
 import subprocess
@@ -54,6 +55,56 @@ def ffmpeg_version(binary):
     return result.stdout.splitlines()[0]
 
 
+def parse_vtt_timestamp(value):
+    match = re.fullmatch(r"(?:(\d{2}):)?(\d{2}):(\d{2})\.(\d{3})", value.strip())
+    if not match:
+        raise ValueError("invalid WebVTT timestamp")
+    hours = int(match.group(1) or 0)
+    minutes, seconds, millis = int(match.group(2)), int(match.group(3)), int(match.group(4))
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000.0
+
+
+def validate_webvtt_timeline(path, media_duration, tolerance_seconds=0.25):
+    """Check subtitle cue timestamps against the canonical media timeline."""
+    text = Path(path).read_text(encoding="utf-8")
+    if not text.startswith("WEBVTT"):
+        raise ValueError("subtitle sidecar is not WebVTT")
+    cues = []
+    for line in text.splitlines():
+        if "-->" not in line:
+            continue
+        left, right = [part.strip().split()[0] for part in line.split("-->", 1)]
+        start, end = parse_vtt_timestamp(left), parse_vtt_timestamp(right)
+        if start < 0 or end <= start or end > media_duration + tolerance_seconds:
+            raise ValueError("subtitle cue falls outside the media timeline")
+        cues.append({"start_seconds": start, "end_seconds": end})
+    if not cues:
+        raise ValueError("subtitle sidecar contains no cues")
+    return {"cue_count": len(cues), "cues": cues, "media_duration_seconds": media_duration}
+
+
+def probe_av_sync(manifest_path, ffprobe="ffprobe", tolerance_seconds=0.25):
+    result = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries",
+         "stream=codec_type,start_time", "-of", "json", str(manifest_path)],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    streams = json.loads(result.stdout).get("streams", [])
+    starts = {
+        item.get("codec_type"): float(item.get("start_time") or 0.0)
+        for item in streams if item.get("codec_type") in ("video", "audio")
+    }
+    if "video" in starts and "audio" in starts:
+        delta = abs(starts["video"] - starts["audio"])
+        if delta > tolerance_seconds:
+            raise RuntimeError("packaged audio/video start times exceed sync tolerance")
+        return {"video_start_seconds": starts["video"],
+                "audio_start_seconds": starts["audio"],
+                "absolute_start_delta_seconds": delta,
+                "tolerance_seconds": tolerance_seconds, "passed": True}
+    return {"passed": None, "reason": "audio or video stream absent"}
+
+
 def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds=2):
     """Package existing encoded streams without codec conversion."""
     source = Path(source).resolve()
@@ -91,10 +142,12 @@ def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds
     validation = validate_streaming_package(
         str(output_dir), str(manifest), protocol
     )
+    av_sync = probe_av_sync(manifest)
     return {
         "manifest": manifest.name,
         "manifest_sha256": sha256_file(manifest),
         "validation": validation,
+        "audio_video_sync": av_sync,
         **tree_inventory(output_dir),
     }
 
@@ -224,10 +277,15 @@ def cache_residency_hours(request_count, workload_hours, ttl_hours):
 
 
 def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
-                      cache_ttl_hours, hls_requests, dash_requests):
+                      cache_ttl_hours, hls_requests, dash_requests,
+                      subtitle_path=None, media_duration=None):
     source = Path(source).resolve()
     source_hash = sha256_file(source)
     build = ffmpeg_version(ffmpeg)
+    subtitle_validation = (
+        validate_webvtt_timeline(subtitle_path, media_duration)
+        if subtitle_path and media_duration else None
+    )
     protocols = {}
     for protocol in ("hls", "dash"):
         prepackaged = output_root / (source.stem + "-prepackaged-" + protocol)
@@ -297,6 +355,8 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "jit_cache_byte_hours": pre["total_bytes"] * resident_hours,
             },
             "structural_validation": pre["validation"],
+            "audio_video_sync": pre["audio_video_sync"],
+            "subtitle_timeline": subtitle_validation,
         }
     return {
         "fixture": source.name, "source_sha256": source_hash,
@@ -321,9 +381,16 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
         source = Path(input_dir) / artifact["filename"]
         if not source.is_file() or sha256_file(source) != artifact["sha256"]:
             raise RuntimeError("source fixture checksum mismatch")
+        subtitle_path = (
+            Path(input_dir) / artifact["subtitle_filename"]
+            if artifact.get("subtitle_filename") else None
+        )
+        if subtitle_path and sha256_file(subtitle_path) != artifact.get("subtitle_sha256"):
+            raise RuntimeError("subtitle fixture checksum mismatch")
         results.append(benchmark_fixture(
             source, output, ffmpeg, repetitions, workload_hours, cache_ttl_hours,
-            hls_requests, dash_requests,
+            hls_requests, dash_requests, subtitle_path,
+            float(artifact.get("duration_seconds") or 0) or None,
         ))
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -344,7 +411,7 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
             "representative_storage_savings": "not established by synthetic fixtures",
             "drm": "not tested; no encryption, key rotation, license or entitlement integration",
             "player_compatibility": "not tested; structural manifest/artifact validation only",
-            "audio_subtitle_sync": "audio stream packaging is structurally validated; subtitle tracks and player A/V sync require a licensed representative corpus",
+            "audio_subtitle_sync": "packaged audio/video start-time alignment is checked with FFprobe and synthetic WebVTT cue times are checked against media duration; this is not a real player subtitle-rendering test",
             "cache": "local filesystem prototype; not a distributed cache or object-store implementation",
         },
         "fixtures": results,
