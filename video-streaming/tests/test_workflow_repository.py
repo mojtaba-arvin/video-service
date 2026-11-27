@@ -4176,6 +4176,23 @@ class WorkflowRepositoryTests(unittest.TestCase):
                 state="PENDING",
                 attempts=0,
             ))
+            processing_id = str(uuid4())
+            session.add(OutboxRecord(
+                id=processing_id,
+                job_id=job_id,
+                workflow_id=workflow_id,
+                event_type="WORKFLOW_PLAN_DISPATCH",
+                schema_version=1,
+                plan_version="1",
+                plan_fingerprint="e" * 64,
+                dedupe_key="cancel-processing-" + processing_id,
+                payload_json={"schema_version": 1},
+                state="PROCESSING",
+                attempts=1,
+                locked_by="relay-worker",
+                lock_token_hash="f" * 64,
+                lease_expires_at=utcnow() + timedelta(seconds=60),
+            ))
 
         result = self.repository.request_job_cancellation(
             job_id, owner, reason="operator requested"
@@ -4206,6 +4223,12 @@ class WorkflowRepositoryTests(unittest.TestCase):
             self.assertEqual(outbox.last_error, "job_cancel_requested")
             self.assertIsNone(outbox.lock_token_hash)
             self.assertIsNone(outbox.lease_expires_at)
+            processing = session.get(OutboxRecord, processing_id)
+            self.assertEqual(processing.state, "DEAD")
+            self.assertEqual(processing.last_error, "job_cancel_requested")
+            self.assertIsNone(processing.locked_by)
+            self.assertIsNone(processing.lock_token_hash)
+            self.assertIsNone(processing.lease_expires_at)
 
         repeated = self.repository.request_job_cancellation(
             job_id, owner, reason="duplicate request"
