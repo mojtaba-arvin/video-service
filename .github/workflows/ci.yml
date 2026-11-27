@@ -577,7 +577,8 @@ jobs:
                   cursor.execute(
                       "SELECT to_regclass('public.workflow_jobs'), "
                       "to_regclass('public.workflow_outbox'), "
-                      "to_regclass('public.playback_sessions')"
+                      "to_regclass('public.playback_sessions'), "
+                      "to_regclass('public.cdn_delivery_events')"
                   )
                   remaining = cursor.fetchone()
                   if any(remaining):
