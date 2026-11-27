@@ -14,6 +14,8 @@ from enum import Enum
 from math import ceil, isfinite
 from typing import Optional, Tuple
 
+from .workload import WorkloadClass
+
 
 class CapacityKind(str, Enum):
     CPU = "cpu"
@@ -70,8 +72,9 @@ class WorkloadRequirements:
     cost_currency: str = "USD"
 
     def __post_init__(self):
-        if not isinstance(self.workload_class, str) or not self.workload_class.strip():
-            raise ValueError("workload_class is required")
+        allowed_classes = {item.value for item in WorkloadClass}
+        if self.workload_class not in allowed_classes:
+            raise ValueError("workload_class is not a registered workload class")
         _positive_int(self.cpu_units, "cpu_units")
         for name in ("memory_bytes", "disk_bytes"):
             value = getattr(self, name)
@@ -156,6 +159,10 @@ class CapacityPool:
         _positive_int(self.available_cpu_units, "available_cpu_units", allow_zero=True)
         if self.available_cpu_units > self.cpu_capacity_units:
             raise ValueError("available_cpu_units cannot exceed pool capacity")
+        for name in ("memory_bytes", "disk_bytes"):
+            value = getattr(self, name)
+            if value is not None:
+                _positive_int(value, name, allow_zero=True)
         if (
                 not isfinite(float(self.startup_delay_seconds))
                 or self.startup_delay_seconds < 0):
@@ -217,7 +224,10 @@ def _pool_compatibility_reasons(requirements, pool):
     if pool.available_cpu_units < requirements.cpu_units:
         reasons.append("POOL_CPU_CAPACITY_EXHAUSTED")
 
-    if pool.kind == CapacityKind.CPU and requirements.gpu_required:
+    if not pool.adapter_enabled:
+        reasons.append("PROVIDER_ADAPTER_DISABLED")
+    if requirements.gpu_required and (
+            pool.kind == CapacityKind.CPU or "gpu" not in pool.capabilities):
         reasons.append("GPU_REQUIRED")
     if pool.kind == CapacityKind.GPU and not requirements.gpu_required:
         reasons.append("CPU_ONLY_WORKLOAD")
@@ -385,7 +395,9 @@ def fair_queue_order(requests):
         ))
     tenant_order = sorted(
         grouped,
-        key=lambda tenant: (grouped[tenant][0].enqueued_at, tenant),
+        key=lambda tenant: (
+            min(item.enqueued_at for item in grouped[tenant]), tenant
+        ),
     )
     ordered = []
     while tenant_order:
@@ -438,9 +450,13 @@ def summarize_workload_economics(observations):
             total_cost += _decimal(cost, "total_cost")
         latency = item.get("latency_seconds")
         if latency is not None and count:
-            if isinstance(latency, bool) or float(latency) < 0:
-                raise ValueError("latency_seconds must be non-negative")
-            latencies.extend([float(latency)] * count)
+            latency_value = float(latency)
+            if (
+                    isinstance(latency, bool)
+                    or not isfinite(latency_value)
+                    or latency_value < 0):
+                raise ValueError("latency_seconds must be finite and non-negative")
+            latencies.extend([latency_value] * count)
     return {
         "sample_count": len(observations),
         "successful_outputs": successes,
