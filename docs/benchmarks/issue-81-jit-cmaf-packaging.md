@@ -54,7 +54,7 @@ Do not commit generated media or benchmark outputs. Keep the JSON report as a CI
 
 ## Cache identity and safety
 
-The cache key includes the source SHA-256, protocol, schema version, packaging profile version, prototype version, FFmpeg build and normalized options. A profile/toolchain change creates a different immutable key. Explicit invalidation is serialized with fills. A fill is built in a private staging directory and made visible only by same-filesystem atomic rename after a non-empty root manifest exists. Failed fills remove staging state. The prototype does not implement distributed leases, cross-host locking, tenant authorization, signed URL handling, object-store consistency, eviction/GC or DRM key lifecycle.
+The cache key includes the source SHA-256, protocol, schema version, packaging profile version, prototype version, FFmpeg build and normalized options. A profile/toolchain change creates a different immutable key. Explicit invalidation is serialized with fills. A fill is built in a private staging directory and made visible only by same-filesystem atomic rename after a non-empty root manifest exists. The completion marker records the output inventory; warm hits verify every file's path, size and SHA-256 and reject unexpected files. Corrupt/incomplete entries are discarded and rebuilt under the same lock. Failed fills remove staging state. The prototype does not implement distributed leases, cross-host locking, tenant authorization, signed URL handling, object-store consistency, eviction/GC or DRM key lifecycle.
 
 A cache failure must select an already validated conventional package; if no valid fallback exists, fail closed. Never serve a partial JIT package.
 
