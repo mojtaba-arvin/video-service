@@ -278,6 +278,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (http.client.HTTPException, TimeoutError, ValueError, RuntimeError) as e:
+    except (http.client.HTTPException, OSError, TimeoutError, ValueError, RuntimeError) as e:
         print(f"ERROR: identity validation incomplete: {e}", file=sys.stderr)
         sys.exit(2)
