@@ -46,7 +46,7 @@ def principal(scopes=None):
         issuer="https://issuer.example.test/",
         subject="mcp-user",
         tenant_id="tenant-mcp",
-        scopes=frozenset(scopes or ["video.jobs:create", "video.jobs:read"]),
+        scopes=frozenset(scopes or ["video.jobs:create", "video.jobs:read", "video.jobs:cancel"]),
         roles=frozenset(),
         authentication_method="bearer",
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
