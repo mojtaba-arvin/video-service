@@ -498,6 +498,12 @@ class DeliveryTelemetryRepository:
                     "delivery_events_without_session": sum(
                         1 for item in records if item.session_id is None
                     ),
+                    "delivery_events_without_attempt": sum(
+                        1 for item in records if item.attempt_id is None
+                    ),
+                    "missing_delivery_config_count": sum(
+                        1 for item in records if item.delivery_config_id is None
+                    ),
                     "missing_asset_version_count": sum(
                         1 for item in records if item.asset_version is None
                     ),
