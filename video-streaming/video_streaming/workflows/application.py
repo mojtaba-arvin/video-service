@@ -219,7 +219,7 @@ class VideoOperationService:
             raise RuntimeError(
                 "MCP video submission requires WORKFLOW_DURABLE_DISPATCH_ENABLED"
             )
-        job_id = str(uuid.uuid4())
+        job_id = plan["job_id"]
         # The request hash is stable across retries and independent of generated
         # Job IDs, so the caller's idempotency key safely deduplicates submits.
         canonical = json.dumps(
@@ -243,9 +243,14 @@ class VideoOperationService:
             quota_enforcement_enabled=self._quota_enforcement_enabled,
             metadata={"mcp_operation": operation, "api_version": 1},
         ))
+        snapshot = GetJobStatusService(
+            self._repository
+        ).execute([result.job_id], principal)[result.job_id]
+        if snapshot is None:
+            raise RuntimeError("submitted Job snapshot is unavailable")
         return {
             "job_id": result.job_id,
-            "status": "QUEUED",
+            "status": snapshot["status"],
             "created": result.created,
             "operation": operation,
         }
@@ -309,8 +314,11 @@ class VideoOperationService:
         request = self._base_request(bucket, key, idempotency_key)
         output_bucket = self._required_text(output_bucket, "output_bucket")
         output_key = self._required_text(output_key, "output_key", 1024)
+        if isinstance(protocol, str):
+            protocol = protocol.lower()
         if protocol not in ("hls", "dash"):
             raise ValueError("protocol must be hls or dash")
+        quality_names = [] if quality_names is None else quality_names
         if (
                 not isinstance(quality_names, (list, tuple))
                 or len(quality_names) > 20
@@ -322,6 +330,8 @@ class VideoOperationService:
         encode_format = self._required_text(
             encode_format, "encode_format", maximum=32
         ).lower()
+        if encode_format not in ("h264", "hevc", "vp9"):
+            raise ValueError("encode_format must be h264, hevc, or vp9")
         request.update({
             "output_bucket": output_bucket,
             "output_key": output_key,
