@@ -82,6 +82,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             {"source_event_id": " "},
             {"source_event_id": "x" * 129},
             {"artifact_id": "bad\nartifact"},
+            {"artifact_id": "x" * 37},
+            {"session_id": "x" * 37},
             {"edge_region": "x" * 65},
             {"edge_region": "192.0.2.1"},
             {"edge_region": "EU-WEST"},
