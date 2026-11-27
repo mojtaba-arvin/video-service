@@ -231,6 +231,34 @@ class VideoOperationService:
             sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("utf-8")
         request_hash = hashlib.sha256(canonical).hexdigest()
+        nodes = plan["nodes"]
+        playlist_ids = [
+            node["stage_key"] for node in nodes
+            if node["operation"] == "video.output.upload_directory"
+        ]
+        thumbnail_ids = [
+            node["stage_key"] for node in nodes
+            if node["operation"] == "video.output.upload_file"
+        ]
+        result_details = {
+            "reference_id": job_id,
+            "total_checks": sum(
+                node["operation"] in (
+                    "video.input.check",
+                    "video.output.bucket.check",
+                    "video.output.key.check",
+                ) for node in nodes
+            ),
+            "total_inputs": sum(
+                node["operation"] == "video.input.download" for node in nodes
+            ),
+            "total_outputs": len(playlist_ids) + len(thumbnail_ids),
+            "no_watermarked_playlists_ids": playlist_ids,
+            "watermarked_playlists_ids": [],
+            "no_watermarked_thumbnails_ids": thumbnail_ids,
+            "watermarked_thumbnails_ids": [],
+            "watermarked_outputs_ids": [],
+        }
         result = self._submit.execute(SubmitJobCommand(
             job_id=job_id,
             idempotency_key=request["idempotency_key"],
@@ -245,7 +273,11 @@ class VideoOperationService:
             project_revision_id=None,
             secret_envelopes=(),
             quota_enforcement_enabled=self._quota_enforcement_enabled,
-            metadata={"mcp_operation": operation, "api_version": 1},
+            metadata={
+                "mcp_operation": operation,
+                "api_version": 1,
+                "result_details": result_details,
+            },
         ))
         return {
             "job_id": result.job_id,
@@ -291,6 +323,7 @@ class VideoOperationService:
                     "bucket": output_bucket,
                     "key": output_key,
                     "thumbnail_time": thumbnail_time,
+                    "output_id": "mcp-thumbnail",
                     "scale_width": scale_width,
                     "scale_height": scale_height,
                     "use_watermark": False,
@@ -346,6 +379,7 @@ class VideoOperationService:
                     "key": output_key,
                     "protocol": protocol,
                     "quality_names": list(quality_names or []),
+                    "output_id": "mcp-transcode",
                     "encode_format": encode_format,
                     "video_codec": None,
                     "audio_codec": None,
