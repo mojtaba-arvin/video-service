@@ -72,11 +72,18 @@ class AtomicPackageCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="jit-cache-fallback-") as root:
             fallback = Path(root) / "fallback"
             fallback.mkdir()
-            (fallback / "index.m3u8").write_text("#EXTM3U\n#EXT-X-ENDLIST\n")
+            (fallback / "index.m3u8").write_text(
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nvariant.m3u8\n"
+            )
+            (fallback / "variant.m3u8").write_text(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\n"
+                "segment.m4s\n#EXT-X-ENDLIST\n"
+            )
+            (fallback / "segment.m4s").write_bytes(b"complete-segment")
             result = jit.package_or_fallback(
                 jit.AtomicPackageCache(Path(root) / "cache"), "c" * 64,
                 lambda staging: (_ for _ in ()).throw(RuntimeError("simulated failure")),
-                fallback,
+                fallback, "hls",
             )
             self.assertEqual(result["mode"], "prepackaged-fallback")
             self.assertEqual(Path(result["path"]), fallback.resolve())
