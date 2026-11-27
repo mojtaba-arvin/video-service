@@ -20,6 +20,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             ),
             "artifact_id": "manifest-artifact-01",
             "session_id": "session-01",
+            "asset_version": "asset-v7",
+            "delivery_config_id": "config-v2",
             "edge_region": "eu-central",
             "cache_status": "HIT",
             "http_status": 200,
@@ -46,7 +48,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             set(payload),
             {
                 "source", "source_event_id", "source_timestamp",
-                "artifact_id", "session_id", "edge_region", "cache_status",
+                "artifact_id", "session_id", "asset_version", "delivery_config_id",
+                "edge_region", "cache_status",
                 "http_status", "response_time_ms", "bytes_sent",
                 "schema_version",
             },
