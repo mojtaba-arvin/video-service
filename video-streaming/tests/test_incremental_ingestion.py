@@ -17,10 +17,8 @@ from video_streaming.workflows.incremental_ingestion import (
     IngestionConflict,
     IncrementalIngestionService,
     InputContract,
-    IngestionChunkRecord,
-    IngestionSessionRecord,
 )
-from video_streaming.workflows.repository import JobRecord
+from video_streaming.workflows.repository import ArtifactRecord, JobRecord
 
 
 class _Body(io.BytesIO):
@@ -120,6 +118,11 @@ class IncrementalIngestionTests(unittest.TestCase):
         self.assertEqual(result["state"], "COMPLETE")
         self.assertEqual(result["final_size_bytes"], len(source))
         self.assertEqual(result["final_sha256"], hashlib.sha256(source).hexdigest())
+        with self.sessions() as session:
+            artifact = session.get(ArtifactRecord, result["final_artifact_id"])
+            self.assertEqual(artifact.job_id, self.job_id)
+            self.assertEqual(artifact.status, "AVAILABLE")
+            self.assertEqual(artifact.checksum_sha256, result["final_sha256"])
         self.assertTrue(result["final_artifact_uri"].startswith("s3://media-output/"))
         with tempfile.TemporaryDirectory() as directory:
             destination = os.path.join(directory, "restored.mp4")
@@ -213,7 +216,6 @@ class IncrementalIngestionTests(unittest.TestCase):
     def test_cancel_cleans_only_its_own_provisional_chunks(self):
         first = self.create(b"abcdefgh")
         self.add(first, 0, b"abcd")
-        first_uri = self.service.get(first)["chunks"][0]
         second = self.create(b"abcdefgh")
         self.add(second, 0, b"abcd")
         second_uri = self.service.get(second)["chunks"][0]
