@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Callable, Union
+from typing import Callable, Optional, Union
 
 
 @dataclass(frozen=True)
@@ -105,16 +105,20 @@ class AtomicPackageCache:
         self,
         identity: PackageIdentity,
         build: Callable[[Path], str],
-        validate: Callable[[Path, Path], None] | None = None,
+        validate: Optional[Callable[[Path, Path], None]] = None,
     ) -> PackageResult:
         key = identity.cache_key()
         final_dir, lock_path = self._paths(key)
         with self._locked(lock_path):
             existing_manifest = final_dir / ("master.m3u8" if identity.protocol == "hls" else "manifest.mpd")
             if existing_manifest.is_file() and existing_manifest.stat().st_size:
-                if validate:
-                    validate(final_dir, existing_manifest)
-                return PackageResult(final_dir, existing_manifest, True, 0.0)
+                try:
+                    if validate:
+                        validate(final_dir, existing_manifest)
+                    return PackageResult(final_dir, existing_manifest, True, 0.0)
+                except Exception:
+                    # An invalid entry is never served; rebuild it under lock.
+                    shutil.rmtree(final_dir, ignore_errors=True)
 
             started = time.perf_counter()
             staging = Path(tempfile.mkdtemp(prefix=key + ".tmp-", dir=str(self.root)))
@@ -190,8 +194,8 @@ def ffmpeg_copy_command(
 
 def run_ffmpeg_copy_package(
     ffmpeg_bin: str,
-    input_path: str | Path,
-    output_dir: str | Path,
+    input_path: Union[str, Path],
+    output_dir: Union[str, Path],
     protocol: str,
     segment_seconds: int = 4,
     timeout_seconds: int = 180,
