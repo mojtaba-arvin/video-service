@@ -224,6 +224,16 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(report["derived_aggregates"][0]["bytes_sent"], 4096)
 
+    def test_query_marks_bounded_result_and_partial_aggregates(self):
+        self.telemetry.ingest(self.event())
+        self.telemetry.ingest(self.event(source_event_id="request-2"))
+
+        report = self.telemetry.query(self.job_id, limit=1)
+
+        self.assertEqual(len(report["observed_events"]), 1)
+        self.assertTrue(report["coverage"]["truncated"])
+        self.assertEqual(report["derived_aggregates"][0]["event_count"], 1)
+
     def test_query_rejects_unbounded_windows_limits_and_naive_timestamps(self):
         for kwargs in (
             {"aggregation_window_seconds": 1},
