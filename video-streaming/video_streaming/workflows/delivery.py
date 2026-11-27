@@ -75,8 +75,8 @@ class DeliveryEvent:
         if not _SOURCE_PATTERN.fullmatch(source):
             raise DeliveryEventContractError("source is invalid")
         _required_identifier(self.source_event_id, "source_event_id", 128)
-        _required_identifier(self.artifact_id, "artifact_id", 128)
-        _optional_identifier(self.session_id, "session_id", 128)
+        _required_identifier(self.artifact_id, "artifact_id", 36)
+        _optional_identifier(self.session_id, "session_id", 36)
         _optional_identifier(self.asset_version, "asset_version", 128)
         _optional_identifier(self.delivery_config_id, "delivery_config_id", 128)
         _optional_identifier(self.edge_region, "edge_region", 64)
