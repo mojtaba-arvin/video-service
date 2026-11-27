@@ -64,7 +64,7 @@ class AtomicPackageCacheTests(unittest.TestCase):
 
             path, hit, _ = cache.get_or_build(key, builder)
             self.assertFalse(hit)
-            (path / "segment.m4s").write_bytes(b"corrupted")
+            (path / "segment.m4s").write_bytes(b"corrupt!!!")
             rebuilt, hit, _ = cache.get_or_build(key, builder)
             self.assertFalse(hit)
             self.assertEqual(len(builds), 2)
