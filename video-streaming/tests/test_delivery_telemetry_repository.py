@@ -171,6 +171,7 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.telemetry.ingest(self.event(
             session_id=None,
             asset_version=None,
+            delivery_config_id=None,
             cache_status="UNKNOWN",
             http_status=None,
             response_time_ms=None,
@@ -181,6 +182,8 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
 
         self.assertEqual(coverage["delivery_event_count"], 1)
         self.assertEqual(coverage["delivery_events_without_session"], 1)
+        self.assertEqual(coverage["delivery_events_without_attempt"], 1)
+        self.assertEqual(coverage["missing_delivery_config_count"], 1)
         self.assertEqual(coverage["missing_asset_version_count"], 1)
         self.assertEqual(coverage["missing_http_status_count"], 1)
         self.assertEqual(coverage["missing_edge_region_count"], 1)
