@@ -163,6 +163,28 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.assertEqual(observed["asset_version"], "asset-v7")
         self.assertEqual(observed["delivery_config_id"], "delivery-config-v3")
 
+    def test_artifact_job_must_match_its_stage_workflow(self):
+        other_job_id = str(uuid4())
+        self.workflow.create_job(
+            job_id=other_job_id,
+            idempotency_key="delivery-test-" + str(uuid4()),
+            request_hash="f" * 64,
+            reference_id="delivery-test-other",
+            workflow_name="video.vod",
+            stage_specs=[{
+                "stage_key": "output-0",
+                "operation": "video.package_and_publish",
+                "input": {"protocol": "hls"},
+            }],
+        )
+        with self.workflow._session.begin() as session:
+            session.get(ArtifactRecord, self.artifact_id).job_id = other_job_id
+
+        with self.assertRaisesRegex(ValueError, "Job does not match"):
+            self.telemetry.ingest(
+                self.event(source_event_id="mismatched-artifact-job")
+            )
+
     def test_session_must_reference_the_same_manifest(self):
         with self.assertRaises(ValueError):
             self.telemetry.ingest(self.event(session_id="unrelated-session"))
