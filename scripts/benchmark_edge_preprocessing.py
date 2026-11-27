@@ -167,6 +167,7 @@ def benchmark(args):
         cloud, edge = measured["cloud"], measured["edge"]
         runs.append({
             "run": index + 1, "order": list(order), "cloud": cloud, "edge": edge,
+            "same_source": cloud["source_sha256"] == edge["source_sha256"],
             "frame_hash_parity": cloud["frame_hashes"] == edge["frame_hashes"],
             "transfer_bytes_delta": cloud["transfer_bytes"] - edge["transfer_bytes"],
         })
@@ -182,6 +183,11 @@ def benchmark(args):
         )
         if fallback["result"]["source_sha256"] != sha256_file(source):
             raise BenchmarkError("fallback did not preserve source identity")
+        fallback["frame_hash_parity"] = (
+            fallback["result"]["frame_hashes"] == runs[0]["cloud"]["frame_hashes"]
+        )
+        if not fallback["frame_hash_parity"]:
+            raise BenchmarkError("cloud fallback output did not match cloud reference")
     report = {
         "schema_version": 1, "run_id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -205,6 +211,7 @@ def benchmark(args):
             ],
         },
         "summary": {
+            "all_source_hashes_match": all(run["same_source"] for run in runs),
             "all_frame_hashes_match": all(run["frame_hash_parity"] for run in runs),
             "cloud_completion_latency_median_ms": statistics.median([r["cloud"]["completion_latency_ms"] for r in runs]),
             "edge_completion_latency_median_ms": statistics.median([r["edge"]["completion_latency_ms"] for r in runs]),
@@ -230,6 +237,8 @@ def benchmark(args):
     report_path = root / "benchmark-report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"report": str(report_path), "summary": report["summary"]}, indent=2))
+    if not report["summary"]["all_source_hashes_match"]:
+        raise BenchmarkError("cloud/edge source identity parity failed")
     if not report["summary"]["all_frame_hashes_match"]:
         raise BenchmarkError("cloud/edge frame output parity failed")
     return report
