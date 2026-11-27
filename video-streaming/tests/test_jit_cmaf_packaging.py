@@ -2,6 +2,7 @@
 import concurrent.futures
 import importlib.util
 import json
+import shutil as file_shutil
 import shutil
 import subprocess
 import sys
@@ -142,6 +143,60 @@ class CMAFPackagingTests(unittest.TestCase):
                     report["audio_video_sync"]["absolute_start_delta_seconds"], 0.25
                 )
             self.assertEqual(hashes[0], hashes[1])
+
+
+    def test_shared_prepackaged_cmaf_uses_one_media_object_set_for_hls_and_dash(self):
+        artifact = self.dataset["artifacts"][0]
+        source = self.sources / artifact["filename"]
+        hashes = []
+        for run in range(2):
+            output = Path(self.temp.name) / ("shared-cmaf-" + str(run))
+            report = jit.build_shared_cmaf(source, output)
+            hashes.append((
+                report["manifest_sha256"], report["hls_manifest_sha256"]
+            ))
+            self.assertGreater(report["shared_media_bytes"], 0)
+            self.assertTrue(report["hls_validation"]["valid"])
+            self.assertTrue(report["dash_validation"]["valid"])
+            self.assertTrue(report["audio_video_sync"]["passed"])
+            self.assertLessEqual(
+                report["audio_video_segment_duration_delta_seconds"], 0.25
+            )
+            self.assertTrue(any(
+                item["path"].endswith(".m4s")
+                for item in report["shared_media_files"]
+            ))
+        self.assertEqual(hashes[0], hashes[1])
+
+    def test_benchmark_report_compares_shared_cmaf_and_jit_cache_byte_hours(self):
+        artifact = self.dataset["artifacts"][0]
+        input_dir = Path(self.temp.name) / "single-input"
+        input_dir.mkdir()
+        source = self.sources / artifact["filename"]
+        subtitle = self.sources / artifact["subtitle_filename"]
+        file_shutil.copyfile(source, input_dir / artifact["filename"])
+        file_shutil.copyfile(subtitle, input_dir / artifact["subtitle_filename"])
+        (input_dir / "dataset-manifest.json").write_text(
+            json.dumps({"dataset_id": "one-fixture", "artifacts": [artifact]}),
+            encoding="utf-8",
+        )
+        output_dir = Path(self.temp.name) / "benchmark-output"
+        report = jit.run_benchmark(
+            input_dir, output_dir, repetitions=1, workload_hours=4,
+            cache_ttl_hours=1, hls_requests=4, dash_requests=2,
+        )
+        result = report["fixtures"][0]
+        self.assertGreater(result["prepackaged_cmaf"]["bytes"], 0)
+        self.assertGreater(
+            result["storage_comparison"]["prepackaged_cmaf_byte_hours"], 0
+        )
+        self.assertGreater(
+            result["storage_comparison"]["jit_cache_byte_hours"], 0
+        )
+        self.assertFalse(report["request_path_reencoding"])
+        self.assertTrue(
+            (output_dir / "jit-packaging-benchmark.json").is_file()
+        )
 
     def test_source_and_subtitle_checksums_and_timeline_are_stable(self):
         artifact = self.dataset["artifacts"][0]
