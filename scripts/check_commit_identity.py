@@ -106,6 +106,7 @@ def validate_api_url(url, repository):
         or not parsed.path.startswith("/repos/" + repository + "/")
     ):
         raise RuntimeError("refusing GitHub API URL outside the intended HTTPS repository origin")
+    return parsed
 
 
 def get_json(url, token, repository):
@@ -130,6 +131,7 @@ def get_json(url, token, repository):
         return json.loads(payload.decode())
     finally:
         connection.close()
+
 
 def collect_commits(pr, fetch_page):
     if not isinstance(pr, dict):
