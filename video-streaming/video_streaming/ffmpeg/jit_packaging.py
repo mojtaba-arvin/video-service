@@ -12,6 +12,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
