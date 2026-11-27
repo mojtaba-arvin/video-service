@@ -184,12 +184,12 @@ class WorkflowNodeExecutor:
 
         def is_cancelled():
             current = self.repository.get_job_snapshot(job_id)
-            return current is not None and current["status"] == "CANCELLED"
+            return current is not None and current["status"] in ("CANCEL_REQUESTED", "CANCELLED")
 
         def is_terminal():
             current = self.repository.get_job_snapshot(job_id)
             return current is None or current["status"] in (
-                "CANCELLED", "FAILED", "FINISHED",
+                "CANCEL_REQUESTED", "CANCELLED", "FAILED", "FINISHED",
             )
 
         def cancel(reason="WORKER_CANCELLED"):
@@ -276,7 +276,7 @@ class WorkflowNodeExecutor:
             }
         except AttemptLeaseLost:
             current = self.repository.get_job_snapshot(job_id)
-            if current and current["status"] == "CANCELLED":
+            if current and current["status"] in ("CANCEL_REQUESTED", "CANCELLED"):
                 return {"status": "cancelled", "node_id": node_id}
             if current and current["status"] in ("FAILED", "FINISHED"):
                 return {
