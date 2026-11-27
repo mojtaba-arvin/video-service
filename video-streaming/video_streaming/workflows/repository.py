@@ -3891,6 +3891,7 @@ class WorkflowRepository:
             if require_dependencies:
                 job = session.get(JobRecord, job_id)
                 if job is None or job.state in (
+                        JobState.CANCEL_REQUESTED.value,
                         JobState.CANCELLED.value,
                         JobState.FAILED.value,
                         JobState.FINISHED.value):
@@ -4015,6 +4016,7 @@ class WorkflowRepository:
                 ).with_for_update().execution_options(populate_existing=True)
             ).scalar_one_or_none()
             if job is None or job.state in (
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -4188,6 +4190,10 @@ class WorkflowRepository:
                     from_state=previous_status, to_state=StageState.CANCELLED.value,
                     stage_id=stage.id, attempt_id=attempt_id,
                     payload={"reason": terminal_reason},
+                )
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                self._finalize_job_cancellation_if_idle(
+                    session, job, workflow, now, terminal_reason
                 )
                 return False
             now = utcnow()
@@ -5465,6 +5471,167 @@ class WorkflowRepository:
             )
         return True
 
+    def _finalize_job_cancellation_if_idle(
+            self, session, job, workflow, now, reason):
+        """Make cancellation terminal only after every worker lease is closed."""
+        if job.state != JobState.CANCEL_REQUESTED.value:
+            return False
+        active_attempts = session.execute(
+            select(func.count(AttemptRecord.id))
+            .join(StageRecord, AttemptRecord.stage_id == StageRecord.id)
+            .where(
+                StageRecord.workflow_id == workflow.id,
+                AttemptRecord.state == AttemptState.RUNNING.value,
+            )
+        ).scalar_one()
+        if active_attempts:
+            return False
+        job.state = JobState.CANCELLED.value
+        job.updated_at = now
+        job.version += 1
+        workflow.state = WorkflowState.CANCELLED.value
+        workflow.updated_at = now
+        _record_event(
+            session, job.id, workflow.id, "JOB_CANCELLED",
+            from_state=JobState.CANCEL_REQUESTED.value,
+            to_state=JobState.CANCELLED.value,
+            payload={"reason": reason[:500]},
+        )
+        return True
+
+    def request_job_cancellation(self, job_id, principal, reason="CANCELLED"):
+        """Durably request cancellation and suppress not-yet-started work.
+
+        Stage rows are locked in ordinal order before the Job row, matching the
+        Stage -> Job lock order used by claims and worker acknowledgements.
+        Active Attempts retain their lease and must acknowledge cancellation.
+        """
+        from video_streaming.security import (
+            AuthorizationError,
+            authorize_tenant_resource,
+            require_scope,
+        )
+
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            raise ValueError("reason must contain 1 to 500 characters")
+        if principal is None:
+            raise AuthorizationError("Resource not found or access denied")
+        require_scope(principal, "video.jobs:cancel")
+        with self._session.begin() as session:
+            workflow = session.execute(
+                select(WorkflowRecord).where(
+                    WorkflowRecord.job_id == job_id
+                )
+            ).scalar_one_or_none()
+            if workflow is None:
+                raise AuthorizationError("Resource not found or access denied")
+            stages = session.execute(
+                select(StageRecord).where(
+                    StageRecord.workflow_id == workflow.id
+                ).order_by(StageRecord.ordinal, StageRecord.id)
+                .with_for_update()
+            ).scalars().all()
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise AuthorizationError("Resource not found or access denied")
+            authorize_tenant_resource(
+                principal, job.owner_tenant_id, "video.jobs:cancel"
+            )
+            if (
+                    job.owner_issuer != principal.issuer
+                    or job.owner_subject != principal.subject):
+                raise AuthorizationError(
+                    "Resource not found or access denied"
+                )
+            if job.state in (
+                    JobState.FINISHED.value,
+                    JobState.FAILED.value,
+                    JobState.CANCELLED.value,
+                    JobState.CANCEL_REQUESTED.value):
+                return {
+                    "job_id": job_id,
+                    "status": job.state,
+                    "requested": False,
+                }
+
+            now = utcnow()
+            previous_job_state = job.state
+            job.state = JobState.CANCEL_REQUESTED.value
+            job.updated_at = now
+            job.version += 1
+            workflow.state = WorkflowState.CANCEL_REQUESTED.value
+            workflow.updated_at = now
+            _record_event(
+                session, job_id, workflow.id, "JOB_CANCELLATION_REQUESTED",
+                from_state=previous_job_state,
+                to_state=JobState.CANCEL_REQUESTED.value,
+                payload={
+                    "reason": reason.strip(),
+                    "requested_by_issuer": principal.issuer,
+                    "requested_by_subject": principal.subject,
+                },
+            )
+
+            for stage in stages:
+                active_attempt = session.execute(
+                    select(AttemptRecord.id).where(
+                        AttemptRecord.stage_id == stage.id,
+                        AttemptRecord.state == AttemptState.RUNNING.value,
+                    ).limit(1)
+                ).scalar_one_or_none()
+                if active_attempt is not None:
+                    # Only the lease owner may terminate and acknowledge it.
+                    continue
+                current = StageState(stage.status)
+                if (
+                        current in (
+                            StageState.FINISHED,
+                            StageState.FAILED,
+                            StageState.CANCELLED,
+                        )
+                        or StageState.CANCELLED
+                        not in ALLOWED_STAGE_TRANSITIONS[current]):
+                    continue
+                previous_stage_state = stage.status
+                self._transition(stage, StageState.CANCELLED)
+                _record_event(
+                    session, job_id, workflow.id, "STAGE_CANCELLED",
+                    from_state=previous_stage_state,
+                    to_state=StageState.CANCELLED.value,
+                    stage_id=stage.id,
+                    payload={"reason": reason.strip()},
+                )
+
+            # Invalidate even in-flight relay leases. A relay that already
+            # published may deliver a duplicate message, but the worker's
+            # durable claim is fenced by CANCEL_REQUESTED and cannot start.
+            outbox_rows = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.job_id == job_id,
+                    OutboxRecord.state.in_(("PENDING", "PROCESSING")),
+                ).with_for_update()
+            ).scalars().all()
+            for row in outbox_rows:
+                row.state = "DEAD"
+                row.locked_by = None
+                row.lock_token_hash = None
+                row.lease_expires_at = None
+                row.last_error = "job_cancel_requested"
+                row.updated_at = now
+
+            self._finalize_job_cancellation_if_idle(
+                session, job, workflow, now, reason.strip()
+            )
+            return {
+                "job_id": job_id,
+                "status": job.state,
+                "requested": True,
+            }
+
     def cancel_attempt(
             self,
             job_id,
@@ -5474,7 +5641,7 @@ class WorkflowRepository:
             metrics=None,
             pricing=None,
             lease_token=None):
-        """Persist cancellation of a running attempt and its workflow stage."""
+        """Acknowledge cancellation under the active Attempt's lease."""
         with self._session.begin() as session:
             stage = self._find_stage(session, job_id, stage_key, lock=True)
             attempt = session.get(AttemptRecord, attempt_id)
@@ -5490,8 +5657,17 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
+            if job.state not in (
+                    JobState.CANCEL_REQUESTED.value,
+                    JobState.CANCELLED.value,
+                    JobState.FAILED.value,
+                    JobState.FINISHED.value):
+                raise InvalidStateTransition(
+                    "Job cancellation must be requested before worker acknowledgement"
+                )
             if StageState.CANCELLED not in ALLOWED_STAGE_TRANSITIONS[
-                    StageState(stage.status)]:
+                    StageState(stage.status)
+            ]:
                 raise InvalidStateTransition(
                     "Cannot cancel stage {} from {}".format(
                         stage_key, stage.status
@@ -5501,7 +5677,7 @@ class WorkflowRepository:
             previous_status = stage.status
             self._transition(stage, StageState.CANCELLED)
             started = attempt.started_at
-            if started.tzinfo is None:
+            if started.tzinfo is None or started.utcoffset() is None:
                 started = started.replace(tzinfo=timezone.utc)
             attempt.state = AttemptState.CANCELLED.value
             attempt.finished_at = now
@@ -5517,33 +5693,19 @@ class WorkflowRepository:
             self._apply_attempt_accounting(attempt, metrics, pricing)
             self._clear_attempt_lease(attempt)
             attempt.error_code = "CANCELLED"
-            attempt.error_message = reason
+            attempt.error_message = reason[:500]
             workflow = session.get(WorkflowRecord, stage.workflow_id)
-            # A sibling may already have failed the Job (or the workflow may
-            # have reached another terminal state). Stop this Attempt without
-            # rewriting that authoritative terminal outcome as CANCELLED.
-            if job.state not in (
-                    JobState.CANCELLED.value,
-                    JobState.FAILED.value,
-                    JobState.FINISHED.value):
-                workflow.state = WorkflowState.CANCELLED.value
-                workflow.updated_at = now
-                job.state = JobState.CANCELLED.value
-                job.updated_at = now
-                job.version += 1
             _record_event(
-                session,
-                job_id,
-                workflow.id,
-                "STAGE_CANCELLED",
+                session, job_id, workflow.id, "STAGE_CANCELLED",
                 from_state=previous_status,
                 to_state=StageState.CANCELLED.value,
-                stage_id=stage.id,
-                attempt_id=attempt_id,
-                payload={"reason": reason},
+                stage_id=stage.id, attempt_id=attempt_id,
+                payload={"reason": reason[:500]},
+            )
+            self._finalize_job_cancellation_if_idle(
+                session, job, workflow, now, reason
             )
         return True
-
 
     def recover_expired_attempts(self, now=None, pricing=None, limit=100):
         """Recover only running attempts whose durable worker lease has expired.
