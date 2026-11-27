@@ -1987,6 +1987,38 @@ class WorkflowRepositoryTests(unittest.TestCase):
 
 
 
+    def test_in_flight_job_rejects_workflow_version_upgrade(self):
+        job_id = str(uuid4())
+        key = "creative-version-pin-{}".format(uuid4())
+        request_hash = "9" * 64
+        accepted_plan = self.build_plan(job_id)
+        accepted_plan["workflow_version"] = "creative-v1"
+
+        self.repository.create_job(
+            job_id,
+            key,
+            request_hash,
+            execution_plan=accepted_plan,
+        )
+
+        upgraded_plan = dict(accepted_plan)
+        upgraded_plan["workflow_version"] = "creative-v2"
+        with self.assertRaises(IdempotencyConflict):
+            self.repository.create_job(
+                job_id,
+                key,
+                request_hash,
+                execution_plan=upgraded_plan,
+            )
+
+        pinned = self.repository.get_execution_plan(job_id)
+        self.assertEqual(pinned["workflow_version"], "creative-v1")
+        self.assertEqual(pinned["plan"], accepted_plan)
+        self.assertEqual(
+            pinned["fingerprint"],
+            execution_plan_sha256(accepted_plan),
+        )
+
     def test_idempotent_plan_replay_rebinds_generated_job_id(self):
         original_job_id = str(uuid4())
         key = "idem-plan-generated-id-{}".format(uuid4())
