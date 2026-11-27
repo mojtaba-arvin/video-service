@@ -5,8 +5,11 @@ Transport adapters translate requests into this command and retain ownership
 of transport-specific response formatting and legacy dispatch.
 """
 
+import hashlib
+import json
+import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from video_streaming.security import require_scope
 
@@ -118,6 +121,239 @@ class GetJobStatusService:
             job_id: self._repository.get_job_snapshot(job_id)
             for job_id in job_ids
         }
+
+
+
+class VideoOperationService:
+    """Typed asynchronous video operations shared by MCP and other adapters.
+
+    The service compiles only allow-listed durable plan operations and submits
+    them through SubmitJobService. It never accepts commands, FFmpeg argument
+    strings, provider credentials, or arbitrary execution-plan fragments.
+    """
+
+    def __init__(
+            self, repository, durable_dispatch_enabled,
+            quota_enforcement_enabled=False):
+        if repository is None:
+            raise ValueError("workflow repository is required")
+        self._repository = repository
+        self._durable_dispatch_enabled = bool(durable_dispatch_enabled)
+        self._quota_enforcement_enabled = bool(quota_enforcement_enabled)
+        self._submit = SubmitJobService(repository)
+
+    @staticmethod
+    def _required_text(value, field, maximum=255):
+        if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > maximum
+                or any(ord(char) < 32 for char in value)):
+            raise ValueError("{} must be 1 to {} safe characters".format(
+                field, maximum
+            ))
+        return value.strip()
+
+    @classmethod
+    def _base_request(cls, bucket, key, idempotency_key):
+        return {
+            "bucket": cls._required_text(bucket, "bucket"),
+            "key": cls._required_text(key, "key", maximum=1024),
+            "idempotency_key": cls._required_text(
+                idempotency_key, "idempotency_key"
+            ),
+        }
+
+    @staticmethod
+    def _probe_plan(job_id, bucket, key):
+        from video_streaming.workflows.execution_plan import (
+            EXECUTION_PLAN_SCHEMA_VERSION,
+            validate_execution_plan,
+        )
+        from video_streaming.workflows.vod_plan import DEFAULT_RETRY_POLICIES
+
+        def node(node_id, operation, dependencies, parameters, retry, profile):
+            return {
+                "node_id": node_id,
+                "operation": operation,
+                "stage_key": node_id,
+                "depends_on": dependencies,
+                "parameters": parameters,
+                "retry_policy": dict(DEFAULT_RETRY_POLICIES[retry]),
+                "resource_profile": profile,
+            }
+
+        input_parameters = {
+            "input_name": "video",
+            "input_number": 0,
+            "bucket": bucket,
+            "key": key,
+        }
+        plan = {
+            "schema_version": EXECUTION_PLAN_SCHEMA_VERSION,
+            "workflow_name": "video.vod",
+            "workflow_version": "1",
+            "job_id": job_id,
+            "nodes": [
+                node(
+                    "input-video-check", "video.input.check", [],
+                    input_parameters, "control", "control",
+                ),
+                node(
+                    "input-video-download", "video.input.download",
+                    ["input-video-check"], input_parameters,
+                    "input", "upload",
+                ),
+                node(
+                    "input-video-analyze", "video.input.analyze",
+                    ["input-video-download"],
+                    {"input_name": "video", "input_number": 0},
+                    "media", "probe",
+                ),
+            ],
+        }
+        return validate_execution_plan(plan)
+
+    def _submit_plan(self, operation, request, principal, plan):
+        if not self._durable_dispatch_enabled:
+            raise RuntimeError(
+                "MCP video submission requires WORKFLOW_DURABLE_DISPATCH_ENABLED"
+            )
+        job_id = str(uuid.uuid4())
+        # The request hash is stable across retries and independent of generated
+        # Job IDs, so the caller's idempotency key safely deduplicates submits.
+        canonical = json.dumps(
+            {"operation": operation, "request": request},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+        request_hash = hashlib.sha256(canonical).hexdigest()
+        result = self._submit.execute(SubmitJobCommand(
+            job_id=job_id,
+            idempotency_key=request["idempotency_key"],
+            request_hash=request_hash,
+            reference_id=job_id,
+            execution_plan=plan,
+            execution_backend="durable_vod_v1",
+            enqueue_dispatch=True,
+            outbox_dedupe_key="mcp.workflow.dispatch:{}".format(job_id),
+            principal=principal,
+            project_id=None,
+            project_revision_id=None,
+            secret_envelopes=(),
+            quota_enforcement_enabled=self._quota_enforcement_enabled,
+            metadata={"mcp_operation": operation, "api_version": 1},
+        ))
+        return {
+            "job_id": result.job_id,
+            "status": "QUEUED",
+            "created": result.created,
+            "operation": operation,
+        }
+
+    def probe_video(self, bucket, key, idempotency_key, principal):
+        request = self._base_request(bucket, key, idempotency_key)
+        job_id = str(uuid.uuid4())
+        plan = self._probe_plan(job_id, request["bucket"], request["key"])
+        return self._submit_plan("probe", request, principal, plan)
+
+    def generate_thumbnail(
+            self, bucket, key, output_bucket, output_key, thumbnail_time,
+            idempotency_key, principal, scale_width=0, scale_height=0,
+            dont_replace=False, create_bucket=False):
+        request = self._base_request(bucket, key, idempotency_key)
+        output_bucket = self._required_text(output_bucket, "output_bucket")
+        output_key = self._required_text(output_key, "output_key", 1024)
+        for field, value in (
+                ("scale_width", scale_width), ("scale_height", scale_height)):
+            if (
+                    isinstance(value, bool) or not isinstance(value, int)
+                    or value < 0 or value > 16384):
+                raise ValueError("{} must be between 0 and 16384".format(field))
+        if not isinstance(dont_replace, bool) or not isinstance(create_bucket, bool):
+            raise ValueError("dont_replace and create_bucket must be booleans")
+        request.update({
+            "output_bucket": output_bucket,
+            "output_key": output_key,
+            "thumbnail_time": thumbnail_time,
+            "scale_width": scale_width,
+            "scale_height": scale_height,
+            "dont_replace": dont_replace,
+            "create_bucket": create_bucket,
+        })
+        from video_streaming.workflows.vod_plan import build_vod_execution_plan
+        job_id = str(uuid.uuid4())
+        plan = build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": request["bucket"], "key": request["key"]},
+                "watermark": {},
+                "playlists": [],
+                "thumbnails": [{
+                    "bucket": output_bucket,
+                    "key": output_key,
+                    "thumbnail_time": thumbnail_time,
+                    "scale_width": scale_width,
+                    "scale_height": scale_height,
+                    "use_watermark": False,
+                    "dont_replace": dont_replace,
+                    "create_bucket": create_bucket,
+                }],
+            },
+        )
+        return self._submit_plan("thumbnail", request, principal, plan)
+
+    def transcode_video(
+            self, bucket, key, output_bucket, output_key, protocol,
+            idempotency_key, principal, quality_names=None,
+            encode_format="h264"):
+        request = self._base_request(bucket, key, idempotency_key)
+        output_bucket = self._required_text(output_bucket, "output_bucket")
+        output_key = self._required_text(output_key, "output_key", 1024)
+        if protocol not in ("hls", "dash"):
+            raise ValueError("protocol must be hls or dash")
+        if (
+                not isinstance(quality_names, (list, tuple))
+                or len(quality_names) > 20
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    or len(item) > 32 for item in (quality_names or [])
+                )):
+            raise ValueError("quality_names must be a list of at most 20 names")
+        encode_format = self._required_text(
+            encode_format, "encode_format", maximum=32
+        ).lower()
+        request.update({
+            "output_bucket": output_bucket,
+            "output_key": output_key,
+            "protocol": protocol,
+            "quality_names": list(quality_names or []),
+            "encode_format": encode_format,
+        })
+        from video_streaming.workflows.vod_plan import build_vod_execution_plan
+        job_id = str(uuid.uuid4())
+        plan = build_vod_execution_plan(
+            job_id,
+            {
+                "video": {"bucket": request["bucket"], "key": request["key"]},
+                "watermark": {},
+                "playlists": [{
+                    "bucket": output_bucket,
+                    "key": output_key,
+                    "protocol": protocol,
+                    "quality_names": list(quality_names or []),
+                    "encode_format": encode_format,
+                    "video_codec": None,
+                    "audio_codec": None,
+                    "fragmented": False,
+                    "custom_qualities": [],
+                    "use_watermark": False,
+                    "dont_replace": False,
+                    "create_bucket": False,
+                }],
+                "thumbnails": [],
+            },
+        )
+        return self._submit_plan("transcode", request, principal, plan)
 
 
 @dataclass(frozen=True)
