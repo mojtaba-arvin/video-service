@@ -90,12 +90,14 @@ class MCPServerIntegrationTests(unittest.TestCase):
 
         self.configure()
 
+        owner = self.owner
+
         class FakeAuthenticator:
             def __init__(self, **_kwargs):
                 pass
 
             def authenticate(self, _token):
-                return self.owner
+                return owner
 
         # The in-memory SDK client intentionally bypasses HTTP auth middleware.
         # Inject the verified AccessToken at the same context boundary used by
@@ -173,12 +175,14 @@ class MCPServerIntegrationTests(unittest.TestCase):
             expires_at=self.token.expires_at,
         )
 
+        owner = self.owner
+
         class FakeAuthenticator:
             def __init__(self, **_kwargs):
                 pass
 
             def authenticate(self, _token):
-                return self.owner
+                return owner
 
         with patch.object(mcp_server, "OIDCAuthenticator", FakeAuthenticator), \
                 patch.object(
