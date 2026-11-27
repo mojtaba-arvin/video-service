@@ -129,6 +129,13 @@ before making any savings or rollout claim.
   count, package version, and origin response latency. Asset IDs and URLs
   belong in traces/logs, not metric labels.
 
+## Interoperability references
+
+- Apple Developer, [About CMAF with HLS](https://developer.apple.com/documentation/http-live-streaming/about-the-common-media-application-format-with-http-live-streaming-hls): CMAF track/header/fragment model, per-track HLS media playlists, initialization-map references, and audio/subtitle rendition signaling.
+- CTA-5005, [Web Application Video Ecosystem — DASH/HLS Interop](https://cdn.cta.tech/cta/media/media/resources/standards/pdfs/cta-5005-final.pdf): constraints for reusing DASH CMAF addressable objects with HLS and vice versa, including byte-range addressability and segment-object aggregation.
+
+These specifications establish interoperability constraints; they do not prove that this prototype's outputs pass a particular DRM or player implementation.
+
 ## Current conclusion and next evidence gate
 
 This change establishes an isolated copy-only packager/cache prototype and
