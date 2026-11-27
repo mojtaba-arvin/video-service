@@ -118,3 +118,37 @@ class GetJobStatusService:
             job_id: self._repository.get_job_snapshot(job_id)
             for job_id in job_ids
         }
+
+
+@dataclass(frozen=True)
+class CancelJobResult:
+    job_id: str
+    status: str
+    requested: bool
+
+
+class CancelJobService:
+    """Request durable Job cancellation through the shared workflow port."""
+
+    def __init__(self, repository):
+        if repository is None:
+            raise ValueError("workflow repository is required")
+        self._repository = repository
+
+    def execute(self, job_id, principal, reason="CANCELLED"):
+        if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 36:
+            raise ValueError("job_id must contain 1 to 36 characters")
+        if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or len(reason) > 500):
+            raise ValueError("reason must contain 1 to 500 characters")
+        require_scope(principal, "video.jobs:cancel")
+        result = self._repository.request_job_cancellation(
+            job_id, principal, reason=reason.strip()
+        )
+        return CancelJobResult(
+            job_id=result["job_id"],
+            status=result["status"],
+            requested=result["requested"],
+        )
