@@ -20,6 +20,8 @@ Introduce a small provider-neutral normalized event contract before selecting an
 - `source_timestamp`: timezone-aware source event time, normalized to UTC;
 - `artifact_id`: immutable ID of the exact published manifest Artifact;
 - `session_id`: optional opaque playback session ID, only when the source can correlate it safely;
+- `asset_version`: optional bounded asset-version label;
+- `delivery_config_id`: optional bounded delivery-configuration version/reference;
 - `edge_region`: optional coarse region label, not a viewer or precise edge location;
 - `cache_status`: `HIT`, `MISS`, `BYPASS`, `REVALIDATED`, `STALE` or `UNKNOWN`;
 - `http_status`: optional HTTP response status;
@@ -45,8 +47,9 @@ The repository retention policy defaults to 30 days from ingestion and accepts d
 - Provider adapters can normalize source-specific logs without leaking provider fields into the domain model.
 - Delivery data can be correlated to the exact immutable manifest and, when safely available, a playback session.
 - Missing metrics remain `null`/unknown rather than being fabricated as zero.
-- The event identity and fingerprint make replay/conflict semantics explicit before persistence is introduced.
-- Issue #82 remains open for persistence, privacy/retention acceptance, query/aggregation behavior and a real provider integration.
+- The event identity and fingerprint enforce at-least-once/idempotent ingestion: exact replay is a no-op, semantic conflict is rejected.
+- Observed source events, derived aggregates and missing coverage are returned separately.
+- Issue #82 still requires a concrete provider export and deployment-specific privacy/retention approval before claiming live CDN coverage.
 
 
 ## Implementation boundary (Issue #82, 2026-11-28)
