@@ -456,7 +456,7 @@ class IncrementalIngestionService:
                 row = session.query(IngestionSessionRecord).filter_by(
                     id=ingestion_id
                 ).with_for_update().one()
-                if row.state != "OPEN":
+                if row.state not in ("OPEN", "FINALIZING"):
                     raise IngestionCancelled("ingestion was cancelled during assembly")
                 row.updated_at = utcnow()
             published = self._store.put_file(
