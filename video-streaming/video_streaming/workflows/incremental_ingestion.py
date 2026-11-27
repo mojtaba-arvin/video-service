@@ -147,7 +147,7 @@ class IncrementalIngestionService:
         self._max_source_size = int(max_source_size_bytes)
         self._upload_slots = threading.BoundedSemaphore(int(max_concurrent_uploads))
         self._upload_wait = float(upload_wait_seconds)
-        if self._max_chunk_size < 1 or self._max_source_size < 1 or max_concurrent_uploads < 1
+        if self._max_chunk_size < 1 or self._max_source_size < 1 or max_concurrent_uploads < 1:
             raise ValueError("ingestion resource bounds must be positive")
 
     def create(self, job_id, source_name, chunk_size_bytes, expected_size_bytes=None,
@@ -157,7 +157,7 @@ class IncrementalIngestionService:
         if not isinstance(chunk_size_bytes, int) or not 1 <= chunk_size_bytes <= self._max_chunk_size:
             raise ValueError("chunk_size_bytes exceeds the configured bound")
         if expected_size_bytes is not None and (
-not isinstance(expected_size_bytes, int) or not 1 <= expected_size_bytes <= self._max_source_size
+            not isinstance(expected_size_bytes, int) or isinstance(expected_size_bytes, bool) or not 1 <= expected_size_bytes <= self._max_source_size
         ):
             raise ValueError("expected_size_bytes must be positive")
         if expected_sha256 is not None and (
@@ -204,7 +204,7 @@ not isinstance(expected_size_bytes, int) or not 1 <= expected_size_bytes <= self
                 "status": "PROVISIONAL",
             } for c in chunks],
             "contiguous_bytes": IncrementalIngestionService._contiguous_bytes(chunks),
-            "final_artifact_id": row.final_artifact_id,\n            "final_artifact_uri": row.final_artifact_uri
+            "final_artifact_id": row.final_artifact_id,
             "final_size_bytes": row.final_size_bytes,
             "final_sha256": row.final_sha256,
             "cleanup_pending": row.cleanup_pending,
@@ -239,7 +239,10 @@ not isinstance(expected_size_bytes, int) or not 1 <= expected_size_bytes <= self
         if (start_seconds is None) != (end_seconds is None):
             raise ValueError("both time-range endpoints are required")
         if start_seconds is not None and (
-not isinstance(start_seconds, (int, float)) or isinstance(start_seconds, bool) or not isinstance(end_seconds, (int, float)) or isinstance(end_seconds, bool) or not math.isfinite(start_seconds) or not math.isfinite(end_seconds)
+            not isinstance(start_seconds, (int, float)) or isinstance(start_seconds, bool)
+            or not isinstance(end_seconds, (int, float)) or isinstance(end_seconds, bool)
+            or not math.isfinite(start_seconds) or not math.isfinite(end_seconds)
+            or start_seconds < 0 or end_seconds <= start_seconds
             or start_seconds < 0 or end_seconds <= start_seconds
         ):
             raise ValueError("chunk time range is invalid")
