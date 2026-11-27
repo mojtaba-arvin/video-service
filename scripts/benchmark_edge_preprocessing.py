@@ -67,19 +67,44 @@ def run_preprocessing(input_path, output_dir, mode, args):
     started = time.monotonic()
     source_hash = sha256_file(source)
     source_bytes = source.stat().st_size
-    metadata, duration = probe(source, args.ffprobe, args.timeout)
-    probe_ms = (time.monotonic() - started) * 1000
+    usage = ProcessUsageAccumulator()
+    metadata = probe_media(
+        source,
+        ffprobe_bin_path=args.ffprobe,
+        timeout_seconds=args.timeout,
+        on_usage=usage.record,
+    )
+    try:
+        duration = float(metadata["format"]["duration"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise BenchmarkError("FFprobe did not report a valid duration") from error
     rate = sampling_rate(duration, args.interval, args.max_frames)
     frames_dir = output / "frames"
     frames_dir.mkdir()
     pattern = frames_dir / "frame-%03d.jpg"
-    metrics = _run_bounded(
+    first_result_at = [None]
+
+    def on_progress(line, _process):
+        if first_result_at[0] is not None or not line.startswith("frame="):
+            return
+        try:
+            frame_number = int(line.partition("=")[2].strip())
+        except ValueError:
+            return
+        if frame_number > 0:
+            first_result_at[0] = time.monotonic()
+
+    run_streaming_process(
         [args.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
          "-i", str(source), "-vf",
          "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
-         "-frames:v", str(args.max_frames), "-q:v", "3", str(pattern)],
-        args.timeout, str(frames_dir / "frame-*.jpg"),
+         "-frames:v", str(args.max_frames), "-q:v", "3",
+         "-stats_period", "0.05", "-progress", "pipe:1", "-nostats", str(pattern)],
+        timeout_seconds=args.timeout,
+        on_line=on_progress,
+        on_usage=usage.record,
     )
+    metrics = usage.aggregate()
     frames = sorted(frames_dir.glob("frame-*.jpg"))
     if not frames:
         raise BenchmarkError("preprocessing produced no keyframe samples")
@@ -108,9 +133,9 @@ def run_preprocessing(input_path, output_dir, mode, args):
         "mode": mode, "source_sha256": source_hash, "source_bytes": source_bytes,
         "transfer_bytes": source_bytes if mode == "cloud" else payload_bytes,
         "payload_bytes": payload_bytes,
-        "time_to_first_result_ms": probe_ms + metrics["first_ms"] if metrics["first_ms"] is not None else None,
+        "time_to_first_result_ms": (first_result_at[0] - started) * 1000 if first_result_at[0] is not None else None,
         "completion_latency_ms": (time.monotonic() - started) * 1000,
-        "cpu_seconds": metrics["cpu_seconds"], "peak_rss_bytes": metrics["peak_rss_bytes"],
+        "cpu_seconds": metrics["cpu_seconds"], "peak_rss_bytes": metrics["peak_memory_bytes"],
         "frame_count": len(records), "frame_hashes": [item["sha256"] for item in records],
         "manifest": str(manifest_path), "network_transfer_time_ms": None,
     }
