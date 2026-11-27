@@ -207,6 +207,10 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.assertEqual(len(report["observed_events"]), 1)
         self.assertEqual(report["aggregation_window_seconds"], 60)
         self.assertEqual(report["derived_aggregates"][0]["event_count"], 1)
+        self.assertEqual(report["derived_aggregates"][0]["source"], "cdn-a")
+        self.assertEqual(report["derived_aggregates"][0]["manifest_version"], self.artifact_id)
+        self.assertEqual(report["derived_aggregates"][0]["asset_version"], "asset-v7")
+        self.assertEqual(report["derived_aggregates"][0]["delivery_config_id"], "delivery-config-v3")
         self.assertEqual(
             report["derived_aggregates"][0]["average_response_time_ms"], 38
         )
