@@ -101,6 +101,15 @@ def main():
         "schema_version": 1, "dataset_id": "synthetic-cmaf-v1",
         "source_policy": "Generated at test time from FFmpeg lavfi; no third-party media.",
         "encoding_is_offline_fixture_preparation_only": True,
+        "ffmpeg_build": subprocess.run(
+            [ffmpeg, "-version"], check=True, capture_output=True, text=True,
+            timeout=15,
+        ).stdout.splitlines()[0],
+        "encoding_profile": {
+            "video_codec": "libx264", "video_preset": "ultrafast",
+            "video_pixel_format": "yuv420p", "video_gop_frames": 48,
+            "audio_codec": "aac", "audio_bitrate": "96k",
+        },
         "artifacts": artifacts,
     }
     (root / "dataset-manifest.json").write_text(
