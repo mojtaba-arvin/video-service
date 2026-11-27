@@ -4022,7 +4022,6 @@ class WorkflowRepository:
             ).scalar_one_or_none()
             if job is None or job.state in (
                     JobState.CANCEL_REQUESTED.value,
-                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -4631,6 +4630,7 @@ class WorkflowRepository:
                 ).with_for_update()
             ).scalar_one_or_none()
             if job is None or job.state in (
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
@@ -6773,6 +6773,7 @@ class WorkflowRepository:
             if job is None:
                 raise InvalidStateTransition("Workflow Job no longer exists")
             if job.state in (
+                    JobState.CANCEL_REQUESTED.value,
                     JobState.CANCELLED.value,
                     JobState.FAILED.value,
                     JobState.FINISHED.value):
