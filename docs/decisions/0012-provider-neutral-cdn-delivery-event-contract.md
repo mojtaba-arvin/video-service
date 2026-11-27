@@ -58,6 +58,6 @@ The repository retention policy defaults to 30 days from ingestion and accepts d
 - `DeliveryTelemetryRepository` persists allow-listed fields and derives Job, Workflow, Stage, Attempt and manifest Artifact links from the durable Artifact. It never trusts a caller-supplied Job or Stage association.
 - Session correlation is optional, but when supplied it must match the exact manifest Artifact, Stage and Job.
 - Query API output separates `observed_events`, `derived_aggregates` and `coverage`; unavailable HTTP, timing, byte, asset-version and player/CDN signals have explicit availability/coverage indicators.
-- The query API is owner-authorized and bounded to 1,000 records and 60–86,400 second aggregation windows. Metric labels remain bounded; identifiers are returned only in query records.
+- The query API is owner-authorized and bounded to 1,000 records and 60–86,400 second aggregation windows. When `coverage.truncated` is true, both the observed page and its derived aggregates are partial; consumers must narrow the query before treating an aggregate as complete. Metric labels remain bounded; identifiers are returned only in query records.
 - Default retention is 30 days from ingestion, configurable only within 1–90 days. The purge method is bounded and repeatable; deployment scheduling and legal approval remain operational gates.
 - No CDN vendor has been selected. This is a provider-neutral adapter contract, not evidence that any provider log export is connected or that QoE has been validated in production.
