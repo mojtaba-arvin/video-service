@@ -63,6 +63,35 @@ population standard deviations. Outputs are temporary; their hashes and
 measurement metadata are recorded in the raw JSONL stream/report, not retained
 as media deliverables.
 
+## Run identity and evidence safety
+
+Each invocation records a unique run ID, a canonical SHA-256 fingerprint of
+the complete benchmark configuration (dataset/manifest and source hashes,
+quality target/model, repetitions, search budget, timeout, encoder settings,
+FFmpeg/FFprobe build identity and host metadata), and a separate environment
+fingerprint on every raw JSONL record and in the report. JSON key ordering
+does not affect the configuration fingerprint.
+
+The harness refuses to reuse an output directory containing either
+`measurements.jsonl` or `benchmark-report.json`. Use a fresh directory for
+every run; this prevents a later invocation from silently truncating earlier
+raw evidence. Preserve the manifest, report and JSONL together. Compare runs
+only when their configuration fingerprints match; different fingerprints
+require an explicit explanation of changed inputs.
+
+Every raw record includes source ID/hash, codec/preset/CRF, VMAF, encode
+wall-clock latency, CPU seconds (null if unavailable), peak process memory,
+output bytes/hash and container bitrate (null if FFprobe has no value).
+The report distinguishes measured dimensions from unknown or excluded ones.
+Output bytes describe the encoded artifact, not billed storage retention.
+
+The current profiles deliberately use software encoders. GPU identity may be
+recorded when detectable, but GPU utilization/compute time is **not measured**
+and remains null with false coverage. Scratch-disk peak, queue wait, network
+transfer, worker idle/control-plane and provider invoice amounts are likewise
+not inferred. A null measurement is never converted to zero. The benchmark
+does not derive provider billing from CPU/RSS/output-size measurements.
+
 ## Outputs
 
 - `measurements.jsonl`: one record for every CRF search evaluation and every

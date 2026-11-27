@@ -14,13 +14,65 @@ if str(ROOT) not in sys.path:
 
 from scripts.benchmark_codecs import (
     BenchmarkError,
+    canonical_sha256,
+    ensure_output_paths_available,
     load_manifest,
     probe_media,
+    resource_measurement_fields,
     sha256_file,
 )
 
 
 class CodecBenchmarkManifestTests(unittest.TestCase):
+
+    def test_configuration_fingerprint_is_stable_and_sensitive(self):
+        configuration = {
+            "target_vmaf": 93,
+            "repetitions": 3,
+            "source_hashes": ["a" * 64],
+        }
+        first = canonical_sha256(configuration)
+        reordered = canonical_sha256({
+            "source_hashes": ["a" * 64],
+            "repetitions": 3,
+            "target_vmaf": 93,
+        })
+        changed = canonical_sha256(dict(configuration, target_vmaf=94))
+
+        self.assertEqual(first, reordered)
+        self.assertNotEqual(first, changed)
+
+    def test_benchmark_output_never_overwrites_prior_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="codec-benchmark-output-") as directory:
+            output_dir = Path(directory)
+            ensure_output_paths_available(output_dir)
+            (output_dir / "measurements.jsonl").write_text(
+                '{"prior":"evidence"}\n', encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(BenchmarkError, "choose a new output directory"):
+                ensure_output_paths_available(output_dir)
+
+            self.assertEqual(
+                (output_dir / "measurements.jsonl").read_text(encoding="utf-8"),
+                '{"prior":"evidence"}\n',
+            )
+
+    def test_unmeasured_gpu_and_scratch_resources_remain_unknown(self):
+        fields = resource_measurement_fields(
+            cpu_seconds=None, peak_memory_bytes=1024,
+            output_bytes=2048, output_bitrate=None
+        )
+
+        self.assertIsNone(fields["encode_cpu_seconds"])
+        self.assertIsNone(fields["gpu_compute_seconds"])
+        self.assertIsNone(fields["gpu_utilization_percent"])
+        self.assertIsNone(fields["scratch_peak_bytes"])
+        self.assertFalse(fields["resource_coverage"]["cpu_seconds"])
+        self.assertFalse(fields["resource_coverage"]["gpu_compute_seconds"])
+        self.assertFalse(fields["resource_coverage"]["output_bitrate"])
+        self.assertTrue(fields["resource_coverage"]["output_storage_bytes"])
+        self.assertEqual(fields["output_storage_bytes"], 2048)
 
     @patch("scripts.benchmark_codecs.run_command")
     def test_probe_media_returns_container_bitrate(self, run_command):
