@@ -129,7 +129,7 @@ def run_preprocessing(input_path, output_dir, mode, args):
 
         run_streaming_process(
             [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-             "-i", str(source), "-vf",
+             "-threads", "2", "-filter_threads", "2", "-i", str(source), "-vf",
              "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
              "-frames:v", str(args.max_frames), "-q:v", "3",
              "-stats_period", "0.05", "-progress", "pipe:1", "-nostats", str(pattern)],
