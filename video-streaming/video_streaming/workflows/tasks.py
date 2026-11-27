@@ -210,6 +210,8 @@ def reconcile_expired_workflow_attempts():
 )
 def purge_delivery_telemetry():
     """Delete one bounded batch of expired, privacy-minimized CDN events."""
+    if not settings.WORKFLOW_DATABASE_URL:
+        return {"status": "disabled", "deleted": 0}
     repository = get_workflow_repository(required=True)
     telemetry = DeliveryTelemetryRepository(
         repository,
