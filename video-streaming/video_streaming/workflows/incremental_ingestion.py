@@ -205,6 +205,7 @@ class IncrementalIngestionService:
             } for c in chunks],
             "contiguous_bytes": IncrementalIngestionService._contiguous_bytes(chunks),
             "final_artifact_id": row.final_artifact_id,
+            "final_artifact_uri": row.final_artifact_uri,
             "final_size_bytes": row.final_size_bytes,
             "final_sha256": row.final_sha256,
             "cleanup_pending": row.cleanup_pending,
@@ -242,7 +243,6 @@ class IncrementalIngestionService:
             not isinstance(start_seconds, (int, float)) or isinstance(start_seconds, bool)
             or not isinstance(end_seconds, (int, float)) or isinstance(end_seconds, bool)
             or not math.isfinite(start_seconds) or not math.isfinite(end_seconds)
-            or start_seconds < 0 or end_seconds <= start_seconds
             or start_seconds < 0 or end_seconds <= start_seconds
         ):
             raise ValueError("chunk time range is invalid")
