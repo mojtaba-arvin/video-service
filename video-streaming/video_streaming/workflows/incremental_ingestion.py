@@ -12,13 +12,11 @@ import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey,
     Index, Integer, String, UniqueConstraint,
 )
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from .artifact_store import parse_artifact_uri
@@ -26,7 +24,7 @@ from .repository import Base, JobRecord, new_id, utcnow
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_NAME = re.compile(r"^[^/\\\\\\x00-\\x1f]{1,255}$")
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,254}$")
 
 
 class IngestionError(RuntimeError):
@@ -378,7 +376,8 @@ class IncrementalIngestionService:
                 id=ingestion_id
             ).with_for_update().one()
             if row.state == "COMPLETE":
-                return self.get(ingestion_id)
+                chunks = session.query(IngestionChunkRecord).filter_by(ingestion_id=ingestion_id).order_by(IngestionChunkRecord.chunk_index).all()
+                return self._snapshot(row, chunks)
             if row.state not in ("OPEN", "FINALIZING"):
                 raise IngestionCancelled("ingestion cannot be finalized")
             if row.expected_size_bytes is None:
@@ -458,6 +457,8 @@ class IncrementalIngestionService:
             ).with_for_update().one()
             if row.state == "COMPLETE":
                 raise IngestionConflict("a completed source cannot be cancelled")
+            if row.state == "FINALIZING":
+                raise IngestionConflict("finalization is in progress; retry cancellation after it settles")
             if row.state == "CANCELLED":
                 pass
             else:
