@@ -2,12 +2,6 @@ name: Edge preprocessing pilot
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "scripts/benchmark_edge_preprocessing.py"
-      - "video-streaming/tests/test_edge_preprocessing_benchmark.py"
-      - "docs/benchmarks/edge-preprocessing-pilot.md"
-      - ".github/workflows/edge-preprocessing-pilot.yml"
 
 permissions:
   contents: read
