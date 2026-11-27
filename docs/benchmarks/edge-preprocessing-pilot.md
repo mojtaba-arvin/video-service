@@ -70,7 +70,9 @@ exercise. Each preprocessing manifest records source SHA-256 and size,
 license/attribution, metadata, sampling policy/version, parameters,
 FFmpeg/FFprobe versions and every output frame SHA-256. The report records
 transfer bytes, time-to-first-frame, completion latency, FFmpeg CPU seconds,
-peak RSS, output parity and explicit unknown dimensions.
+peak RSS, output parity and explicit unknown dimensions. Successful reports show
+zero failures among completed paired attempts; any path failure aborts the run
+and fails CI, while the injected disconnect/fallback is counted separately.
 
 The source SHA is computed from the downloaded Commons file and retained in
 the report rather than guessed in source control. Comparisons are invalid if
