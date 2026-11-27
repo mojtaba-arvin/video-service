@@ -15,7 +15,7 @@ git config --global user.name "Mojtaba Arvin"
 git config --global user.email "m.arvin@live.com"
 ```
 
-`scripts/check_commit_identity.py` checks the complete PR commit list and fails closed if GitHub's 250-commit endpoint limit prevents full coverage, rejects exact generic AI/assistant identities and bot co-author trailers, permits known automation only with the explicit label, and enforces the maintainer identity when the marker is present. API calls are restricted to HTTPS on `api.github.com` and the selected repository. The `Commit identity` workflow uses the unprivileged `pull_request` trigger, read-only GitHub permissions, and checks out only trusted base-branch code. Configure this check as required in branch protection/rulesets where governance permits; a workflow alone does not block merges.
+`scripts/check_commit_identity.py` checks the complete PR commit list and fails closed if GitHub's 250-commit endpoint limit prevents full coverage, rejects exact generic AI/assistant identities and bot co-author trailers, permits known automation only with the explicit label, and enforces the maintainer identity when the marker is present. API calls are restricted to HTTPS on `api.github.com` and the selected repository. The `Commit identity` workflow uses the unprivileged `pull_request` trigger, explicitly read-only GitHub permissions, and no privileged secrets; it executes the PR's validator under that restricted context. Configure this check as required in branch protection/rulesets where governance permits; a workflow alone does not block merges.
 
 Git metadata is self-asserted: validation cannot prove who physically typed code or detect every disguised agent identity. Verify the email association and disclose AI assistance transparently.
 
