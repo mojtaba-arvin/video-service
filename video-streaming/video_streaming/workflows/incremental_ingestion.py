@@ -154,9 +154,9 @@ class IncrementalIngestionService:
                expected_sha256=None, max_pending_chunks=4, ingestion_id=None):
         if not isinstance(source_name, str) or not _NAME.fullmatch(source_name.strip()):
             raise ValueError("source_name must be a plain bounded filename")
-        if not isinstance(chunk_size_bytes, int) or not 1 <= chunk_size_bytes <= self._max_chunk_size:
+        if isinstance(chunk_size_bytes, bool) or not isinstance(chunk_size_bytes, int) or not 1 <= chunk_size_bytes <= self._max_chunk_size:
             raise ValueError("chunk_size_bytes exceeds the configured bound")
-        if expected_size_bytes is not None and (
+        if expected_size_bytes is None or (
             not isinstance(expected_size_bytes, int) or isinstance(expected_size_bytes, bool) or not 1 <= expected_size_bytes <= self._max_source_size
         ):
             raise ValueError("expected_size_bytes must be positive")
@@ -164,7 +164,7 @@ class IncrementalIngestionService:
             not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256)
         ):
             raise ValueError("expected_sha256 must be lowercase SHA-256")
-        if not isinstance(max_pending_chunks, int) or not 1 <= max_pending_chunks <= 1024:
+        if isinstance(max_pending_chunks, bool) or not isinstance(max_pending_chunks, int) or not 1 <= max_pending_chunks <= 1024:
             raise ValueError("max_pending_chunks is outside the supported bound")
         identifier = ingestion_id or new_id()
         with self._sessions.begin() as session:
@@ -226,9 +226,9 @@ class IncrementalIngestionService:
             chunk_id = str(uuid.UUID(str(chunk_id)))
         except (ValueError, TypeError, AttributeError):
             raise ValueError("chunk_id must be a UUID")
-        if not isinstance(chunk_index, int) or chunk_index < 0:
+        if isinstance(chunk_index, bool) or not isinstance(chunk_index, int) or chunk_index < 0:
             raise ValueError("chunk_index must be a non-negative integer")
-        if not isinstance(byte_offset, int) or byte_offset < 0:
+        if isinstance(byte_offset, bool) or not isinstance(byte_offset, int) or byte_offset < 0:
             raise ValueError("byte_offset must be non-negative")
         if not isinstance(payload, bytes) or not payload or len(payload) > self._max_chunk_size:
             raise ValueError("payload must be non-empty bytes within the configured chunk limit")
