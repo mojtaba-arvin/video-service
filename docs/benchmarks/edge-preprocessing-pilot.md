@@ -69,7 +69,7 @@ execution order to reduce order/cache bias, plus a disconnection/fallback
 exercise. Each preprocessing manifest records source SHA-256 and size,
 license/attribution, metadata, sampling policy/version, parameters,
 FFmpeg/FFprobe versions and every output frame SHA-256. The report records
-transfer bytes, time-to-first-frame, completion latency, FFmpeg CPU seconds,
+transfer bytes, time-to-first-frame, completion latency, FFprobe/FFmpeg CPU seconds,
 peak RSS, output parity and explicit unknown dimensions. Successful reports show
 zero failures among completed paired attempts; any path failure aborts the run
 and fails CI, while the injected disconnect/fallback is counted separately.
@@ -80,8 +80,8 @@ the source SHA, FFmpeg build, runner hardware or parameters differ.
 
 ## Failure and recovery
 
-- FFprobe/FFmpeg subprocesses have a hard timeout and process-group termination.
-- Sampling is capped by both interval and max_frames; output width is capped.
+- FFprobe and FFmpeg use the repository's shared process-tree supervisor with hard timeouts, process-group termination and cumulative CPU/RSS sampling.
+- Sampling is capped by both interval and a hard maximum of eight frames; output width is capped at 640 pixels.
 - Existing output directories are never overwritten.
 - Simulated edge disconnection after preprocessing causes the caller to discard
   the edge hand-off and rerun from the original source through the cloud path.
