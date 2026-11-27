@@ -139,6 +139,9 @@ class DeliveryTelemetryRepositoryTests(unittest.TestCase):
         self.assertFalse(first["duplicate"])
         self.assertTrue(replay["duplicate"])
         self.assertEqual(first["event_id"], replay["event_id"])
+        with self.workflow._session.begin() as session:
+            session.get(ArtifactRecord, self.artifact_id).status = "RETIRED"
+        self.assertTrue(adapter.ingest(event)["duplicate"])
         with self.assertRaises(DeliveryEventConflictError):
             adapter.ingest(self.event(bytes_sent=4097))
         with self.assertRaises(ValueError):
