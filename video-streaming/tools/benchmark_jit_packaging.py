@@ -9,9 +9,7 @@ import argparse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
-import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -23,6 +21,7 @@ from video_streaming.ffmpeg.jit_packaging import (
     directory_bytes,
     run_ffmpeg_copy_package,
     validate_track_timing,
+    validate_package_files,
 )
 
 
@@ -116,7 +115,10 @@ def main():
         protocol=args.protocol,
         drm_profile=args.drm_profile,
     )
-    cache = AtomicPackageCache(args.cache_dir)
+    cache_root = Path(args.cache_dir)
+    if cache_root.exists() and any(cache_root.iterdir()):
+        parser.error("--cache-dir must be new or empty to measure cold packaging")
+    cache = AtomicPackageCache(cache_root)
     build_metrics = {}
 
     def build(staging):
@@ -126,12 +128,12 @@ def main():
         ))
         return "master.m3u8" if args.protocol == "hls" else "manifest.mpd"
 
-    jit_result = cache.get_or_create(identity, build)
+    jit_result = cache.get_or_create(identity, build, validate_package_files)
     warm_latencies_ms = []
     warm_hits = 0
     for _ in range(args.warm_requests):
         started = time.perf_counter()
-        result = cache.get_or_create(identity, build)
+        result = cache.get_or_create(identity, build, validate_package_files)
         warm_latencies_ms.append((time.perf_counter() - started) * 1000.0)
         warm_hits += int(result.cache_hit)
 
@@ -148,6 +150,8 @@ def main():
         source_byte_hours + jit_package_bytes * args.jit_cache_retention_hours
     )
 
+    ffmpeg_version = subprocess.run([args.ffmpeg, "-version"], check=True, capture_output=True, text=True, timeout=10).stdout.splitlines()[0]
+    ffprobe_version = subprocess.run([args.ffprobe, "-version"], check=True, capture_output=True, text=True, timeout=10).stdout.splitlines()[0]
     report = {
         "schema_version": 1,
         "workload": {
@@ -159,8 +163,8 @@ def main():
             "source_bytes": source_bytes,
             "source_streams": streams,
             "segment_seconds": args.segment_seconds,
-            "ffmpeg": args.ffmpeg,
-            "ffprobe": args.ffprobe,
+            "ffmpeg": ffmpeg_version,
+            "ffprobe": ffprobe_version,
             "drm_profile": args.drm_profile,
         },
         "measurements": {
