@@ -272,8 +272,6 @@ class VideoOperationService:
                     isinstance(value, bool) or not isinstance(value, int)
                     or value < 0 or value > 16384):
                 raise ValueError("{} must be between 0 and 16384".format(field))
-        if not isinstance(dont_replace, bool) or not isinstance(create_bucket, bool):
-            raise ValueError("dont_replace and create_bucket must be booleans")
         request.update({
             "output_bucket": output_bucket,
             "output_key": output_key,
