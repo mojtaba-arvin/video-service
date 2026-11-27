@@ -7,8 +7,10 @@ import math
 import os
 import platform
 import signal
+import shutil
 import statistics
 import subprocess
+import tempfile
 import sys
 import time
 import uuid
@@ -26,6 +28,9 @@ from video_streaming.execution.process_control import ProcessUsageAccumulator, r
 POLICY_VERSION = "keyframes-v1"
 MAX_FRAME_WIDTH = 640
 MAX_FRAME_COUNT = 8
+MAX_FRAME_BYTES = 2 * 1024 * 1024
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
 SOURCE_LICENSE_URL = "https://creativecommons.org/licenses/by/3.0/"
 
 
@@ -59,6 +64,30 @@ def _version(binary):
     return result.stdout.decode("utf-8", "replace").splitlines()[0]
 
 
+def _limited_binary(binary, wrapper_path):
+    """Create an argv-only FFmpeg wrapper with OS-enforced resource ceilings."""
+    resolved = shutil.which(binary)
+    if not resolved:
+        raise BenchmarkError("required media binary was not found: {}".format(binary))
+    wrapper_path = Path(wrapper_path)
+    wrapper_path.write_text(
+        "#!/usr/bin/env python3\\n"
+        "import os, resource, sys\\n"
+        "resource.setrlimit(resource.RLIMIT_AS, ({memory}, {memory}))\\n"
+        "resource.setrlimit(resource.RLIMIT_CPU, (180, 180))\\n"
+        "resource.setrlimit(resource.RLIMIT_FSIZE, ({file_size}, {file_size}))\\n"
+        "binary = {binary}\\n"
+        "os.execv(binary, [binary] + sys.argv[1:])\\n".format(
+            memory=MEMORY_LIMIT_BYTES,
+            file_size=MAX_FRAME_BYTES,
+            binary=json.dumps(resolved),
+        ),
+        encoding="utf-8",
+    )
+    wrapper_path.chmod(0o700)
+    return str(wrapper_path)
+
+
 def run_preprocessing(input_path, output_dir, mode, args):
     source = Path(input_path).resolve()
     output = Path(output_dir)
@@ -68,44 +97,49 @@ def run_preprocessing(input_path, output_dir, mode, args):
     started = time.monotonic()
     source_hash = sha256_file(source)
     source_bytes = source.stat().st_size
-    usage = ProcessUsageAccumulator()
-    metadata = probe_media(
-        source,
-        ffprobe_bin_path=args.ffprobe,
-        timeout_seconds=args.timeout,
-        on_usage=usage.record,
-    )
-    try:
-        duration = float(metadata["format"]["duration"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise BenchmarkError("FFprobe did not report a valid duration") from error
-    rate = sampling_rate(duration, args.interval, args.max_frames)
-    frames_dir = output / "frames"
-    frames_dir.mkdir()
-    pattern = frames_dir / "frame-%03d.jpg"
-    first_result_at = [None]
-
-    def on_progress(line, _process):
-        if first_result_at[0] is not None or not line.startswith("frame="):
-            return
+    with tempfile.TemporaryDirectory(prefix="edge-preprocess-limits-") as limits_dir:
+        ffmpeg_bin = _limited_binary(args.ffmpeg, Path(limits_dir) / "ffmpeg")
+        ffprobe_bin = _limited_binary(args.ffprobe, Path(limits_dir) / "ffprobe")
+        usage = ProcessUsageAccumulator()
+        metadata = probe_media(
+            source,
+            ffprobe_bin_path=ffprobe_bin,
+            timeout_seconds=args.timeout,
+            on_usage=usage.record,
+        )
         try:
-            frame_number = int(line.partition("=")[2].strip())
-        except ValueError:
-            return
-        if frame_number > 0:
-            first_result_at[0] = time.monotonic()
+            duration = float(metadata["format"]["duration"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise BenchmarkError("FFprobe did not report a valid duration") from error
+        rate = sampling_rate(duration, args.interval, args.max_frames)
+        frames_dir = output / "frames"
+        frames_dir.mkdir()
+        pattern = frames_dir / "frame-%03d.jpg"
+        first_result_at = [None]
 
-    run_streaming_process(
-        [args.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-         "-i", str(source), "-vf",
-         "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
-         "-frames:v", str(args.max_frames), "-q:v", "3",
-         "-stats_period", "0.05", "-progress", "pipe:1", "-nostats", str(pattern)],
-        timeout_seconds=args.timeout,
-        on_line=on_progress,
-        on_usage=usage.record,
-    )
-    metrics = usage.aggregate()
+        def on_progress(line, _process):
+            if first_result_at[0] is not None or not line.startswith("frame="):
+                return
+            try:
+                frame_number = int(line.partition("=")[2].strip())
+            except ValueError:
+                return
+            if frame_number > 0:
+                first_result_at[0] = time.monotonic()
+
+        run_streaming_process(
+            [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+             "-i", str(source), "-vf",
+             "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
+             "-frames:v", str(args.max_frames), "-q:v", "3",
+             "-stats_period", "0.05", "-progress", "pipe:1", "-nostats", str(pattern)],
+            timeout_seconds=args.timeout,
+            on_line=on_progress,
+            on_usage=usage.record,
+        )
+        metrics = usage.aggregate()
+        ffmpeg_version = _version(ffmpeg_bin)
+        ffprobe_version = _version(ffprobe_bin)
     frames = sorted(frames_dir.glob("frame-*.jpg"))
     if not frames:
         raise BenchmarkError("preprocessing produced no keyframe samples")
@@ -122,7 +156,7 @@ def run_preprocessing(input_path, output_dir, mode, args):
         "parameters": {
             "interval_seconds": args.interval, "max_frames": args.max_frames,
             "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
-            "ffmpeg_version": _version(args.ffmpeg), "ffprobe_version": _version(args.ffprobe),
+            "ffmpeg_version": ffmpeg_version, "ffprobe_version": ffprobe_version,
         },
         "input_metadata": metadata,
         "frames": records,
@@ -130,6 +164,8 @@ def run_preprocessing(input_path, output_dir, mode, args):
     manifest_path = output / "preprocessing-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     payload_bytes = manifest_path.stat().st_size + sum(item["size_bytes"] for item in records)
+    if payload_bytes > (MAX_FRAME_COUNT * MAX_FRAME_BYTES + MAX_MANIFEST_BYTES):
+        raise BenchmarkError("preprocessing output exceeded its total disk budget")
     return {
         "mode": mode, "source_sha256": source_hash, "source_bytes": source_bytes,
         "transfer_bytes": source_bytes if mode == "cloud" else payload_bytes,
