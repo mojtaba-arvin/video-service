@@ -267,6 +267,8 @@ def build_shared_cmaf(source, output_dir, ffmpeg="ffmpeg", segment_seconds=2):
         "file_count": inventory["file_count"],
         "manifest_sha256": sha256_file(mpd),
         "hls_manifest_sha256": sha256_file(output_dir / "master.m3u8"),
+        "hls_first_manifest_byte_ms": first_manifest_byte(output_dir / "master.m3u8"),
+        "dash_first_manifest_byte_ms": first_manifest_byte(mpd),
         "hls_validation": hls_validation,
         "dash_validation": dash_validation,
         "shared_media_files": media_files,
@@ -525,6 +527,9 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
             "prepackaged": {
                 "bytes": pre["total_bytes"], "files": pre["file_count"],
                 "cold_packaging_ms": pre_latency, "cpu_seconds": pre_cpu_seconds,
+                "first_manifest_byte_ms": first_manifest_byte(
+                    prepackaged / MANIFESTS[protocol]
+                ),
                 "manifest_sha256": pre["manifest_sha256"],
             },
             "jit": {
@@ -571,6 +576,8 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
             "files": shared_cmaf["file_count"],
             "packaging_ms": shared_cmaf["packaging_ms"],
             "cpu_seconds": shared_cmaf["cpu_seconds"],
+            "hls_first_manifest_byte_ms": shared_cmaf["hls_first_manifest_byte_ms"],
+            "dash_first_manifest_byte_ms": shared_cmaf["dash_first_manifest_byte_ms"],
             "hls_manifest_sha256": shared_cmaf["hls_manifest_sha256"],
             "dash_manifest_sha256": shared_cmaf["manifest_sha256"],
             "audio_video_sync": shared_cmaf["audio_video_sync"],
