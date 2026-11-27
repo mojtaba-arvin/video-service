@@ -83,6 +83,7 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
         ("0013_creative_project_revisions.py", "workflow_creative_project_revisions", "immutable creative project revision history"),
         ("0014_creative_project_typed_references.py", "workflow_creative_project_revision_references", "creative project revision references"),
         ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
+        ("0016_incremental_ingestion.py", "workflow_ingestions", "incremental ingestion"),
         ("0015_creative_asset_provenance.py", "workflow_creative_asset_provenance", "asset provenance"),
     )
 
@@ -96,7 +97,7 @@ class DestructiveDowngradeGuardTests(unittest.TestCase):
                         migration.downgrade()
                 self.assertTrue(operations.connection.statements)
                 self.assertIn(table, operations.connection.statements[0])
-                if filename == "0015_creative_asset_provenance.py":
+                if filename in ("0015_creative_asset_provenance.py", "0016_incremental_ingestion.py"):
                     self.assertEqual(len(operations.calls), 1)
                     self.assertEqual(operations.calls[0][0], "execute")
                     self.assertIn("LOCK TABLE", operations.calls[0][1][0])
