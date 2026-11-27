@@ -84,10 +84,12 @@ def run_measured_command(command, output_dir, timeout_seconds=120):
         cpu_seconds = None
         peak_rss_bytes = None
         peak_scratch_bytes = None
+        sample_count = 0
 
         def sample():
             nonlocal initial_io, latest_io, cpu_seconds
-            nonlocal peak_rss_bytes, peak_scratch_bytes
+            nonlocal peak_rss_bytes, peak_scratch_bytes, sample_count
+            sample_count += 1
             if monitored is not None:
                 try:
                     memory = monitored.memory_info().rss
@@ -133,9 +135,11 @@ def run_measured_command(command, output_dir, timeout_seconds=120):
 
     read_bytes = None
     write_bytes = None
-    if initial_io is not None and latest_io is not None:
+    if sample_count >= 2 and initial_io is not None and latest_io is not None:
         read_bytes = max(0, latest_io.read_bytes - initial_io.read_bytes)
         write_bytes = max(0, latest_io.write_bytes - initial_io.write_bytes)
+    if sample_count < 2:
+        peak_scratch_bytes = None
     return {
         "wall_ms": (time.monotonic() - started) * 1000,
         "cpu_seconds": cpu_seconds,
