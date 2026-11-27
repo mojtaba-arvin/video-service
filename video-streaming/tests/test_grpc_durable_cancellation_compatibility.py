@@ -103,5 +103,51 @@ class RevokeJobsCompatibilityTests(unittest.TestCase):
         )
 
 
+    def test_status_projection_maps_cancel_requested_to_existing_revoked_status(self):
+        from video_streaming.grpc.servicers.mixins.get_results import GetResultsMixin
+
+        class EmptyCache:
+            @staticmethod
+            def get(*_args, **_kwargs):
+                return None
+
+        class Servicer(GetResultsMixin):
+            pb2 = streaming_pb2
+            cache = EmptyCache()
+
+            @staticmethod
+            def _durable_output_status_counts(*_args, **_kwargs):
+                return {"ready": 0, "revoked": 0, "failed": 0}
+
+        snapshot = {
+            "id": "cancel-requested-job",
+            "status": "CANCEL_REQUESTED",
+            "metadata": {
+                "result_details": {
+                    "reference_id": "cancel-requested-job",
+                    "total_checks": 0,
+                    "total_inputs": 0,
+                    "total_outputs": 0,
+                    "no_watermarked_playlists_ids": [],
+                    "watermarked_playlists_ids": [],
+                    "no_watermarked_thumbnails_ids": [],
+                    "watermarked_thumbnails_ids": [],
+                    "watermarked_outputs_ids": [],
+                },
+            },
+            "workflow": {"execution_plan_fingerprint": None},
+            "stages": [],
+        }
+        result = Servicer()._get_result(
+            "cancel-requested-job", durable_snapshot=snapshot
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.status,
+            streaming_pb2.PrimaryStatus.Value("REVOKED"),
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
