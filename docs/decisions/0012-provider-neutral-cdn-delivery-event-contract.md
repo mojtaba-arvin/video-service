@@ -1,6 +1,6 @@
 # ADR 0012: Provider-neutral CDN delivery event contract
 
-- **Status:** Accepted for the normalized domain contract; persistence and provider integration deferred
+- **Status:** Accepted; normalized persistence/query path implemented, provider-specific source integration deferred
 - **Date:** 2026-11-26
 - **Related:** [ADR 0003 — session-scoped playback QoE telemetry](0003-session-scoped-playback-qoe-telemetry.md), [ADR 0005 — modular core and replaceable adapters](0005-modular-core-and-replaceable-adapters.md), [Issue #82](https://github.com/mojtaba-arvin/video-service/issues/82)
 
@@ -34,7 +34,11 @@ When a `session_id` is supplied, the future persistence adapter must verify that
 
 Never ingest or persist viewer IP addresses, cookies, authorization headers, raw request/response headers, full request URLs, query strings, user-agent strings, account identifiers, advertising identifiers or arbitrary raw provider payloads. Do not infer viewer identity from network metadata. Preserve source provenance and the source timestamp without preserving the raw log line.
 
-This increment adds only the pure domain contract and deterministic tests. It does not add a database table, ingestion endpoint, provider adapter, dashboard or production QoE claim. Persistence, query windows and retention enforcement remain blocked until a customer-approved retention period and a concrete provider log source are selected. A later migration must define bounded retention and deletion behavior before accepting production delivery events.
+The durable increment adds a PostgreSQL table, a provider-neutral normalized-event adapter, idempotent persistence, an authorized gRPC query API, bounded aggregation windows and explicit coverage. It does not add a provider-specific parser, raw access-log ingestion, dashboard or production QoE claim. Provider-specific source integration remains deferred until a concrete log source and deployment privacy approval are selected.
+
+The repository retention policy defaults to 30 days from ingestion and accepts deployment values from 1 through 90 days. Every row stores an explicit expiry; the bounded purge operation deletes at most 5,000 rows per call and can be safely repeated. Deployments must schedule this operation and confirm their customer/legal retention policy before connecting live provider exports. Expiry metadata alone is not represented as proof that a scheduler has run.
+
+
 
 ## Consequences
 
@@ -43,3 +47,14 @@ This increment adds only the pure domain contract and deterministic tests. It do
 - Missing metrics remain `null`/unknown rather than being fabricated as zero.
 - The event identity and fingerprint make replay/conflict semantics explicit before persistence is introduced.
 - Issue #82 remains open for persistence, privacy/retention acceptance, query/aggregation behavior and a real provider integration.
+
+
+## Implementation boundary (Issue #82, 2026-11-28)
+
+- `ProviderNeutralCDNAdapter` accepts only normalized `DeliveryEvent` instances; provider-specific parsers must discard disallowed request/viewer fields before this boundary.
+- `DeliveryTelemetryRepository` persists allow-listed fields and derives Job, Workflow, Stage, Attempt and manifest Artifact links from the durable Artifact. It never trusts a caller-supplied Job or Stage association.
+- Session correlation is optional, but when supplied it must match the exact manifest Artifact, Stage and Job.
+- Query API output separates `observed_events`, `derived_aggregates` and `coverage`; unavailable HTTP, timing, byte, asset-version and player/CDN signals have explicit availability/coverage indicators.
+- The query API is owner-authorized and bounded to 1,000 records and 60–86,400 second aggregation windows. Metric labels remain bounded; identifiers are returned only in query records.
+- Default retention is 30 days from ingestion, configurable only within 1–90 days. The purge method is bounded and repeatable; deployment scheduling and legal approval remain operational gates.
+- No CDN vendor has been selected. This is a provider-neutral adapter contract, not evidence that any provider log export is connected or that QoE has been validated in production.
