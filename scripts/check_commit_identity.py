@@ -30,6 +30,7 @@ def validate(pr, commits):
     labels = {x.get("name", "") for x in pr.get("labels", [])}
     allow_auto = AUTO_LABEL in labels
     maintainer_work = MARKER in (pr.get("body") or "")
+    maintainer_commit_seen = False
     for item in commits:
         c = item.get("commit", {})
         a = c.get("author") or {}
@@ -43,13 +44,28 @@ def validate(pr, commits):
             allowed = allow_auto and login in AUTO_LOGINS and typ == "Bot"
             if not allowed:
                 errors.append(f"{sha}: bot/agent author rejected: {name!r} <{email}> login={login!r}")
-        if maintainer_work and (name != NAME or email.lower() != EMAIL.lower()):
-            errors.append(f"{sha}: expected {NAME} <{EMAIL}>, got {name!r} <{email}>")
+        if login == "mojtaba-arvin":
+            maintainer_commit_seen = True
+            if name != NAME or email.lower() != EMAIL.lower():
+                errors.append(
+                    f"{sha}: maintainer account must use {NAME} <{EMAIL}>, "
+                    f"got {name!r} <{email}>"
+                )
+        elif email.lower() == EMAIL.lower():
+            errors.append(
+                f"{sha}: maintainer email must resolve to mojtaba-arvin, "
+                f"not {login!r}"
+            )
         for line in (c.get("message") or "").splitlines():
             if line.lower().startswith("co-authored-by:"):
                 identity = line.split(":", 1)[1].strip()
                 if is_bot(identity, ""):
                     errors.append(f"{sha}: bot/AI Co-authored-by trailer rejected: {identity!r}")
+    if maintainer_work and not maintainer_commit_seen:
+        errors.append(
+            "maintainer-directed AI work marker requires at least one commit "
+            "authored by mojtaba-arvin"
+        )
     return errors
 
 
@@ -73,7 +89,21 @@ def self_test():
     msg = "feat: test\nCo-authored-by: Copilot <copilot[bot]@users.noreply.github.com>"
     assert validate({"body": "", "labels": []}, [item("Human", "h@e.org", "human", "User", msg)])
     assert not validate({"body": MARKER, "labels": []}, [item(NAME, EMAIL, "mojtaba-arvin", "User")])
-    assert validate({"body": MARKER, "labels": []}, [item("Other Human", "x@example.org", "human", "User")])
+    assert not validate(
+        {"body": MARKER, "labels": []},
+        [
+            item(NAME, EMAIL, "mojtaba-arvin", "User"),
+            item("Other Human", "x@example.org", "human", "User"),
+        ],
+    )
+    assert validate(
+        {"body": MARKER, "labels": []},
+        [item("Other Human", "x@example.org", "human", "User")],
+    )
+    assert validate(
+        {"body": "", "labels": []},
+        [item(NAME, "wrong@example.org", "mojtaba-arvin", "User")],
+    )
     assert not validate({"body": "", "labels": [{"name": AUTO_LABEL}]},
                         [item("github-actions[bot]", "bot@users.noreply.github.com", "github-actions[bot]", "Bot")])
     print("PASS: commit identity policy self-tests")
