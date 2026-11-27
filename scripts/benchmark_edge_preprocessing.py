@@ -282,8 +282,8 @@ def benchmark(args):
             "edge_cpu_seconds_median": median_known([r["edge"]["cpu_seconds"] for r in runs]),
             "cloud_peak_rss_bytes_median": median_known([r["cloud"]["peak_rss_bytes"] for r in runs]),
             "edge_peak_rss_bytes_median": median_known([r["edge"]["peak_rss_bytes"] for r in runs]),
-            "cloud_transfer_bytes_median": statistics.median([r["cloud"]["transfer_bytes"] for r in runs]),
-            "edge_transfer_bytes_median": statistics.median([r["edge"]["transfer_bytes"] for r in runs]),
+            "cloud_transfer_bytes_median": median_known([r["cloud"]["transfer_bytes"] for r in runs]),
+            "edge_transfer_bytes_median": median_known([r["edge"]["transfer_bytes"] for r in runs]),
             "measured_network_savings": False, "generalized_savings_claim_permitted": False,
         },
         "failure_metrics": {
