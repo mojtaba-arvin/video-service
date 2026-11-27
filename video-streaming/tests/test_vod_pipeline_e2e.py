@@ -870,6 +870,76 @@ class GrpcCeleryVodEndToEndTests(unittest.TestCase):
             qoe.pricing_model_id, "relative-resource-index-v1"
         )
 
+        # Provider-neutral CDN ingestion correlates to the same immutable
+        # manifest Artifact and exposes observed records separately from
+        # derived windows and missing-signal coverage.
+        from video_streaming.workflows.delivery import DeliveryEvent
+        from video_streaming.workflows.delivery_repository import (
+            DeliveryTelemetryRepository,
+            ProviderNeutralCDNAdapter,
+        )
+        from video_streaming.workflows.service import get_workflow_repository
+
+        telemetry = DeliveryTelemetryRepository(get_workflow_repository())
+        adapter = ProviderNeutralCDNAdapter(telemetry, "synthetic-cdn")
+        delivery_event = DeliveryEvent(
+            source="synthetic-cdn",
+            source_event_id="e2e-delivery-0001",
+            source_timestamp=datetime.now(timezone.utc),
+            artifact_id=playback.manifest_artifact_id,
+            session_id=playback.session_id,
+            asset_version="fixture-v1",
+            delivery_config_id="test-config-v1",
+            edge_region="test-eu",
+            cache_status="HIT",
+            http_status=200,
+            response_time_ms=24,
+            bytes_sent=16384,
+        )
+        first_delivery = adapter.ingest(delivery_event)
+        replay_delivery = adapter.ingest(delivery_event)
+        self.assertFalse(first_delivery["duplicate"])
+        self.assertTrue(replay_delivery["duplicate"])
+
+        delivery_report = self.stub.get_delivery_telemetry_report(
+            self.pb2.DeliveryTelemetryQueryRequest(
+                tracking_id=accepted.tracking_id,
+                output_id="p0",
+                source="synthetic-cdn",
+                asset_version="fixture-v1",
+                delivery_config_id="test-config-v1",
+                aggregation_window_seconds=300,
+                limit=100,
+            ),
+            timeout=30,
+            metadata=self.rpc_metadata,
+        )
+        self.assertEqual(len(delivery_report.observed_events), 1)
+        self.assertEqual(
+            delivery_report.observed_events[0].manifest_version,
+            playback.manifest_artifact_id,
+        )
+        self.assertEqual(
+            delivery_report.observed_events[0].session_id,
+            playback.session_id,
+        )
+        self.assertEqual(len(delivery_report.derived_aggregates), 1)
+        self.assertEqual(
+            delivery_report.derived_aggregates[0].event_count, 1
+        )
+        self.assertEqual(
+            delivery_report.derived_aggregates[0].manifest_version,
+            playback.manifest_artifact_id,
+        )
+        self.assertEqual(
+            delivery_report.derived_aggregates[0].delivery_config_id,
+            "test-config-v1",
+        )
+        self.assertEqual(
+            delivery_report.coverage.delivery_events_with_session, 1
+        )
+
+
 
     def test_leased_thumbnail_publication_uses_attempt_scoped_storage_key(self):
         from video_streaming.core.constants import OutputStatus
