@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 import threading
 import time
 from typing import Callable, Optional, Union
@@ -253,4 +255,85 @@ def validate_track_timing(streams, tolerance_seconds=0.25):
         return True
     if max(timed) - min(timed) > tolerance_seconds:
         raise ValueError("audio/video/subtitle start times are not synchronized")
+    return True
+
+
+
+def validate_package_files(directory, manifest):
+    """Validate local HLS/DASH references before an immutable cache publish."""
+    root = Path(directory).resolve()
+
+    def local_file(reference):
+        if not reference or "://" in reference or reference.startswith("/"):
+            raise ValueError("package contains a non-local media reference")
+        candidate = (root / reference.split("?", 1)[0]).resolve()
+        if root not in candidate.parents:
+            raise ValueError("package reference escapes its root")
+        if not candidate.is_file() or candidate.stat().st_size == 0:
+            raise ValueError("package reference is missing or empty: {}".format(reference))
+        return candidate
+
+    if Path(manifest).suffix.lower() == ".m3u8":
+        visited = set()
+
+        def validate_hls(playlist):
+            playlist = Path(playlist).resolve()
+            if playlist in visited:
+                return
+            visited.add(playlist)
+            for raw in playlist.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("#EXT-X-MAP:"):
+                    match = re.search(r'URI="([^"]+)"', line)
+                    if not match:
+                        raise ValueError("HLS map tag has no URI")
+                    local_file(match.group(1))
+                elif line and not line.startswith("#"):
+                    referenced = local_file(line)
+                    if referenced.suffix.lower() == ".m3u8":
+                        validate_hls(referenced)
+        validate_hls(manifest)
+        return True
+
+    if Path(manifest).suffix.lower() != ".mpd":
+        raise ValueError("unsupported package manifest")
+    tree = ET.parse(str(manifest))
+    mpd = tree.getroot()
+    parent = {child: node for node in mpd.iter() for child in node}
+    templates = [node for node in mpd.iter()
+                 if node.tag.rsplit("}", 1)[-1] == "SegmentTemplate"]
+    for template in templates:
+        representation = parent.get(template)
+        while representation is not None and representation.tag.rsplit("}", 1)[-1] != "Representation":
+            representation = parent.get(representation)
+        representations = [representation] if representation is not None else [
+            node for node in mpd.iter()
+            if node.tag.rsplit("}", 1)[-1] == "Representation"
+        ]
+        if not representations:
+            representations = [None]
+        for item in representations:
+            rep_id = item.attrib.get("id", "") if item is not None else ""
+            bandwidth = item.attrib.get("bandwidth", "") if item is not None else ""
+            initialization = template.attrib.get("initialization")
+            media = template.attrib.get("media")
+            for value in (initialization, media):
+                if not value:
+                    continue
+                value = value.replace("$RepresentationID$", rep_id)
+                value = value.replace("$Bandwidth$", bandwidth)
+                value = re.sub(r"\$Number(?:%0\d+d)?\$", "*", value)
+                value = value.replace("$Time$", "*")
+                if "*" in value:
+                    matches = glob.glob(str(root / value))
+                    if not matches or not all(Path(match).is_file() and Path(match).stat().st_size for match in matches):
+                        raise ValueError("DASH template has no complete media objects")
+                else:
+                    local_file(value)
+    for node in mpd.iter():
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag in ("Initialization", "SegmentURL"):
+            reference = node.attrib.get("sourceURL") or node.attrib.get("media")
+            if reference:
+                local_file(reference)
     return True
