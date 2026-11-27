@@ -5,6 +5,7 @@ database, transport, or raw-log ingestion dependency.
 """
 
 from dataclasses import asdict, dataclass
+import ipaddress
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -19,6 +20,7 @@ _CACHE_STATUSES = frozenset({
     "HIT", "MISS", "BYPASS", "REVALIDATED", "STALE", "UNKNOWN",
 })
 _SOURCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+_REGION_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
 def _required_identifier(value, name, max_length):
@@ -59,6 +61,8 @@ class DeliveryEvent:
     source_timestamp: datetime
     artifact_id: str
     session_id: str = None
+    asset_version: str = None
+    delivery_config_id: str = None
     edge_region: str = None
     cache_status: str = "UNKNOWN"
     http_status: int = None
@@ -71,9 +75,20 @@ class DeliveryEvent:
         if not _SOURCE_PATTERN.fullmatch(source):
             raise DeliveryEventContractError("source is invalid")
         _required_identifier(self.source_event_id, "source_event_id", 128)
-        _required_identifier(self.artifact_id, "artifact_id", 128)
-        _optional_identifier(self.session_id, "session_id", 128)
+        _required_identifier(self.artifact_id, "artifact_id", 36)
+        _optional_identifier(self.session_id, "session_id", 36)
+        _optional_identifier(self.asset_version, "asset_version", 128)
+        _optional_identifier(self.delivery_config_id, "delivery_config_id", 128)
         _optional_identifier(self.edge_region, "edge_region", 64)
+        if self.edge_region is not None:
+            if not _REGION_PATTERN.fullmatch(self.edge_region):
+                raise DeliveryEventContractError("edge_region must be a coarse region label")
+            try:
+                ipaddress.ip_address(self.edge_region)
+            except ValueError:
+                pass
+            else:
+                raise DeliveryEventContractError("edge_region must not contain an IP address")
 
         timestamp = self.source_timestamp
         if (
@@ -101,7 +116,7 @@ class DeliveryEvent:
             self.response_time_ms, "response_time_ms", 86400000
         )
         _optional_non_negative_integer(
-            self.bytes_sent, "bytes_sent", 2 ** 63 - 1
+            self.bytes_sent, "bytes_sent", 2 ** 53 - 1
         )
         if (
                 isinstance(self.schema_version, bool)

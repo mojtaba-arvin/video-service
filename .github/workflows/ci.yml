@@ -577,7 +577,8 @@ jobs:
                   cursor.execute(
                       "SELECT to_regclass('public.workflow_jobs'), "
                       "to_regclass('public.workflow_outbox'), "
-                      "to_regclass('public.playback_sessions')"
+                      "to_regclass('public.playback_sessions'), "
+                      "to_regclass('public.cdn_delivery_events')"
                   )
                   remaining = cursor.fetchone()
                   if any(remaining):
@@ -607,7 +608,7 @@ jobs:
               with connection.cursor() as cursor:
                   cursor.execute("SELECT version_num FROM alembic_version")
                   revisions = [row[0] for row in cursor.fetchall()]
-                  if revisions != ["0015_asset_provenance"]:
+                  if revisions != ["0016_cdn_delivery_telemetry"]:
                       raise SystemExit(
                           "Re-upgrade did not reach the expected head: {!r}".format(
                               revisions

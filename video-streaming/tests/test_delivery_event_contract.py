@@ -20,6 +20,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             ),
             "artifact_id": "manifest-artifact-01",
             "session_id": "session-01",
+            "asset_version": "asset-v7",
+            "delivery_config_id": "config-v2",
             "edge_region": "eu-central",
             "cache_status": "HIT",
             "http_status": 200,
@@ -46,7 +48,8 @@ class DeliveryEventContractTests(unittest.TestCase):
             set(payload),
             {
                 "source", "source_event_id", "source_timestamp",
-                "artifact_id", "session_id", "edge_region", "cache_status",
+                "artifact_id", "session_id", "asset_version", "delivery_config_id",
+                "edge_region", "cache_status",
                 "http_status", "response_time_ms", "bytes_sent",
                 "schema_version",
             },
@@ -79,7 +82,11 @@ class DeliveryEventContractTests(unittest.TestCase):
             {"source_event_id": " "},
             {"source_event_id": "x" * 129},
             {"artifact_id": "bad\nartifact"},
+            {"artifact_id": "x" * 37},
+            {"session_id": "x" * 37},
             {"edge_region": "x" * 65},
+            {"edge_region": "192.0.2.1"},
+            {"edge_region": "EU-WEST"},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(DeliveryEventContractError):
@@ -97,6 +104,7 @@ class DeliveryEventContractTests(unittest.TestCase):
             {"response_time_ms": 86400001},
             {"bytes_sent": -1},
             {"bytes_sent": True},
+            {"bytes_sent": 2 ** 53},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(DeliveryEventContractError):

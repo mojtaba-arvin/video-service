@@ -280,6 +280,30 @@ class SettingsEnvironmentTests(unittest.TestCase):
                         "WORKFLOW_PACKAGE_ORPHAN_RETENTION_SECONDS": value,
                     })
 
+    def test_cdn_telemetry_retention_has_a_bounded_default(self):
+        settings = load_settings({})
+        self.assertEqual(settings.CDN_TELEMETRY_RETENTION_DAYS, 30)
+        schedule = settings.CELERY_BEAT_SCHEDULE[
+            "purge-expired-cdn-delivery-telemetry"
+        ]
+        self.assertEqual(
+            schedule["task"],
+            "video_streaming.workflows.purge_delivery_telemetry",
+        )
+        self.assertEqual(schedule["schedule"], 3600.0)
+        self.assertEqual(schedule["options"]["expires"], 1800)
+
+    def test_cdn_telemetry_retention_is_configurable_within_policy_bounds(self):
+        settings = load_settings({"CDN_TELEMETRY_RETENTION_DAYS": "14"})
+        self.assertEqual(settings.CDN_TELEMETRY_RETENTION_DAYS, 14)
+
+    def test_cdn_telemetry_retention_rejects_unbounded_values(self):
+        for value in ("0", "91"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        ValueError, "CDN_TELEMETRY_RETENTION_DAYS"):
+                    load_settings({"CDN_TELEMETRY_RETENTION_DAYS": value})
+
     def test_attempt_lease_ttl_has_a_safe_default(self):
         settings = load_settings({})
 

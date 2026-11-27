@@ -331,6 +331,15 @@ WORKFLOW_DATABASE_MAX_OVERFLOW = env_config.get(
     default=5,
     cast=int)
 
+# CDN delivery evidence expires from ingestion time. The cleanup task runs
+# hourly; deployments must align this bounded range with approved policy.
+CDN_TELEMETRY_RETENTION_DAYS = env_config.get(
+    "CDN_TELEMETRY_RETENTION_DAYS",
+    default=30,
+    cast=int)
+if not 1 <= CDN_TELEMETRY_RETENTION_DAYS <= 90:
+    raise ValueError("CDN_TELEMETRY_RETENTION_DAYS must be between 1 and 90")
+
 # Enforce tenant active-Job policies only after every tenant is provisioned.
 # Default off preserves the existing admission behavior during rollout.
 TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED = env_config.get(
@@ -445,6 +454,11 @@ OIDC_CLOCK_LEEWAY_SECONDS = env_config.get(
 
 
 CELERY_BEAT_SCHEDULE = {
+    "purge-expired-cdn-delivery-telemetry": {
+        "task": "video_streaming.workflows.purge_delivery_telemetry",
+        "schedule": 3600.0,
+        "options": {"expires": 1800},
+    },
     "cleanup-abandoned-package-attempts": {
         "task": "cleanup_abandoned_packages",
         "schedule": 3600.0,
