@@ -11,6 +11,7 @@ from enum import Enum
 class JobState(str, Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
     FINISHED = "FINISHED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -19,6 +20,7 @@ class JobState(str, Enum):
 class WorkflowState(str, Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
     FINISHED = "FINISHED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
