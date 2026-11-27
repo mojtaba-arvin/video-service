@@ -96,3 +96,25 @@ class SubmitJobService:
             metadata=command.metadata,
         )
         return SubmitJobResult(job_id=job_id, created=created)
+
+
+class GetJobStatusService:
+    """Authorize a batch of Job reads before returning durable snapshots."""
+
+    def __init__(self, repository):
+        if repository is None:
+            raise ValueError("workflow repository is required")
+        self._repository = repository
+
+    def execute(self, job_ids, principal):
+        job_ids = tuple(job_ids)
+        # Preserve the adapter's all-or-nothing authorization boundary: no
+        # snapshot (or Redis projection) is read until every Job is authorized.
+        for job_id in job_ids:
+            self._repository.authorize_job_access(
+                job_id, principal, "video.jobs:read"
+            )
+        return {
+            job_id: self._repository.get_job_snapshot(job_id)
+            for job_id in job_ids
+        }
