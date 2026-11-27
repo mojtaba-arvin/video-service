@@ -246,7 +246,7 @@ class IncrementalIngestionTests(unittest.TestCase):
         self.add(ingestion_id, 1, b"efgh")
         with self.assertRaises(IngestionConflict):
             self.service.finalize(ingestion_id)
-        self.assertEqual(self.service.get(ingestion_id)["state"], "FINALIZING")
+        self.assertEqual(self.service.get(ingestion_id)["state"], "OPEN")
         self.assertIsNone(self.service.get(ingestion_id)["final_artifact_uri"])
 
 
