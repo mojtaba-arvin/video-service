@@ -261,6 +261,39 @@ jobs:
             -p 'test_synthetic_vod_package_harness.py' \
             -v
 
+      - name: Run JIT CMAF packaging prototype tests
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          python -m unittest discover \
+            -s video-streaming/tests \
+            -p 'test_jit_cmaf_packaging.py' \
+            -v
+
+      - name: Run reproducible JIT CMAF benchmark (Python 3.12)
+        if: matrix.python-version == '3.12'
+        env:
+          PYTHONPATH: video-streaming
+        run: |
+          output_dir="$RUNNER_TEMP/issue-81-packaging"
+          python video-streaming/tests/fixtures/synthetic-vod-v1/generate_cmaf_sources.py \
+            --output-dir "$output_dir/sources"
+          python video-streaming/tests/fixtures/synthetic-vod-v1/jit_packaging_benchmark.py \
+            --input-dir "$output_dir/sources" \
+            --output-dir "$output_dir/results" \
+            --repetitions 3 \
+            --workload-hours 24 \
+            --cache-ttl-hours 1 \
+            --hls-requests 100 \
+            --dash-requests 20
+          {
+            echo "## Issue #81 synthetic CMAF benchmark"
+            echo
+            echo "Synthetic runner measurements only; byte-hours use the declared request/TTL model."
+            echo
+            cat "$output_dir/results/jit-packaging-benchmark.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run supervised FFmpeg watermark integration test
         env:
           PYTHONPATH: video-streaming
