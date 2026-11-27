@@ -167,7 +167,11 @@ def run_preprocessing(input_path, output_dir, mode, args):
         "parameters": {
             "interval_seconds": args.interval, "max_frames": args.max_frames,
             "max_frame_width": MAX_FRAME_WIDTH, "max_frame_count": MAX_FRAME_COUNT, "sampling_rate_fps": rate,
+            "video_filter": "fps={:.12g},scale='min({},iw)':-2".format(rate, MAX_FRAME_WIDTH),
+            "decoder_threads": 2, "filter_threads": 2, "jpeg_qscale": 3,
+            "ffmpeg_timeout_seconds": args.timeout, "ffprobe_timeout_seconds": args.timeout,
             "memory_limit_bytes": MEMORY_LIMIT_BYTES, "cpu_time_limit_seconds": 180,
+            "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
             "max_duration_seconds": MAX_DURATION_SECONDS, "max_source_bytes": MAX_SOURCE_BYTES,
             "max_benchmark_output_bytes": MAX_BENCHMARK_OUTPUT_BYTES,
             "max_frame_bytes": MAX_FRAME_BYTES, "max_manifest_bytes": MAX_MANIFEST_BYTES,
