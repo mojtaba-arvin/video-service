@@ -15,7 +15,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import psutil
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+VIDEO_STREAMING_ROOT = REPOSITORY_ROOT / "video-streaming"
+if str(VIDEO_STREAMING_ROOT) not in sys.path:
+    sys.path.insert(0, str(VIDEO_STREAMING_ROOT))
+
+from video_streaming.execution.media_probe import probe_media
+from video_streaming.execution.process_control import ProcessUsageAccumulator, run_streaming_process
 
 POLICY_VERSION = "keyframes-v1"
 MAX_FRAME_WIDTH = 640
@@ -44,90 +50,12 @@ def sampling_rate(duration, interval, max_frames):
     return min(1.0 / interval, max_frames / duration)
 
 
-def _usage(process):
-    cpu = 0.0
-    rss = 0
-    try:
-        children = [process] + process.children(recursive=True)
-    except psutil.Error:
-        children = [process]
-    for child in children:
-        try:
-            times = child.cpu_times()
-            cpu += times.user + times.system
-            rss += child.memory_info().rss
-        except psutil.Error:
-            continue
-    return cpu, rss
-
-
-def _run_bounded(command, timeout, first_pattern=None):
-    started = time.monotonic()
-    process = subprocess.Popen(
-        command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE, start_new_session=True,
-    )
-    root = psutil.Process(process.pid)
-    cpu_peak = 0.0
-    rss_peak = 0
-    first_ms = None
-    while process.poll() is None:
-        cpu, rss = _usage(root)
-        cpu_peak = max(cpu_peak, cpu)
-        rss_peak = max(rss_peak, rss)
-        if first_pattern and first_ms is None and list(Path(first_pattern).parent.glob(Path(first_pattern).name)):
-            first_ms = (time.monotonic() - started) * 1000
-        if time.monotonic() - started > timeout:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                process.wait()
-            stderr = process.stderr.read().decode("utf-8", "replace")[-3000:]
-            raise BenchmarkError("command timed out: {}".format(stderr))
-        time.sleep(0.02)
-    stderr = process.stderr.read().decode("utf-8", "replace")[-3000:]
-    cpu, rss = _usage(root)
-    cpu_peak = max(cpu_peak, cpu)
-    rss_peak = max(rss_peak, rss)
-    if process.returncode:
-        raise BenchmarkError("command exited {}: {}".format(process.returncode, stderr))
-    elapsed = (time.monotonic() - started) * 1000
-    if first_pattern and first_ms is None and list(Path(first_pattern).parent.glob(Path(first_pattern).name)):
-        first_ms = elapsed
-    return {"elapsed_ms": elapsed, "first_ms": first_ms, "cpu_seconds": cpu_peak, "peak_rss_bytes": rss_peak}
-
-
 def _version(binary):
     result = subprocess.run(
         [binary, "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         check=True, timeout=15,
     )
     return result.stdout.decode("utf-8", "replace").splitlines()[0]
-
-
-def probe(input_path, ffprobe, timeout):
-    result = subprocess.run(
-        [ffprobe, "-v", "error", "-show_entries",
-         "format=duration,format_name,size,bit_rate:stream=index,codec_type,codec_name,width,height,avg_frame_rate",
-         "-of", "json", str(input_path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=timeout,
-    )
-    try:
-        data = json.loads(result.stdout.decode("utf-8"))
-        duration = float(data["format"]["duration"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise BenchmarkError("FFprobe returned incomplete metadata") from error
-    if not math.isfinite(duration) or duration <= 0:
-        raise BenchmarkError("media duration must be finite and positive")
-    return data, duration
 
 
 def run_preprocessing(input_path, output_dir, mode, args):
