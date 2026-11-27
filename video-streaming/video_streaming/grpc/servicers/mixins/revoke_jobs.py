@@ -5,6 +5,9 @@ from video_streaming.cache import RedisCache
 from video_streaming.core.constants import CacheKeysTemplates
 from video_streaming.grpc.protos import streaming_pb2
 from video_streaming.grpc.servicers.mixins.job_authorization import require_job_access
+from video_streaming.grpc.authentication import get_request_principal
+from video_streaming.workflows.application import CancelJobService
+from video_streaming.workflows.service import get_workflow_repository
 
 
 class RevokeJobsMixin(object):
@@ -68,8 +71,16 @@ class RevokeJobsMixin(object):
         for request_id in request.tracking_ids:
             require_job_access(request_id, "video.jobs:cancel", context)
 
+        repository = get_workflow_repository(required=True)
+        cancellation = CancelJobService(repository)
+        principal = get_request_principal()
         results: list[streaming_pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
+            cancellation.execute(
+                request_id, principal, reason="grpc_revoke_requested"
+            )
+            # Preserve the legacy Redis/Celery signal for workers that have
+            # not migrated to durable Attempt leases.
             result = self._revoke_job(request_id)
             if result:
                 results.append(result)
