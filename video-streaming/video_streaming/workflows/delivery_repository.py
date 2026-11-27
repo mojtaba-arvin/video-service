@@ -187,98 +187,101 @@ class DeliveryTelemetryRepository:
         if not isinstance(event, DeliveryEvent):
             raise TypeError("event must be a normalized DeliveryEvent")
         now = utcnow()
-        with self._session.begin() as session:
-            artifact = session.get(ArtifactRecord, event.artifact_id)
-            if (
-                artifact is None
-                or artifact.artifact_type != "streaming_manifest"
-                or artifact.status != "AVAILABLE"
-                or not artifact.uri
-                or artifact.stage_id is None
-            ):
-                raise KeyError("Published manifest Artifact was not found")
-
-            stage = session.get(StageRecord, artifact.stage_id)
-            if stage is None or stage.status != "FINISHED":
-                raise ValueError("Delivery telemetry requires a finished published Stage")
-            workflow = session.get(WorkflowRecord, stage.workflow_id)
-            if workflow is None:
-                raise KeyError("Manifest Workflow was not found")
-            job_id = workflow.job_id
-            attempt_id = artifact.attempt_id
-
-            if event.session_id is not None:
-                playback = session.get(PlaybackSessionRecord, event.session_id)
+        try:
+            with self._session.begin() as session:
+                artifact = session.get(ArtifactRecord, event.artifact_id)
                 if (
-                    playback is None
-                    or playback.manifest_artifact_id != artifact.id
-                    or playback.stage_id != stage.id
-                    or playback.job_id != job_id
-                ):
+                        artifact is None
+                        or artifact.artifact_type != "streaming_manifest"
+                        or artifact.status != "AVAILABLE"
+                        or not artifact.uri
+                        or artifact.stage_id is None):
+                    raise KeyError("Published manifest Artifact was not found")
+
+                stage = session.get(StageRecord, artifact.stage_id)
+                if stage is None or stage.status != "FINISHED":
                     raise ValueError(
-                        "Playback session does not reference the same published manifest"
+                        "Delivery telemetry requires a finished published Stage"
                     )
+                workflow = session.get(WorkflowRecord, stage.workflow_id)
+                if workflow is None:
+                    raise KeyError("Manifest Workflow was not found")
 
-            existing = session.execute(
-                select(DeliveryEventRecord).where(
-                    DeliveryEventRecord.source == event.source,
-                    DeliveryEventRecord.source_event_id == event.source_event_id,
-                ).with_for_update()
-            ).scalar_one_or_none()
-            if existing is not None:
-                if existing.payload_sha256 != event.fingerprint():
-                    raise DeliveryEventConflictError(
-                        "source event identity was reused with a different payload"
-                    )
-                return {"accepted": True, "duplicate": True, "event_id": existing.id}
-
-            record = DeliveryEventRecord(
-                id=self._new_id(),
-                source=event.source,
-                source_event_id=event.source_event_id,
-                schema_version=event.schema_version,
-                payload_sha256=event.fingerprint(),
-                source_timestamp=event.source_timestamp,
-                ingested_at=now,
-                expires_at=now + timedelta(days=self.retention_days),
-                job_id=job_id,
-                workflow_id=workflow.id,
-                stage_id=stage.id,
-                attempt_id=attempt_id,
-                artifact_id=artifact.id,
-                session_id=event.session_id,
-                asset_version=event.asset_version,
-                delivery_config_id=event.delivery_config_id,
-                edge_region=event.edge_region,
-                cache_status=event.cache_status,
-                http_status=event.http_status,
-                response_time_ms=event.response_time_ms,
-                bytes_sent=event.bytes_sent,
-            )
-            session.add(record)
-            try:
-                session.flush()
-            except IntegrityError:
-                # A concurrent at-least-once delivery may win the unique key.
-                session.rollback()
-                with self._session() as retry_session:
-                    winner = retry_session.execute(
-                        select(DeliveryEventRecord).where(
-                            DeliveryEventRecord.source == event.source,
-                            DeliveryEventRecord.source_event_id == event.source_event_id,
+                if event.session_id is not None:
+                    playback = session.get(PlaybackSessionRecord, event.session_id)
+                    if (
+                            playback is None
+                            or playback.manifest_artifact_id != artifact.id
+                            or playback.stage_id != stage.id
+                            or playback.job_id != workflow.job_id):
+                        raise ValueError(
+                            "Playback session does not reference the same published manifest"
                         )
-                    ).scalar_one_or_none()
-                    if winner is None:
-                        raise
-                    if winner.payload_sha256 != event.fingerprint():
+
+                existing = session.execute(
+                    select(DeliveryEventRecord).where(
+                        DeliveryEventRecord.source == event.source,
+                        DeliveryEventRecord.source_event_id == event.source_event_id,
+                    ).with_for_update()
+                ).scalar_one_or_none()
+                if existing is not None:
+                    if existing.payload_sha256 != event.fingerprint():
                         raise DeliveryEventConflictError(
                             "source event identity was reused with a different payload"
                         )
                     return {
                         "accepted": True, "duplicate": True,
-                        "event_id": winner.id,
+                        "event_id": existing.id,
                     }
-            return {"accepted": True, "duplicate": False, "event_id": record.id}
+
+                record = DeliveryEventRecord(
+                    id=self._new_id(),
+                    source=event.source,
+                    source_event_id=event.source_event_id,
+                    schema_version=event.schema_version,
+                    payload_sha256=event.fingerprint(),
+                    source_timestamp=event.source_timestamp,
+                    ingested_at=now,
+                    expires_at=now + timedelta(days=self.retention_days),
+                    job_id=workflow.job_id,
+                    workflow_id=workflow.id,
+                    stage_id=stage.id,
+                    attempt_id=artifact.attempt_id,
+                    artifact_id=artifact.id,
+                    session_id=event.session_id,
+                    asset_version=event.asset_version,
+                    delivery_config_id=event.delivery_config_id,
+                    edge_region=event.edge_region,
+                    cache_status=event.cache_status,
+                    http_status=event.http_status,
+                    response_time_ms=event.response_time_ms,
+                    bytes_sent=event.bytes_sent,
+                )
+                session.add(record)
+                session.flush()
+                return {
+                    "accepted": True, "duplicate": False,
+                    "event_id": record.id,
+                }
+        except IntegrityError:
+            # Concurrent at-least-once deliveries race on the durable unique key.
+            with self._session() as retry_session:
+                winner = retry_session.execute(
+                    select(DeliveryEventRecord).where(
+                        DeliveryEventRecord.source == event.source,
+                        DeliveryEventRecord.source_event_id == event.source_event_id,
+                    )
+                ).scalar_one_or_none()
+                if winner is None:
+                    raise
+                if winner.payload_sha256 != event.fingerprint():
+                    raise DeliveryEventConflictError(
+                        "source event identity was reused with a different payload"
+                    )
+                return {
+                    "accepted": True, "duplicate": True,
+                    "event_id": winner.id,
+                }
 
     @staticmethod
     def _new_id():
@@ -356,14 +359,18 @@ class DeliveryTelemetryRepository:
                 query = query.where(DeliveryEventRecord.source_timestamp < end_time)
             records = session.execute(
                 query.order_by(DeliveryEventRecord.source_timestamp)
-                .limit(limit)
+                .limit(limit + 1)
             ).scalars().all()
+            truncated = len(records) > limit
+            records = records[:limit]
 
             # Coverage is scoped to the requested Job/Stage and time range,
             # independent of whether a CDN event happened to arrive.
             sessions_query = select(PlaybackSessionRecord).where(
                 PlaybackSessionRecord.job_id == job_id
             )
+            if session_id:
+                sessions_query = sessions_query.where(PlaybackSessionRecord.id == session_id)
             if stage_key:
                 sessions_query = sessions_query.join(
                     StageRecord, PlaybackSessionRecord.stage_id == StageRecord.id
@@ -481,7 +488,7 @@ class DeliveryTelemetryRepository:
                     "unknown_cache_outcome_count": sum(
                         1 for item in records if item.cache_status == "UNKNOWN"
                     ),
-                    "truncated": len(records) == limit,
+                    "truncated": truncated,
                 },
             }
 
