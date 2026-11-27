@@ -42,7 +42,7 @@ Do not commit generated media or benchmark outputs. Keep the JSON report as a CI
 - **Quality/retries:** perceptual quality metrics are not applicable because encoded bitstreams are copied, not re-encoded. The benchmark workload does not inject packaging retries/failures; fallback and cleanup behavior are covered by focused tests.
 - **Audio/subtitles:** FFprobe checks packaged audio/video stream start-time alignment within 250 ms, and the shared CMAF audio/video segment timeline durations must agree within 250 ms. Synthetic WebVTT sidecar cue times are checked against source duration; the VTT is not muxed into the CMAF package. Embedded subtitle carriage and rendered subtitle synchronization remain unverified.
 - **DRM:** not tested. No CENC encryption, key rotation, license acquisition, entitlement, FairPlay, Widevine or PlayReady flow is implemented by this prototype. DRM compatibility is therefore unknown, not passed.
-- **Playback:** package graph/manifest validation and FFprobe are structural checks only. No hls.js, dash.js, native HLS, hardware decoder or device matrix is run.
+- **Playback/ABR:** each fixture has one video representation plus audio. Package graph/manifest validation and FFprobe are structural checks only. No multi-rendition ladder switching, hls.js, dash.js, native HLS, hardware decoder or device matrix is run.
 
 ## Existing production pipeline inspected
 
