@@ -144,6 +144,7 @@ def main():
     prepackaged_manifest = prepackaged / prepackaged_manifest_name
     if not prepackaged_manifest.is_file():
         raise RuntimeError("pre-packaged directory is missing {}".format(prepackaged_manifest_name))
+    validate_package_files(prepackaged, prepackaged_manifest)
 
     prepackaged_bytes = directory_bytes(prepackaged)
     jit_package_bytes = directory_bytes(jit_result.directory)
