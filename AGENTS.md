@@ -80,3 +80,7 @@ media pipeline engineer can implement and test changes, the security auditor
 is read-only, and the orchestration/MCP architect focuses on contracts and
 state design. Keep reviewer profiles read-only and grant execute/edit access
 only to agents that must change code or run tests.
+
+## Commit identity and attribution
+
+Read `COMMIT_IDENTITY.md` before creating, amending, or reviewing commits. Maintainer-directed AI-assisted work must use the verified maintainer Git author identity, Mojtaba Arvin <m.arvin@live.com>; preserve real human contributor identities; do not use AI/bot authors or bot co-author trailers. Follow the documented, narrowly approved genuine-automation exception. Do not rewrite historical commits. Repository-specific Git, workflow, review, and merge restrictions in this file remain authoritative.
