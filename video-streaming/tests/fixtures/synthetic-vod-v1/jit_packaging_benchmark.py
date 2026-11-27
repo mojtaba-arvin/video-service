@@ -14,7 +14,6 @@ import shutil
 import statistics
 import subprocess
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -63,7 +62,7 @@ def build_package(source, output_dir, protocol, ffmpeg="ffmpeg", segment_seconds
         raise ValueError("source must be an existing non-empty encoded asset")
     if protocol not in MANIFESTS:
         raise ValueError("unsupported protocol")
-    output_dir.mkdir(parents=True, exist_ok=False)
+    output_dir.mkdir(parents=True, exist_ok=True)
     if protocol == "hls":
         manifest = output_dir / MANIFESTS[protocol]
         command = [
