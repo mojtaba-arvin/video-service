@@ -51,7 +51,7 @@ def upgrade():
             name="ck_cdn_delivery_response_time",
         ),
         sa.CheckConstraint(
-            "bytes_sent IS NULL OR bytes_sent >= 0",
+            "bytes_sent IS NULL OR bytes_sent BETWEEN 0 AND 9007199254740991",
             name="ck_cdn_delivery_bytes_sent",
         ),
         sa.CheckConstraint("expires_at > ingested_at", name="ck_cdn_delivery_expiry"),
