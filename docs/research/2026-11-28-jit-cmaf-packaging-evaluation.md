@@ -117,7 +117,7 @@ before making any savings or rollout claim.
   check. Validate full timelines, segment boundaries, language/rendition
   signaling, WebVTT/IMSC behavior, and real players.
 - **Cache isolation:** cache keys include all known byte-affecting profile and
-  source versions. A new asset/profile/packager/DRM version receives a new
+  source versions. A new asset/profile/packager/DRM key/segment-duration version receives a new
   immutable key. Invalidation removes only the exact key, never a shared prefix.
 - **Publication:** readers see only a fully built directory. Production
   adoption must additionally preserve durable Attempt ownership, validation,
