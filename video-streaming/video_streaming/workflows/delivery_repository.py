@@ -544,3 +544,16 @@ class ProviderNeutralCDNAdapter:
         if event.source != self.source:
             raise ValueError("event source does not match configured adapter")
         return self.telemetry_repository.ingest(event)
+
+
+def build_provider_neutral_cdn_adapter(source, workflow_repository=None):
+    """Build the normalized source adapter with deployment retention policy."""
+    from video_streaming import settings
+    if workflow_repository is None:
+        from video_streaming.workflows.service import get_workflow_repository
+        workflow_repository = get_workflow_repository(required=True)
+    telemetry = DeliveryTelemetryRepository(
+        workflow_repository,
+        retention_days=settings.CDN_TELEMETRY_RETENTION_DAYS,
+    )
+    return ProviderNeutralCDNAdapter(telemetry, source)
