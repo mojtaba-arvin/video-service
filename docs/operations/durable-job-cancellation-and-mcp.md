@@ -38,7 +38,9 @@ Configure:
 - `MCP_ALLOWED_HOSTS`: comma-separated exact Host values, including ports
 - `MCP_ALLOWED_ORIGINS`: comma-separated allowed browser origins; empty disables browser-origin access
 
-MCP submissions fail closed unless both `WORKFLOW_DURABLE_DISPATCH_ENABLED` and `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED` are true and the caller's tenant has a provisioned quota policy. MCP never overwrites existing output keys or creates buckets; outputs are create-only until a separately reviewed approval contract exists.\n\nThe deployment must also configure the existing `OIDC_ISSUER`, `OIDC_JWKS_URI`, `OIDC_ALLOWED_ALGORITHMS`, tenant/subject/scope/role claim names and clock/JWKS timeouts. Tokens must carry the MCP audience and the required per-tool scopes. The adapter converts only verified token claims into the shared `RequestPrincipal`.
+MCP submissions fail closed unless both `WORKFLOW_DURABLE_DISPATCH_ENABLED` and `TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED` are true and the caller's tenant has a provisioned quota policy. MCP never overwrites existing output keys or creates buckets; outputs are create-only until a separately reviewed approval contract exists.
+
+The deployment must also configure the existing `OIDC_ISSUER`, `OIDC_JWKS_URI`, `OIDC_ALLOWED_ALGORITHMS`, tenant/subject/scope/role claim names and clock/JWKS timeouts. Tokens must carry the MCP audience and the required per-tool scopes. The adapter converts only verified token claims into the shared `RequestPrincipal`.
 
 Install the optional Python 3.12+ dependencies with `pip install -r requirements-mcp-py312.txt`, then run `python -m video_streaming.mcp` from the application environment. Terminate TLS at a trusted reverse proxy for non-loopback deployments and configure the exact Host/Origin allowlists. Do not expose the service directly to an untrusted network with the local defaults.
 
