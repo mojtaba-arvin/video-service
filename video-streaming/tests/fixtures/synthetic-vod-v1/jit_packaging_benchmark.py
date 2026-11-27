@@ -460,6 +460,15 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
         validate_webvtt_timeline(subtitle_path, media_duration)
         if subtitle_path and media_duration else None
     )
+    shared_dir = output_root / (source.stem + "-prepackaged-cmaf")
+    if shared_dir.exists():
+        shutil.rmtree(shared_dir)
+    shared_cpu_started = cpu_seconds()
+    shared_wall_started = time.monotonic()
+    shared_cmaf = build_shared_cmaf(source, shared_dir, ffmpeg)
+    shared_cmaf["packaging_ms"] = (time.monotonic() - shared_wall_started) * 1000
+    shared_cmaf["cpu_seconds"] = max(0.0, cpu_seconds() - shared_cpu_started)
+
     protocols = {}
     for protocol in ("hls", "dash"):
         prepackaged = output_root / (source.stem + "-prepackaged-" + protocol)
@@ -525,16 +534,53 @@ def benchmark_fixture(source, output_root, ffmpeg, repetitions, workload_hours,
                 "modeled_cache_hit_ratio": (modeled_hits / requests) if requests else None,
                 "cache_ttl_hours": cache_ttl_hours,
                 "cache_resident_hours": resident_hours,
-                "prepackaged_byte_hours": pre["total_bytes"] * workload_hours,
                 "jit_cache_byte_hours": pre["total_bytes"] * resident_hours,
+                "modeled_cache_misses": max(0, requests - modeled_hits),
             },
             "structural_validation": pre["validation"],
             "audio_video_sync": pre["audio_video_sync"],
             "subtitle_timeline": subtitle_validation,
         }
+    separate_prepackaged_bytes = sum(
+        protocols[name]["prepackaged"]["bytes"] for name in ("hls", "dash")
+    )
+    jit_cache_byte_hours = sum(
+        protocols[name]["workload_model"]["jit_cache_byte_hours"]
+        for name in ("hls", "dash")
+    )
+    modeled_cold_cpu_seconds = sum(
+        protocols[name]["jit"]["cpu_seconds_p50"]
+        * protocols[name]["workload_model"]["modeled_cache_misses"]
+        for name in ("hls", "dash")
+    )
     return {
         "fixture": source.name, "source_sha256": source_hash,
         "source_bytes": source.stat().st_size, "ffmpeg_build": build,
+        "prepackaged_cmaf": {
+            "bytes": shared_cmaf["total_bytes"],
+            "shared_media_bytes": shared_cmaf["shared_media_bytes"],
+            "files": shared_cmaf["file_count"],
+            "packaging_ms": shared_cmaf["packaging_ms"],
+            "cpu_seconds": shared_cmaf["cpu_seconds"],
+            "hls_manifest_sha256": shared_cmaf["hls_manifest_sha256"],
+            "dash_manifest_sha256": shared_cmaf["manifest_sha256"],
+            "audio_video_sync": shared_cmaf["audio_video_sync"],
+            "audio_video_segment_duration_delta_seconds":
+                shared_cmaf["audio_video_segment_duration_delta_seconds"],
+            "hls_validation": shared_cmaf["hls_validation"],
+            "dash_validation": shared_cmaf["dash_validation"],
+            "shared_media_files": shared_cmaf["shared_media_files"],
+        },
+        "storage_comparison": {
+            "workload_hours": workload_hours,
+            "conventional_separate_hls_dash_bytes": separate_prepackaged_bytes,
+            "prepackaged_cmaf_byte_hours": shared_cmaf["total_bytes"] * workload_hours,
+            "jit_cache_byte_hours": jit_cache_byte_hours,
+            "modeled_byte_hour_difference_vs_cmaf":
+                shared_cmaf["total_bytes"] * workload_hours - jit_cache_byte_hours,
+            "modeled_jit_cold_cpu_seconds": modeled_cold_cpu_seconds,
+            "note": "byte-hours and cold CPU are workload-model estimates; source bytes are common and excluded",
+        },
         "protocols": protocols,
     }
 
@@ -572,13 +618,13 @@ def run_benchmark(input_dir, output_dir, repetitions=3, workload_hours=24,
         "packager_version": PACKAGER_VERSION,
         "request_path_reencoding": False,
         "methodology": {
-            "input": "already-encoded synthetic MP4 fixtures; all package commands use -c copy",
+            "input": "already-encoded synthetic H.264/AAC MP4 fixtures; all CMAF, HLS and DASH packaging commands use -c copy",
             "repetitions": repetitions,
             "workload_hours": workload_hours,
             "cache_ttl_hours": cache_ttl_hours,
             "hls_requests_per_asset": hls_requests,
             "dash_requests_per_asset": dash_requests,
-            "byte_hours": "package bytes multiplied by modeled cache-residency hours; canonical source bytes are common to both cases and excluded",
+            "byte_hours": "pre-packaged CMAF media objects retained for the full horizon versus protocol-specific JIT cache objects retained over modeled request/TTL residency; canonical source bytes are common and excluded",
             "ttfb": "local filesystem first-byte measurement, not HTTP/CDN/player TTFB",
         },
         "limitations": {
