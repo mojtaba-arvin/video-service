@@ -50,6 +50,26 @@ class AtomicPackageCacheTests(unittest.TestCase):
             self.assertEqual(sum(1 for item in results if not item[1]), 1)
             self.assertEqual(sum(1 for item in results if item[1]), 7)
 
+
+    def test_corrupt_warm_cache_entry_is_rebuilt_not_served(self):
+        with tempfile.TemporaryDirectory(prefix="jit-cache-corrupt-") as root:
+            cache = jit.AtomicPackageCache(root)
+            key = "d" * 64
+            builds = []
+
+            def builder(staging):
+                builds.append(1)
+                (staging / "index.m3u8").write_text("#EXTM3U\\n")
+                (staging / "segment.m4s").write_bytes(b"known-good")
+
+            path, hit, _ = cache.get_or_build(key, builder)
+            self.assertFalse(hit)
+            (path / "segment.m4s").write_bytes(b"corrupted")
+            rebuilt, hit, _ = cache.get_or_build(key, builder)
+            self.assertFalse(hit)
+            self.assertEqual(len(builds), 2)
+            self.assertEqual((rebuilt / "segment.m4s").read_bytes(), b"known-good")
+
     def test_versioned_keys_and_explicit_invalidation(self):
         with tempfile.TemporaryDirectory(prefix="jit-cache-version-") as root:
             cache = jit.AtomicPackageCache(root)
