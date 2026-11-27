@@ -89,7 +89,7 @@ def main():
     if args.self_test:
         self_test()
     if not (args.repository and args.pr_number and args.token):
-        if args.self_test and not args.repository and not args.pr_number and not args.token:
+        if args.self_test and not args.pr_number:
             return 0
         p.error("--repository, --pr-number and --token are required")
     base = "https://api.github.com/repos/" + args.repository
