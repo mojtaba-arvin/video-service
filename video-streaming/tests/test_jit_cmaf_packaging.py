@@ -7,7 +7,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -48,8 +47,7 @@ class AtomicPackageCacheTests(unittest.TestCase):
             self.assertEqual(len({str(item[0]) for item in results}), 1)
             self.assertTrue((Path(root) / key / "index.m3u8").is_file())
             self.assertEqual(sum(1 for item in results if not item[1]), 1)
-            self.assertTrue(all(item[1] for item in results if item is not results[0]) or
-                            sum(1 for item in results if item[1]) == 7)
+            self.assertEqual(sum(1 for item in results if item[1]), 7)
 
     def test_versioned_keys_and_explicit_invalidation(self):
         with tempfile.TemporaryDirectory(prefix="jit-cache-version-") as root:
