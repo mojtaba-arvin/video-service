@@ -2,7 +2,7 @@
 
 For maintainer-directed AI-assisted implementation, use Git author `Mojtaba Arvin <m.arvin@live.com>` only after confirming this exact email is verified on the maintainer's GitHub account. Do not use model, assistant, AI-agent, Copilot, Claude, Cursor, Codex, Gemini, generic agent, or bot identities as the author. Do not add bot/AI `Co-authored-by` trailers.
 
-Include `<!-- maintainer-directed-ai-work -->` in the PR body for owner-authorized AI-assisted work. This machine-readable marker requires every commit author to match the maintainer identity. Disclose AI assistance in the PR description; the marker does not claim the maintainer personally typed every line.
+Include `<!-- maintainer-directed-ai-work -->` in the PR body for owner-authorized AI-assisted work. This machine-readable marker requires at least one maintainer-authored commit and validates every commit attributed to `mojtaba-arvin` against the exact maintainer name/email; other human contributor identities remain unchanged. Disclose AI assistance in the PR description; the marker does not claim the maintainer personally typed every line.
 
 Preserve every real human contributor's original author name/email. Never relabel another person as the maintainer and never rewrite historical commits.
 
