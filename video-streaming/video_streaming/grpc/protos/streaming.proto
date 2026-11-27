@@ -8,6 +8,7 @@ service Streaming{
   rpc start_playback_session(StartPlaybackSessionRequest) returns (StartPlaybackSessionResponse) {}
   rpc record_playback_event(RecordPlaybackEventRequest) returns (RecordPlaybackEventResponse) {}
   rpc get_playback_qoe_report(GetPlaybackQoEReportRequest) returns (PlaybackQoEReportResponse) {}
+  rpc get_delivery_telemetry_report(DeliveryTelemetryQueryRequest) returns (DeliveryTelemetryReportResponse) {}
   rpc provision_tenant_job_quota_policy(ProvisionTenantJobQuotaPolicyRequest) returns (TenantJobQuotaPolicyResponse) {}
   rpc list_tenant_job_quota_policies(ListTenantJobQuotaPoliciesRequest) returns (ListTenantJobQuotaPoliciesResponse) {}
   rpc list_tenant_job_quota_audit_events(ListTenantJobQuotaAuditEventsRequest) returns (ListTenantJobQuotaAuditEventsResponse) {}
@@ -474,6 +475,100 @@ message RecordPlaybackEventResponse {
 message GetPlaybackQoEReportRequest {
   string tracking_id = 1;
   string output_id = 2;
+}
+
+// CDN delivery query. All timestamps are RFC3339 UTC; empty filters are ignored.
+message DeliveryTelemetryQueryRequest {
+  string tracking_id = 1;
+  string output_id = 2;
+  string session_id = 3;
+  string artifact_id = 4;
+  string source = 5;
+  string edge_region = 6;
+  string cache_status = 7;
+  string asset_version = 8;
+  string delivery_config_id = 9;
+  string start_time = 10;
+  string end_time = 11;
+  // Zero selects the default 300-second window; accepted range is 60..86400.
+  uint32 aggregation_window_seconds = 12;
+  // Zero selects the default 500; maximum is 1000.
+  uint32 limit = 13;
+}
+
+message ObservedDeliveryEvent {
+  string source = 1;
+  string source_event_id = 2;
+  string source_timestamp = 3;
+  string ingested_at = 4;
+  string artifact_id = 5;
+  // The immutable manifest Artifact ID is the manifest version identity.
+  string manifest_version = 6;
+  string asset_version = 7;
+  string delivery_config_id = 8;
+  string session_id = 9;
+  string job_id = 10;
+  string workflow_id = 11;
+  string stage_id = 12;
+  string attempt_id = 13;
+  string edge_region = 14;
+  string cache_status = 15;
+  int32 http_status = 16;
+  bool http_status_available = 17;
+  int64 response_time_ms = 18;
+  bool response_time_available = 19;
+  int64 bytes_sent = 20;
+  bool bytes_sent_available = 21;
+}
+
+message DerivedDeliveryAggregate {
+  string window_start = 1;
+  string window_end = 2;
+  string edge_region = 3;
+  string cache_status = 4;
+  int32 event_count = 5;
+  double average_response_time_ms = 6;
+  int32 response_time_observation_count = 7;
+  int64 bytes_sent = 8;
+  int32 bytes_observation_count = 9;
+  int32 http_error_count = 10;
+  bool bytes_sent_available = 11;
+  bool average_response_time_available = 12;
+  string source = 13;
+  string artifact_id = 14;
+  string manifest_version = 15;
+  string asset_version = 16;
+  string delivery_config_id = 17;
+}
+
+message DeliveryTelemetryCoverage {
+  int32 playback_session_count = 1;
+  int32 sessions_with_player_signals = 2;
+  int32 sessions_without_player_signals = 3;
+  int32 sessions_with_delivery_signals = 4;
+  int32 sessions_without_delivery_signals = 5;
+  int32 delivery_event_count = 6;
+  int32 delivery_events_with_session = 7;
+  int32 delivery_events_without_session = 8;
+  int32 missing_asset_version_count = 9;
+  int32 missing_response_time_count = 10;
+  int32 missing_bytes_count = 11;
+  int32 unknown_cache_outcome_count = 12;
+  bool truncated = 13;
+  int32 missing_http_status_count = 14;
+  int32 missing_edge_region_count = 15;
+  int32 delivery_events_without_attempt = 16;
+  int32 missing_delivery_config_count = 17;
+}
+
+message DeliveryTelemetryReportResponse {
+  string tracking_id = 1;
+  string output_id = 2;
+  uint32 aggregation_window_seconds = 3;
+  // Source records are observed evidence; aggregates are derived projections.
+  repeated ObservedDeliveryEvent observed_events = 4;
+  repeated DerivedDeliveryAggregate derived_aggregates = 5;
+  DeliveryTelemetryCoverage coverage = 6;
 }
 
 message PlaybackQoEReportResponse {
