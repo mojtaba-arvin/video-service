@@ -26,7 +26,6 @@ GitHub Actions runs this command for pull requests targeting `develop` and for p
 
 The CI job now validates configuration, environment-file tracking rules, and thumbnail rendering/output validation through real FFmpeg and FFprobe executions. It still does not validate Celery orchestration, Redis, RabbitMQ, S3 publication, container builds, gRPC authentication, webhook security, or a complete VOD job. The legacy service baseline is Python 3.9, which reached end of life on 2025-10-31. CI keeps a Python 3.9 backward-compatibility job and separately runs the regression suite on Python 3.12. The Python 3.12 job covers only the current tests; it does not prove that the full service and all runtime requirements are compatible. Upgrade the production/runtime baseline in a dedicated, tested dependency and container migration.
 
-
 ## Agent-assisted development
 
 Read the repository-root AGENTS.md before using an AI coding agent. It defines
@@ -45,3 +44,7 @@ docs/engineering/github-governance.md for the recommended repository settings.
 The current workflow's green check is not itself branch protection. The
 develop branch must have an active ruleset requiring the Unit tests
 (Python 3.9) check before GitHub technically blocks an unverified merge.
+
+## GitHub Issue title convention
+
+Follow the repository's [canonical GitHub Issue title convention](docs/engineering/issue-title-convention.md).

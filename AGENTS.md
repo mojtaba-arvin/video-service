@@ -80,3 +80,7 @@ media pipeline engineer can implement and test changes, the security auditor
 is read-only, and the orchestration/MCP architect focuses on contracts and
 state design. Keep reviewer profiles read-only and grant execute/edit access
 only to agents that must change code or run tests.
+
+## GitHub Issue title convention
+
+Follow the repository's [canonical GitHub Issue title convention](docs/engineering/issue-title-convention.md).
