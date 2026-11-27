@@ -6,6 +6,7 @@ mutations remain in shared application services.
 """
 import asyncio
 import logging
+from threading import Lock
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import List, Optional
@@ -101,7 +102,8 @@ def build_server():
             or parsed_resource.username
             or parsed_resource.password
             or parsed_resource.query
-            or parsed_resource.fragment):
+            or parsed_resource.fragment
+            or parsed_resource.path != "/mcp"):
         raise RuntimeError("MCP_RESOURCE_URL must be an absolute HTTP(S) URL")
     if (
             parsed_resource.scheme != "https"
@@ -160,8 +162,17 @@ def build_server():
     def principal():
         return _principal_from_access_token(get_access_token())
 
+    repository_instance = []
+    repository_lock = Lock()
+
     def repository():
-        return get_workflow_repository(required=True)
+        if not repository_instance:
+            with repository_lock:
+                if not repository_instance:
+                    repository_instance.append(
+                        get_workflow_repository(required=True)
+                    )
+        return repository_instance[0]
 
     def operation_service():
         return VideoOperationService(
@@ -279,9 +290,15 @@ def run():
         allowed_hosts=list(settings.MCP_ALLOWED_HOSTS),
         allowed_origins=list(settings.MCP_ALLOWED_ORIGINS),
     )
+    resource = urlparse(settings.MCP_RESOURCE_URL)
+    if resource.port is not None and resource.port != settings.MCP_PORT:
+        raise RuntimeError(
+            "MCP_PORT must match the port in MCP_RESOURCE_URL"
+        )
     server.run(
         transport="streamable-http",
         host=settings.MCP_HOST,
         port=settings.MCP_PORT,
+        streamable_http_path=resource.path,
         transport_security=security,
     )
