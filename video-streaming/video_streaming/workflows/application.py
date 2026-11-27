@@ -219,6 +219,10 @@ class VideoOperationService:
             raise RuntimeError(
                 "MCP video submission requires WORKFLOW_DURABLE_DISPATCH_ENABLED"
             )
+        if not self._quota_enforcement_enabled:
+            raise RuntimeError(
+                "MCP video submission requires TENANT_JOB_QUOTA_ENFORCEMENT_ENABLED"
+            )
         job_id = plan["job_id"]
         # The request hash is stable across retries and independent of generated
         # Job IDs, so the caller's idempotency key safely deduplicates submits.
@@ -258,8 +262,7 @@ class VideoOperationService:
 
     def generate_thumbnail(
             self, bucket, key, output_bucket, output_key, thumbnail_time,
-            idempotency_key, principal, scale_width=0, scale_height=0,
-            dont_replace=False, create_bucket=False):
+            idempotency_key, principal, scale_width=0, scale_height=0):
         request = self._base_request(bucket, key, idempotency_key)
         output_bucket = self._required_text(output_bucket, "output_bucket")
         output_key = self._required_text(output_key, "output_key", 1024)
@@ -277,8 +280,6 @@ class VideoOperationService:
             "thumbnail_time": thumbnail_time,
             "scale_width": scale_width,
             "scale_height": scale_height,
-            "dont_replace": dont_replace,
-            "create_bucket": create_bucket,
         })
         from video_streaming.workflows.vod_plan import build_vod_execution_plan
         job_id = str(uuid.uuid4())
@@ -295,8 +296,9 @@ class VideoOperationService:
                     "scale_width": scale_width,
                     "scale_height": scale_height,
                     "use_watermark": False,
-                    "dont_replace": dont_replace,
-                    "create_bucket": create_bucket,
+                    # MCP does not authorize destructive overwrites.
+                    "dont_replace": True,
+                    "create_bucket": False,
                 }],
             },
         )
@@ -352,7 +354,8 @@ class VideoOperationService:
                     "fragmented": False,
                     "custom_qualities": [],
                     "use_watermark": False,
-                    "dont_replace": False,
+                    # Existing objects are never overwritten by MCP.
+                    "dont_replace": True,
                     "create_bucket": False,
                 }],
                 "thumbnails": [],
