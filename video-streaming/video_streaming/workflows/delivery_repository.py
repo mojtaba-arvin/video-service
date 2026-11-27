@@ -227,6 +227,16 @@ class DeliveryTelemetryRepository:
                 workflow = session.get(WorkflowRecord, stage.workflow_id)
                 if workflow is None:
                     raise KeyError("Manifest Workflow was not found")
+                if artifact.job_id != workflow.job_id:
+                    raise ValueError(
+                        "Manifest Artifact Job does not match its Stage Workflow"
+                    )
+                if artifact.attempt_id is not None:
+                    attempt = session.get(AttemptRecord, artifact.attempt_id)
+                    if attempt is None or attempt.stage_id != stage.id:
+                        raise ValueError(
+                            "Manifest Artifact Attempt does not belong to its Stage"
+                        )
 
                 if event.session_id is not None:
                     playback = session.get(PlaybackSessionRecord, event.session_id)
