@@ -26,6 +26,7 @@ from video_streaming.execution.process_control import ProcessUsageAccumulator, r
 POLICY_VERSION = "keyframes-v1"
 MAX_FRAME_WIDTH = 640
 MAX_FRAME_COUNT = 8
+SOURCE_LICENSE_URL = "https://creativecommons.org/licenses/by/3.0/"
 
 
 class BenchmarkError(RuntimeError):
@@ -116,7 +117,7 @@ def run_preprocessing(input_path, output_dir, mode, args):
         "source": {
             "id": args.source_id, "url": args.source_url, "sha256": source_hash,
             "size_bytes": source_bytes, "license": args.license,
-            "attribution": args.attribution,
+            "license_url": SOURCE_LICENSE_URL, "attribution": args.attribution,
         },
         "parameters": {
             "interval_seconds": args.interval, "max_frames": args.max_frames,
