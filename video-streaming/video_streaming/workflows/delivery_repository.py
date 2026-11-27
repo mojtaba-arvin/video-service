@@ -298,6 +298,7 @@ class DeliveryTelemetryRepository:
         edge_region=None,
         cache_status=None,
         asset_version=None,
+        delivery_config_id=None,
         start_time=None,
         end_time=None,
         aggregation_window_seconds=300,
@@ -313,6 +314,7 @@ class DeliveryTelemetryRepository:
         edge_region = _optional_filter(edge_region, "edge_region", 64)
         cache_status = _optional_filter(cache_status, "cache_status", 16)
         asset_version = _optional_filter(asset_version, "asset_version", 128)
+        delivery_config_id = _optional_filter(delivery_config_id, "delivery_config_id", 128)
         if cache_status is not None and cache_status not in {
             "HIT", "MISS", "BYPASS", "REVALIDATED", "STALE", "UNKNOWN",
         }:
@@ -353,6 +355,8 @@ class DeliveryTelemetryRepository:
                 query = query.where(DeliveryEventRecord.cache_status == cache_status)
             if asset_version:
                 query = query.where(DeliveryEventRecord.asset_version == asset_version)
+            if delivery_config_id:
+                query = query.where(DeliveryEventRecord.delivery_config_id == delivery_config_id)
             if start_time:
                 query = query.where(DeliveryEventRecord.source_timestamp >= start_time)
             if end_time:
