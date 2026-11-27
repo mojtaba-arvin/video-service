@@ -243,14 +243,9 @@ class VideoOperationService:
             quota_enforcement_enabled=self._quota_enforcement_enabled,
             metadata={"mcp_operation": operation, "api_version": 1},
         ))
-        snapshot = GetJobStatusService(
-            self._repository
-        ).execute([result.job_id], principal)[result.job_id]
-        if snapshot is None:
-            raise RuntimeError("submitted Job snapshot is unavailable")
         return {
             "job_id": result.job_id,
-            "status": snapshot["status"],
+            "submission_status": "accepted",
             "created": result.created,
             "operation": operation,
         }
