@@ -157,6 +157,18 @@ class VideoOperationServiceTests(unittest.TestCase):
             )
         self.assertFalse(self.repository.commands)
 
+    def test_submission_fails_closed_when_tenant_quotas_are_disabled(self):
+        unmetered = VideoOperationService(
+            self.repository,
+            durable_dispatch_enabled=True,
+            quota_enforcement_enabled=False,
+        )
+        with self.assertRaisesRegex(RuntimeError, "TENANT_JOB_QUOTA"):
+            unmetered.probe_video(
+                "input-bucket", "source/video.mp4", "unmetered-key", self.owner
+            )
+        self.assertFalse(self.repository.commands)
+
     def test_cancel_service_requires_scope_and_uses_shared_repository(self):
         service = CancelJobService(self.repository)
         result = service.execute("job-123", self.owner, "operator request")
