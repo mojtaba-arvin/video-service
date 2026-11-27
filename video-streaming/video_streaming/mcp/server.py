@@ -8,6 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from typing import List, Optional
 
 from video_streaming import settings
 from video_streaming.security import (
@@ -215,7 +216,7 @@ def build_server():
             output_key: str,
             protocol: str,
             idempotency_key: str,
-            quality_names: list[str] | None = None,
+            quality_names: Optional[List[str]] = None,
             encode_format: str = "h264") -> dict:
         """Create an HLS or DASH transcode Job with a bounded quality profile."""
         return _safe_tool_call(
