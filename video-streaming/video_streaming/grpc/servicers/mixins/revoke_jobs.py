@@ -80,14 +80,29 @@ class RevokeJobsMixin(object):
 
         results: list[streaming_pb2.RevokeDetails] = []
         for request_id in request.tracking_ids:
-            cancellation.execute(
+            outcome = cancellation.execute(
                 request_id, principal, reason="grpc_revoke_requested"
             )
+            if outcome.status not in ("CANCEL_REQUESTED", "CANCELLED"):
+                results.append(self.pb2.RevokeDetails(
+                    tracking_id=request_id,
+                    has_been_sent=self.pb2.RevokeSignalStatus.REQUEST_NOT_FOUND,
+                ))
+                continue
             # Preserve the legacy Redis/Celery signal for workers that have
             # not migrated to durable Attempt leases.
             result = self._revoke_job(request_id)
-            if result:
-                results.append(result)
+            if (
+                    result is None
+                    or result.has_been_sent
+                    == self.pb2.RevokeSignalStatus.REQUEST_NOT_FOUND):
+                # The durable cancellation is authoritative even when this
+                # Job has no legacy Redis projection.
+                result = self.pb2.RevokeDetails(
+                    tracking_id=request_id,
+                    has_been_sent=self.pb2.RevokeSignalStatus.REVOKE_SIGNAL_SENT,
+                )
+            results.append(result)
         response = self.pb2.RevokeJobsResponse(results=results)
         return response
 
