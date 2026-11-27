@@ -10,11 +10,11 @@ import hashlib
 import json
 import math
 import os
-import resource
 import re
 import shutil
 import statistics
 import subprocess
+import psutil
 import tempfile
 import time
 from pathlib import Path
@@ -55,6 +55,95 @@ def ffmpeg_version(binary):
         [binary, "-version"], check=True, capture_output=True, text=True, timeout=15
     )
     return result.stdout.splitlines()[0]
+
+
+def _directory_size(path):
+    total = 0
+    for item in Path(path).rglob("*"):
+        try:
+            if item.is_file() and not item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def run_measured_command(command, output_dir, timeout_seconds=120):
+    """Run one FFmpeg process and sample process CPU/RSS/I/O and scratch usage."""
+    started = time.monotonic()
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            command, stdout=stdout_file, stderr=stderr_file
+        )
+        try:
+            monitored = psutil.Process(process.pid)
+        except psutil.Error:
+            monitored = None
+        initial_io = None
+        latest_io = None
+        cpu_seconds = None
+        peak_rss_bytes = None
+        peak_scratch_bytes = None
+
+        def sample():
+            nonlocal initial_io, latest_io, cpu_seconds
+            nonlocal peak_rss_bytes, peak_scratch_bytes
+            if monitored is not None:
+                try:
+                    memory = monitored.memory_info().rss
+                    times = monitored.cpu_times()
+                    counters = monitored.io_counters()
+                    peak_rss_bytes = max(peak_rss_bytes or 0, memory)
+                    cpu_seconds = times.user + times.system
+                    if initial_io is None:
+                        initial_io = counters
+                    latest_io = counters
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+            current_scratch = _directory_size(output_dir)
+            peak_scratch_bytes = max(peak_scratch_bytes or 0, current_scratch)
+
+        while True:
+            sample()
+            if process.poll() is not None:
+                break
+            if time.monotonic() - started > timeout_seconds:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                raise subprocess.TimeoutExpired(
+                    command, timeout_seconds,
+                    output=stdout_file.read(), stderr=stderr_file.read(),
+                )
+            time.sleep(0.02)
+
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout_text = stdout_file.read().decode("utf-8", errors="replace")
+        stderr_text = stderr_file.read().decode("utf-8", errors="replace")
+        if process.returncode:
+            raise subprocess.CalledProcessError(
+                process.returncode, command, output=stdout_text, stderr=stderr_text
+            )
+
+    read_bytes = None
+    write_bytes = None
+    if initial_io is not None and latest_io is not None:
+        read_bytes = max(0, latest_io.read_bytes - initial_io.read_bytes)
+        write_bytes = max(0, latest_io.write_bytes - initial_io.write_bytes)
+    return {
+        "wall_ms": (time.monotonic() - started) * 1000,
+        "cpu_seconds": cpu_seconds,
+        "peak_rss_bytes": peak_rss_bytes,
+        "read_bytes": read_bytes,
+        "write_bytes": write_bytes,
+        "scratch_peak_bytes": peak_scratch_bytes,
+    }
 
 
 def parse_vtt_timestamp(value):
