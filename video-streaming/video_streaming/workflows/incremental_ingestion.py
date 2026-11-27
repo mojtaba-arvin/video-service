@@ -421,7 +421,6 @@ class IncrementalIngestionService:
                 offset += chunk.size_bytes
             if offset != row.expected_size_bytes:
                 raise IncompleteIngestion("source byte ranges do not cover the declared source")
-            row.state = "FINALIZING"
             source_name = row.source_name
             expected_size = row.expected_size_bytes
             expected_hash = row.expected_sha256
@@ -459,7 +458,6 @@ class IncrementalIngestionService:
                 ).with_for_update().one()
                 if row.state != "OPEN":
                     raise IngestionCancelled("ingestion was cancelled during assembly")
-                row.state = "FINALIZING"
                 row.updated_at = utcnow()
             published = self._store.put_file(
                 assembled, "ingestions/{}/source/{}".format(ingestion_id, source_name),
