@@ -941,7 +941,7 @@ class OutboxRecord(Base):
     __table_args__ = (
         UniqueConstraint("dedupe_key", name="uq_workflow_outbox_dedupe_key"),
         CheckConstraint(
-            "state IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD')",
+            "state IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD', 'CANCELLED')",
             name="ck_workflow_outbox_state",
         ),
         CheckConstraint(
@@ -3138,6 +3138,60 @@ class WorkflowRepository:
             )
             return True
 
+    def cancel_outbox_if_job_cancelled(self, outbox_id, lease_token, now=None):
+        """Suppress dispatch when durable Job cancellation won before publish.
+
+        Return CANCELLED, NOT_CANCELLED, or LEASE_LOST so the relay never
+        publishes after losing its fenced claim. The Job row is read under
+        lock; the consumer still rechecks Job state to cover a cancellation
+        racing after this transaction commits.
+        """
+        now = now or utcnow()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        digest = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        with self._session.begin() as session:
+            row = session.execute(
+                select(OutboxRecord).where(
+                    OutboxRecord.id == outbox_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            lease_expires_at = row.lease_expires_at if row is not None else None
+            if lease_expires_at is not None and (
+                    lease_expires_at.tzinfo is None
+                    or lease_expires_at.utcoffset() is None):
+                lease_expires_at = lease_expires_at.replace(tzinfo=timezone.utc)
+            if (
+                    row is None
+                    or row.state != "PROCESSING"
+                    or lease_expires_at is None
+                    or lease_expires_at <= now
+                    or not hmac.compare_digest(row.lock_token_hash or "", digest)):
+                return "LEASE_LOST"
+
+            job = session.execute(
+                select(JobRecord).where(
+                    JobRecord.id == row.job_id
+                ).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.state != JobState.CANCELLED.value:
+                return "NOT_CANCELLED"
+
+            row.state = "CANCELLED"
+            row.updated_at = now
+            row.last_error = "job_cancelled_before_dispatch"
+            row.locked_by = None
+            row.lock_token_hash = None
+            row.lease_expires_at = None
+            _record_event(
+                session,
+                row.job_id,
+                row.workflow_id,
+                "OUTBOX_CANCELLED_BEFORE_DISPATCH",
+                payload={"outbox_id": row.id, "attempt": row.attempts},
+            )
+            return "CANCELLED"
+
     def retry_outbox(
             self, outbox_id, lease_token, error_code,
             delay_seconds, max_attempts=20, now=None):
@@ -3207,7 +3261,7 @@ class WorkflowRepository:
 
     def list_outbox(self, state="DEAD", limit=100):
         """List bounded non-secret relay records for operator inspection."""
-        if state not in ("PENDING", "PROCESSING", "PUBLISHED", "DEAD"):
+        if state not in ("PENDING", "PROCESSING", "PUBLISHED", "DEAD", "CANCELLED"):
             raise ValueError("unsupported outbox state")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
@@ -3255,6 +3309,7 @@ class WorkflowRepository:
                 "processing": counts.get("PROCESSING", 0),
                 "published": counts.get("PUBLISHED", 0),
                 "dead": counts.get("DEAD", 0),
+                "cancelled": counts.get("CANCELLED", 0),
                 "oldest_pending_age_seconds": (
                     max(0, int((now - oldest).total_seconds()))
                     if oldest is not None else None

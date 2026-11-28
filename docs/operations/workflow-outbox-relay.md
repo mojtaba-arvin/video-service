@@ -49,6 +49,11 @@ and failure before replay; do not blindly replay poison messages.
   may reclaim it. Expired claims consume the delivery budget.
 - Retry budget exhausted: the row becomes `DEAD` and is visible in `dead` and
   `stats`; an operator may inspect and explicitly replay it.
+- Job cancelled before relay publication: the relay fences its lease, locks and
+  rechecks the authoritative Job row, marks the outbox row `CANCELLED`, and
+  emits `OUTBOX_CANCELLED_BEFORE_DISPATCH` without publishing. The consumer
+  independently rechecks Job state to cover a cancellation racing after the
+  relay's check.
 - Plan missing, changed or mismatched: no message is published; the row is
   retried and eventually dead-lettered. Do not repair the fingerprint in place.
 - Job cancellation racing with publish: broker publication cannot be made
