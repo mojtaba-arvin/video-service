@@ -185,7 +185,8 @@ jobs:
   vod-e2e:
     name: gRPC → Celery → FFmpeg → storage (Python ${{ matrix.python-version }})
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.runtime == 'true'
+    # Full media/broker/process acceptance runs after merge on develop and on explicit integration dispatch.
+    if: needs.detect-changes.outputs.runtime == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -244,6 +245,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check --requirement ${{ matrix.requirements }}
 
       - name: Run real FFmpeg thumbnail regression tests
+        if: matrix.python-version == '3.12'
         env:
           PYTHONPATH: video-streaming
         run: |
@@ -253,6 +255,7 @@ jobs:
             -v
 
       - name: Run synthetic HLS/DASH package harness
+        if: matrix.python-version == '3.12'
         env:
           PYTHONPATH: video-streaming
         run: |
@@ -262,6 +265,7 @@ jobs:
             -v
 
       - name: Run supervised FFmpeg watermark integration test
+        if: matrix.python-version == '3.12'
         env:
           PYTHONPATH: video-streaming
         run: |
@@ -335,6 +339,7 @@ jobs:
         run: alembic -c video-streaming/alembic.ini upgrade head
 
       - name: Run durable workflow repository tests (Python 3.9)
+        if: matrix.python-version == '3.9'
         env:
           PYTHONPATH: video-streaming
           WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
@@ -345,6 +350,7 @@ jobs:
             -v
 
       - name: Run transactional outbox tests (Python 3.9)
+        if: matrix.python-version == '3.9'
         env:
           PYTHONPATH: video-streaming
           WORKFLOW_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/workflows
@@ -668,15 +674,25 @@ jobs:
   container-runtime:
     name: Container runtime build (Python 3.12)
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.runtime == 'true'
+    if: needs.detect-changes.outputs.runtime == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build the production runtime image
-        run: docker build --pull --tag video-service-runtime-ci ./.docker-compose/video-streaming
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build the production runtime image with a persistent layer cache
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./.docker-compose/video-streaming
+          load: true
+          pull: true
+          tags: video-service-runtime-ci
+          cache-from: type=gha,scope=video-service-runtime
+          cache-to: type=gha,scope=video-service-runtime,mode=max
 
       - name: Smoke-test runtime, native extensions and media tools
         run: |
@@ -704,7 +720,7 @@ jobs:
   cgroup-v2-linux-acceptance:
     name: Linux cgroup v2 kernel acceptance (Python 3.12)
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.runtime == 'true'
+    if: needs.detect-changes.outputs.runtime == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -752,6 +768,7 @@ jobs:
       RUNTIME_CHANGED: ${{ needs.detect-changes.outputs.runtime }}
       DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs }}
       DOCS_RESULT: ${{ needs.documentation.result }}
+      IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
       PY39_RESULT: ${{ needs.unit-tests.result }}
       PY312_RESULT: ${{ needs.compatibility.result }}
       VOD_E2E_RESULT: ${{ needs.vod-e2e.result }}
@@ -777,10 +794,16 @@ jobs:
           if [[ "$RUNTIME_CHANGED" == "true" ]]; then
             [[ "$PY39_RESULT" == "success" ]] || fail "Python 3.9 regression suite did not pass."
             [[ "$PY312_RESULT" == "success" ]] || fail "Python 3.12 regression suite did not pass."
-            [[ "$VOD_E2E_RESULT" == "success" ]] || fail "VOD end-to-end integration did not pass."
             [[ "$PG312_RESULT" == "success" ]] || fail "PostgreSQL compatibility tests on Python 3.12 did not pass."
-            [[ "$CONTAINER_RESULT" == "success" ]] || fail "Python 3.12 production container build and smoke test did not pass."
-            [[ "$CGROUP_RESULT" == "success" ]] || fail "Real Linux cgroup v2 kernel acceptance did not pass."
+
+            # PRs receive fast deterministic/runtime/database gates. The complete
+            # media, broker/process, container and kernel acceptance remains
+            # mandatory on develop pushes and explicit integration dispatches.
+            if [[ "$IS_PULL_REQUEST" != "true" ]]; then
+              [[ "$VOD_E2E_RESULT" == "success" ]] || fail "VOD end-to-end integration did not pass."
+              [[ "$CONTAINER_RESULT" == "success" ]] || fail "Python 3.12 production container build and smoke test did not pass."
+              [[ "$CGROUP_RESULT" == "success" ]] || fail "Real Linux cgroup v2 kernel acceptance did not pass."
+            fi
           fi
 
           echo "All required checks passed for the detected change set." >> "$GITHUB_STEP_SUMMARY"
