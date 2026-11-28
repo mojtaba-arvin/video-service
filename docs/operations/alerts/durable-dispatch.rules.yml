@@ -1,0 +1,69 @@
+# Prometheus rule templates for durable workflow dispatch.
+#
+# Deploy only after the staging exporter exposes these bounded-cardinality
+# metrics and the baseline owner provisions threshold gauges from measured data.
+# No numeric SLO or alert threshold is invented in this file.
+
+groups:
+  - name: video-workflow-durable-dispatch
+    rules:
+      - alert: WorkflowOutboxOldestPendingAgeHigh
+        expr: |
+          video_workflow_outbox_oldest_pending_age_seconds
+            > on() group_left()
+          video_workflow_outbox_alert_threshold_seconds{signal="oldest_pending_age"}
+        labels:
+          severity: warning
+          service: video-service
+          owner: workflow-oncall
+        annotations:
+          summary: "Durable workflow outbox pending age is above its measured baseline threshold"
+          runbook: "docs/operations/durable-dispatch-observability.md"
+
+      - alert: WorkflowOutboxLeaseLossRepeated
+        expr: |
+          increase(video_workflow_outbox_outcomes_total{outcome="lease_loss"}[5m])
+            > on() group_left()
+          video_workflow_outbox_alert_threshold_total{signal="lease_loss"}
+        labels:
+          severity: warning
+          service: video-service
+          owner: workflow-oncall
+        annotations:
+          summary: "Outbox relay lease loss exceeded its measured baseline threshold"
+          runbook: "docs/operations/durable-dispatch-observability.md"
+
+      - alert: WorkflowOutboxRetryExhausted
+        expr: video_workflow_outbox_events{state="dead"} > 0
+        labels:
+          severity: warning
+          service: video-service
+          owner: workflow-oncall
+        annotations:
+          summary: "Durable workflow outbox contains dead-lettered rows"
+          runbook: "docs/operations/workflow-outbox-relay.md"
+
+      - alert: WorkflowOutboxRelayPublishFailures
+        expr: |
+          increase(video_workflow_outbox_outcomes_total{outcome="retry"}[5m])
+            > on() group_left()
+          video_workflow_outbox_alert_threshold_total{signal="relay_publish_failures"}
+        labels:
+          severity: warning
+          service: video-service
+          owner: workflow-oncall
+        annotations:
+          summary: "Outbox relay publish failures exceeded their measured baseline threshold"
+          runbook: "docs/operations/durable-dispatch-observability.md"
+
+      - alert: WorkflowOutboxTelemetryMissing
+        expr: |
+          absent(video_workflow_outbox_events{state="pending"})
+          or absent(video_workflow_outbox_telemetry_last_success_timestamp_seconds)
+        labels:
+          severity: critical
+          service: video-service
+          owner: workflow-oncall
+        annotations:
+          summary: "Durable dispatch telemetry is missing"
+          runbook: "docs/operations/durable-dispatch-observability.md"
